@@ -1,0 +1,35 @@
+# Local/private project data
+data/
+pdfs/
+books/
+library/
+indexes/
+vector-store/
+*.sqlite
+*.sqlite3
+*.db
+
+# Secrets and environment
+.env
+.env.*
+!.env.example
+local.settings.json
+
+# Common build artifacts
+node_modules/
+dist/
+build/
+.next/
+.vite/
+coverage/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.conda/
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
