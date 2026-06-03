@@ -40,6 +40,10 @@ provenance:
 The initial extraction spike should use PyMuPDF from `environment.yml`, with
 Poppler tools available for independent metadata/text-density cross-checks.
 
+The first audit found that 24 of 26 PDFs returned zero embedded text on every
+page. OCR should be treated as a near-term ingestion requirement rather than a
+rare fallback.
+
 ## OCR
 
 [coverage: low]
@@ -59,4 +63,5 @@ to solve map extraction before the reader plus citation loop works.
 
 - `wiki/topics/target-architecture.md`
 - `wiki/topics/local-tooling-and-packaging.md`
+- `docs/audits/2026-06-03-pdf-extraction-audit.md`
 - `wiki/concepts/private-copyright-boundary.md`

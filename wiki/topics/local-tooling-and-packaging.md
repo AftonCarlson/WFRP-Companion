@@ -24,6 +24,8 @@ Once implementation begins, prefer a simple layout:
 - `data/` ignored by Git for local PDFs, indexes, and generated state.
 - `docs/plans/` for multi-step implementation plans.
 - `docs/adr/` for durable architecture decisions.
+- `docs/audits/` for committed audit summaries that avoid private extracted
+  text.
 
 Use one package/workspace system only after the stack is chosen. For Python,
 Conda is already chosen; add Python dependencies to `environment.yml`.
@@ -87,6 +89,7 @@ When implementation decisions become real, update:
 
 - `wiki/topics/target-architecture.md`
 - `assets/ui/README.md`
+- `docs/audits/2026-06-03-pdf-extraction-audit.md`
 - `docs/adr/0001-conda-python-tooling.md`
 - `environment.yml`
 - `AGENTS.md`

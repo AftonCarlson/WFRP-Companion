@@ -1,5 +1,15 @@
 # Wiki Compile Log
 
+## 2026-06-03 PDF Extraction Audit
+
+- Added `tools/pdf_audit.py` to audit PDF extraction quality without saving
+  extracted book text.
+- Ran the audit against `/Users/aftoncarlson/TTRPGs/WFRP 2e`.
+- Recorded summary findings in
+  `docs/audits/2026-06-03-pdf-extraction-audit.md`: 26 PDFs, 3,736 pages, 2
+  PDFs with useful embedded text, and 24 likely image/scanned PDFs that need
+  OCR strategy before reliable search/RAG ingestion.
+
 ## 2026-06-03 UI Hero Asset
 
 - Added the generated pixel-art UI banner at `assets/ui/buttlordxai-hero.png`.
