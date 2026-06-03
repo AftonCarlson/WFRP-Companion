@@ -27,6 +27,19 @@ Pick exact dependencies when implementation starts and verify current docs.
 The first Python dependency decision is recorded in
 `docs/adr/0001-conda-python-tooling.md`.
 
+Phase 1 implementation has started the target architecture:
+
+- `wfrp_companion/config.py` owns local path configuration.
+- `wfrp_companion/db/schema.sql` defines the SQLite source-of-truth schema.
+- `wfrp_companion/db/connection.py` initializes SQLite with foreign keys and
+  WAL mode.
+- `tools/init_db.py` creates the local database.
+
+The schema already includes the planned tables for books, pages, page text,
+FTS projection, source sets, visual assets, ingest jobs, readiness state, and
+future AI chat/retrieval metadata. Later phases will populate and serve this
+schema.
+
 ## Major Modules
 
 [coverage: medium]
@@ -38,6 +51,25 @@ The first Python dependency decision is recorded in
 - Assistant: prompt construction, model calls, streamed responses, refusal when
   context is insufficient.
 - Campaign: notes, session summaries, NPCs, locations, adventure prep artifacts.
+
+## SQLite Source Of Truth
+
+[coverage: high]
+
+SQLite is now the app-owned metadata source of truth. The database schema lives
+in `wfrp_companion/db/schema.sql` and is initialized by `tools/init_db.py`.
+
+Important schema decisions:
+
+- `books` has explicit lifecycle columns for copy, text, search, and visual
+  status.
+- `book_readiness` is a derived view. Do not add a second mutable readiness
+  status.
+- `page_assets` is tied back to `pages` with a composite foreign key so asset
+  rows cannot drift from their referenced page.
+- Boolean-like fields use `check (... in (0, 1))` constraints.
+- SQLite FTS5 is available through `page_search_fts`; population happens in a
+  later phase.
 
 ## Local-First Boundary
 

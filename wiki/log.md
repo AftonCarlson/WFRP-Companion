@@ -1,5 +1,22 @@
 # Wiki Compile Log
 
+## 2026-06-03 Phase 1 SQLite Foundation
+
+- Added the durable implementation plan at
+  `docs/plans/2026-06-03-local-reference-library-implementation-plan.md`.
+- Added the first app package under `wfrp_companion/`.
+- Added config loading in `wfrp_companion/config.py` for `WFRP_PDF_ROOT`,
+  `WFRP_DATA_DIR`, `WFRP_DB_PATH`, and `WFRP_ASSET_DIR`.
+- Added SQLite connection/schema initialization in
+  `wfrp_companion/db/connection.py` and `wfrp_companion/db/schema.sql`.
+- Added `tools/init_db.py`, which works both as `python tools/init_db.py` and
+  as an imported CLI main.
+- Expanded `environment.yml` with FastAPI, Uvicorn, Pillow, OpenCV, ImageHash,
+  and pytest-cov for planned API/image work and coverage enforcement.
+- Added `tests/db/test_schema.py` with 100% coverage over the new Python
+  package and init CLI.
+- Updated `.gitignore` to keep `.coverage*` out of Git.
+
 ## 2026-06-03 Page Text OCR Extraction
 
 - Added `tools/extract_page_text.py` to produce private local page-level text

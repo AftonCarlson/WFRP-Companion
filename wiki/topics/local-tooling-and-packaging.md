@@ -4,12 +4,16 @@
 
 [coverage: high]
 
-The repo has not chosen the full application stack yet, but Python tooling is
-standardized on Conda. The canonical environment is `environment.yml` with the
-environment name `wfrp-companion`.
+Python tooling is standardized on Conda. The canonical environment is
+`environment.yml` with the environment name `wfrp-companion`.
 
-Conda is used for PDF ingestion and backend/search prototypes. Do not install
-Python project dependencies globally or through an untracked virtualenv.
+Conda is used for PDF ingestion, backend/search prototypes, local API
+dependencies, image tooling, and tests. Do not install Python project
+dependencies globally or through an untracked virtualenv.
+
+The first application package now exists under `wfrp_companion/`. Phase 1 added
+configuration loading, SQLite connection/schema initialization, and
+`tools/init_db.py`.
 
 ## Expected Development Shape
 
@@ -58,8 +62,21 @@ Initial Python tooling includes:
 - PyMuPDF for PDF inspection and extraction
 - Poppler for `pdfinfo` / `pdftotext` cross-checks
 - Tesseract for OCR
+- FastAPI and Uvicorn for the upcoming local API
+- Pillow, OpenCV, and ImageHash for upcoming visual asset detection
 - pytest for tests
+- pytest-cov for coverage gates
 - ruff for lint/format checks
+
+Initialize the local SQLite database with:
+
+```bash
+conda activate wfrp-companion
+python tools/init_db.py
+```
+
+The default database path is `data/wfrp_companion.sqlite`, unless
+`WFRP_DB_PATH` is set.
 
 ## Environment
 
@@ -72,8 +89,17 @@ Expected secrets/config:
 - Optional OCR binary/config.
 - Optional model overrides.
 
+Current local config variables:
+
+- `WFRP_PDF_ROOT`
+- `WFRP_DATA_DIR`
+- `WFRP_DB_PATH`
+- `WFRP_ASSET_DIR`
+
 Do not commit real API keys, PDFs, extracted copyrighted text, or local vector
-indexes. UI art assets intended for the app may be committed under `assets/ui/`.
+indexes. SQLite databases, managed PDFs, generated assets, and coverage output
+are ignored by Git. UI art assets intended for the app may be committed under
+`assets/ui/`.
 
 Local page-level OCR/text extraction outputs live under `data/page_text/` and
 are ignored by Git.

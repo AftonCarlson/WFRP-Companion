@@ -4,9 +4,9 @@
 
 [coverage: high]
 
-No application tests exist yet because no application code exists. Python
-testing is expected to run through the `wfrp-companion` Conda environment, and
-`pytest` is included in `environment.yml`.
+Application tests now exist for the Phase 1 SQLite/config foundation. Python
+testing runs through the `wfrp-companion` Conda environment. `pytest`,
+`pytest-cov`, and `ruff` are included in `environment.yml`.
 
 ## Expected Coverage
 
@@ -40,7 +40,7 @@ Once Python tests exist:
 
 ```bash
 conda activate wfrp-companion
-pytest
+python -m pytest
 ```
 
 Run lint checks with:
@@ -49,6 +49,24 @@ Run lint checks with:
 conda activate wfrp-companion
 ruff check .
 ```
+
+Phase 1 coverage gate:
+
+```bash
+conda activate wfrp-companion
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov-report=term-missing --cov-fail-under=100
+```
+
+Use `python -m pytest` rather than bare `pytest`; it reliably keeps the repo
+root on `sys.path` for local package imports in this checkout.
+
+Current focused test file:
+
+- `tests/db/test_schema.py`
+
+It covers configuration defaults/overrides, SQLite initialization, WAL/foreign
+key settings, lifecycle constraints, source/asset boolean constraints, asset
+page consistency, and the `tools/init_db.py` CLI entrypoint.
 
 ## Manual QA
 

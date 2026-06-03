@@ -47,6 +47,22 @@ should prove the loop:
 - Use vector search for semantic matches.
 - Keep citation objects structured rather than parsing them out of prose.
 
+## Database Rules
+
+[coverage: high]
+
+The Phase 1 SQLite schema is the app-owned source-of-truth foundation. New
+database behavior should preserve these constraints:
+
+- Keep lifecycle state explicit on `books`.
+- Use the `book_readiness` view for derived readiness rather than adding a
+  second mutable readiness flag.
+- Keep boolean-like state constrained to `0` or `1`.
+- Keep `page_assets` consistent with `pages` through the composite page foreign
+  key.
+- Keep generated SQLite files, managed PDFs, generated assets, and coverage
+  files out of Git.
+
 ## Documentation Rules
 
 [coverage: high]
