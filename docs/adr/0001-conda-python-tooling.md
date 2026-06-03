@@ -22,6 +22,7 @@ The initial environment supports the PDF ingestion spike:
 - Python 3.12
 - PyMuPDF for PDF inspection and extraction
 - Poppler tools for independent PDF metadata/text checks
+- Tesseract for OCR through PyMuPDF's OCR text-page path
 - pytest for tests
 - ruff for linting/format checks
 

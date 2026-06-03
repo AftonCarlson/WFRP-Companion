@@ -57,6 +57,7 @@ Initial Python tooling includes:
 - Python 3.12
 - PyMuPDF for PDF inspection and extraction
 - Poppler for `pdfinfo` / `pdftotext` cross-checks
+- Tesseract for OCR
 - pytest for tests
 - ruff for lint/format checks
 
@@ -74,6 +75,9 @@ Expected secrets/config:
 Do not commit real API keys, PDFs, extracted copyrighted text, or local vector
 indexes. UI art assets intended for the app may be committed under `assets/ui/`.
 
+Local page-level OCR/text extraction outputs live under `data/page_text/` and
+are ignored by Git.
+
 ## Documentation Updates
 
 [coverage: high]
@@ -90,6 +94,7 @@ When implementation decisions become real, update:
 - `wiki/topics/target-architecture.md`
 - `assets/ui/README.md`
 - `docs/audits/2026-06-03-pdf-extraction-audit.md`
+- `docs/audits/2026-06-03-page-text-ocr-extraction.md`
 - `docs/adr/0001-conda-python-tooling.md`
 - `environment.yml`
 - `AGENTS.md`

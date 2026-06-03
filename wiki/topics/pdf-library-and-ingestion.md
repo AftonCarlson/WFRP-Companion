@@ -38,7 +38,8 @@ provenance:
 - Chunk text with overlap, but keep every chunk tied back to page spans.
 
 The initial extraction spike should use PyMuPDF from `environment.yml`, with
-Poppler tools available for independent metadata/text-density cross-checks.
+Poppler tools available for independent metadata/text-density cross-checks and
+Tesseract available for OCR through PyMuPDF's OCR text-page path.
 
 The first audit found that 24 of 26 PDFs returned zero embedded text on every
 page. OCR should be treated as a near-term ingestion requirement rather than a
@@ -46,11 +47,21 @@ rare fallback.
 
 ## OCR
 
-[coverage: low]
+[coverage: medium]
 
 Some PDFs may be scanned, image-heavy, or have maps/tables with poor text
 layers. Add OCR as a second phase after basic text extraction works. OCR output
 should be labeled so lower-confidence text can be treated carefully.
+
+Page-level OCR output should be stored under ignored `data/page_text/`, one
+record per source page, with the source PDF path, page number, extraction
+method, character count, word count, and text. These files are private local
+derived data and must not be committed.
+
+The page-text extraction tool is `tools/extract_page_text.py`. It generated
+local text references for 26 PDFs / 3,736 pages under `data/page_text/` on
+2026-06-03. The run produced 391 embedded-text pages, 3,214 OCR pages, and 131
+empty OCR pages with source references preserved.
 
 ## Maps And Images
 
@@ -64,4 +75,5 @@ to solve map extraction before the reader plus citation loop works.
 - `wiki/topics/target-architecture.md`
 - `wiki/topics/local-tooling-and-packaging.md`
 - `docs/audits/2026-06-03-pdf-extraction-audit.md`
+- `docs/audits/2026-06-03-page-text-ocr-extraction.md`
 - `wiki/concepts/private-copyright-boundary.md`

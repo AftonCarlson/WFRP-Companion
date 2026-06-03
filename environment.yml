@@ -6,5 +6,6 @@ dependencies:
   - pip
   - pymupdf
   - poppler
+  - tesseract
   - pytest
   - ruff

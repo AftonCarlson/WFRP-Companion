@@ -1,5 +1,16 @@
 # Wiki Compile Log
 
+## 2026-06-03 Page Text OCR Extraction
+
+- Added `tools/extract_page_text.py` to produce private local page-level text
+  references under ignored `data/page_text/`.
+- Added Tesseract to `environment.yml` and updated the Conda environment.
+- Ran full extraction for `/Users/aftoncarlson/TTRPGs/WFRP 2e`: 26 books,
+  3,736 page records, 15,612,529 characters, 2,668,305 words, 391 embedded-text
+  pages, 3,214 OCR pages, 131 empty OCR pages, and 0 OCR errors.
+- Recorded the count-only run summary in
+  `docs/audits/2026-06-03-page-text-ocr-extraction.md`.
+
 ## 2026-06-03 PDF Extraction Audit
 
 - Added `tools/pdf_audit.py` to audit PDF extraction quality without saving
@@ -16,6 +27,9 @@
 - Replaced the initial banner source with
   `/Users/aftoncarlson/Downloads/Gemini_Generated_Image_4dky2p4dky2p4dky (1).png`
   while keeping the app-facing asset path stable.
+- Replaced the banner again with
+  `/Users/aftoncarlson/Downloads/Gemini_Generated_Image_yu4cwbyu4cwbyu4c.png`,
+  still keeping the same app-facing path.
 - Added `assets/ui/README.md` to record source path, dimensions, format, and
   intended usage.
 - Updated UI/UX and local tooling wiki topics to treat `assets/ui/` as the
