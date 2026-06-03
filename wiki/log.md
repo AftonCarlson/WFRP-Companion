@@ -30,6 +30,9 @@
 - Replaced the banner again with
   `/Users/aftoncarlson/Downloads/Gemini_Generated_Image_yu4cwbyu4cwbyu4c.png`,
   still keeping the same app-facing path.
+- Replaced the banner again with
+  `/Users/aftoncarlson/Downloads/Gemini_Generated_Image_xipclexipclexipc-clean.png`,
+  still keeping the same app-facing path.
 - Added `assets/ui/README.md` to record source path, dimensions, format, and
   intended usage.
 - Updated UI/UX and local tooling wiki topics to treat `assets/ui/` as the

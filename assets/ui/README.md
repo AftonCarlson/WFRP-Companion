@@ -4,7 +4,7 @@
 
 Primary generated pixel-art banner for the WFRP Companion UI.
 
-- Source file: `/Users/aftoncarlson/Downloads/Gemini_Generated_Image_yu4cwbyu4cwbyu4c.png`
+- Source file: `/Users/aftoncarlson/Downloads/Gemini_Generated_Image_xipclexipclexipc-clean.png`
 - Dimensions: 2816 x 1536
 - Format: PNG, RGBA
 - Intended use: app hero/banner/background art for the initial web UI
