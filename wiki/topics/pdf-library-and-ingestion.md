@@ -2,7 +2,7 @@
 
 ## Library Responsibilities
 
-[coverage: medium]
+[coverage: high]
 
 The library should track each owned PDF with:
 
@@ -16,6 +16,26 @@ The library should track each owned PDF with:
 
 Avoid storing large copied text in fixtures or docs. Keep extracted text local.
 
+Phase 2 implements the managed PDF library import:
+
+- `tools/import_pdfs.py` imports all readable PDFs from
+  `/Users/aftoncarlson/TTRPGs/WFRP 2e` by default.
+- The importer preserves source folder hierarchy in `library_folders`.
+- Each readable PDF gets a stable `books.id` derived from the source-relative
+  path without the PDF suffix.
+- Each managed PDF is copied to
+  `data/library/pdfs/<book_id>/source-<original_sha256>.pdf`.
+- `books.original_source_path` and `books.managed_pdf_path` are absolute paths.
+- `ingest_jobs` records idempotent `copy_pdf` work using
+  `copy_pdf:<book_id>:<original_sha256>`.
+- Failed or ambiguous candidates are surfaced through CLI failure details and
+  failed `copy_pdf` jobs when the source can be hashed.
+- Stale interrupted `running` copy jobs can be recovered by age or immediately
+  with `--retry-running`.
+
+The managed-storage decision is recorded in
+`docs/adr/0002-managed-local-pdf-storage.md`.
+
 ## Reader Responsibilities
 
 [coverage: medium]
@@ -26,7 +46,7 @@ likely browser-side renderer.
 
 ## Extraction Pipeline
 
-[coverage: medium]
+[coverage: high]
 
 Ingestion should run through the repo Conda environment and preserve page-level
 provenance:
@@ -44,6 +64,11 @@ Tesseract available for OCR through PyMuPDF's OCR text-page path.
 The first audit found that 24 of 26 PDFs returned zero embedded text on every
 page. OCR should be treated as a near-term ingestion requirement rather than a
 rare fallback.
+
+Page-text import into SQLite has not started yet. Existing local OCR JSON under
+ignored `data/page_text/` remains compatibility input for a later phase. Phase 2
+preserves the existing `tools/extract_page_text.py` book-id convention so those
+JSON files can be matched to `books.id`.
 
 ## OCR
 
@@ -74,6 +99,7 @@ to solve map extraction before the reader plus citation loop works.
 
 - `wiki/topics/target-architecture.md`
 - `wiki/topics/local-tooling-and-packaging.md`
+- `docs/adr/0002-managed-local-pdf-storage.md`
 - `docs/audits/2026-06-03-pdf-extraction-audit.md`
 - `docs/audits/2026-06-03-page-text-ocr-extraction.md`
 - `wiki/concepts/private-copyright-boundary.md`

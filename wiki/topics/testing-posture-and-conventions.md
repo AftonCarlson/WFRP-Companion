@@ -4,9 +4,10 @@
 
 [coverage: high]
 
-Application tests now exist for the Phase 1 SQLite/config foundation. Python
-testing runs through the `wfrp-companion` Conda environment. `pytest`,
-`pytest-cov`, and `ruff` are included in `environment.yml`.
+Application tests now exist for the Phase 1 SQLite/config foundation and the
+Phase 2 managed PDF library importer. Python testing runs through the
+`wfrp-companion` Conda environment. `pytest`, `pytest-cov`, and `ruff` are
+included in `environment.yml`.
 
 ## Expected Coverage
 
@@ -50,23 +51,31 @@ conda activate wfrp-companion
 ruff check .
 ```
 
-Phase 1 coverage gate:
+Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov-report=term-missing --cov-fail-under=100
 ```
 
 Use `python -m pytest` rather than bare `pytest`; it reliably keeps the repo
 root on `sys.path` for local package imports in this checkout.
 
-Current focused test file:
+Current focused test files:
 
 - `tests/db/test_schema.py`
+- `tests/library/test_identity.py`
+- `tests/library/test_discovery.py`
+- `tests/library/test_storage.py`
+- `tests/library/test_importer.py`
+- `tests/tools/test_import_pdfs.py`
 
-It covers configuration defaults/overrides, SQLite initialization, WAL/foreign
+They cover configuration defaults/overrides, SQLite initialization, WAL/foreign
 key settings, lifecycle constraints, source/asset boolean constraints, asset
-page consistency, and the `tools/init_db.py` CLI entrypoint.
+page consistency, the `tools/init_db.py` CLI entrypoint, managed PDF identity,
+recursive discovery, SHA/atomic-copy storage helpers, idempotent library import,
+copy-job recovery, collision/failure reporting, and the `tools/import_pdfs.py`
+CLI entrypoint.
 
 ## Manual QA
 

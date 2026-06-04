@@ -35,10 +35,21 @@ Phase 1 implementation has started the target architecture:
   WAL mode.
 - `tools/init_db.py` creates the local database.
 
-The schema already includes the planned tables for books, pages, page text,
-FTS projection, source sets, visual assets, ingest jobs, readiness state, and
-future AI chat/retrieval metadata. Later phases will populate and serve this
-schema.
+Phase 2 populates the first library source-of-truth rows:
+
+- `wfrp_companion/library/` owns PDF identity, discovery, managed storage, and
+  SQLite import behavior.
+- `tools/import_pdfs.py` imports every readable PDF from the configured source
+  root into ignored managed local storage.
+- `library_folders`, `books`, and `ingest_jobs` now have a working importer.
+- `books.managed_pdf_path` is an absolute path to a versioned managed copy under
+  `data/library/pdfs/<book_id>/source-<original_sha256>.pdf`.
+- `book_readiness.reader_ready` becomes true when `books.copy_status='copied'`.
+
+The schema already includes the planned tables for pages, page text, FTS
+projection, source sets, visual assets, readiness state, and future AI
+chat/retrieval metadata. Later phases will populate and serve those remaining
+schema areas.
 
 ## Major Modules
 
@@ -63,6 +74,9 @@ Important schema decisions:
 
 - `books` has explicit lifecycle columns for copy, text, search, and visual
   status.
+- Managed PDF copy state is owned by `books.copy_status`,
+  `books.managed_pdf_path`, `books.original_sha256`, `books.managed_sha256`,
+  and `ingest_jobs(job_type='copy_pdf')`.
 - `book_readiness` is a derived view. Do not add a second mutable readiness
   status.
 - `page_assets` is tied back to `pages` with a composite foreign key so asset
@@ -92,5 +106,6 @@ intentional decision rather than an accidental architecture drift.
 - `wiki/topics/project-overview.md`
 - `wiki/topics/local-tooling-and-packaging.md`
 - `docs/adr/0001-conda-python-tooling.md`
+- `docs/adr/0002-managed-local-pdf-storage.md`
 - `wiki/concepts/private-copyright-boundary.md`
 - `wiki/concepts/hybrid-search-for-rules.md`

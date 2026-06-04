@@ -43,6 +43,11 @@ should prove the loop:
 [coverage: medium]
 
 - Preserve page metadata through every ingestion and chunking step.
+- Preserve the existing source-relative book-id convention when moving behavior
+  out of tools and into package code; page-text JSON compatibility depends on
+  it.
+- Keep managed PDF copies versioned by source SHA and store the active absolute
+  path in SQLite.
 - Use full-text search for exact matches.
 - Use vector search for semantic matches.
 - Keep citation objects structured rather than parsing them out of prose.
@@ -62,6 +67,9 @@ database behavior should preserve these constraints:
   key.
 - Keep generated SQLite files, managed PDFs, generated assets, and coverage
   files out of Git.
+- Keep SQLite transactions short around managed-file work. Hashing and copying
+  large PDFs should happen outside long write transactions, with short guarded
+  transitions before and after filesystem side effects.
 
 ## Documentation Rules
 

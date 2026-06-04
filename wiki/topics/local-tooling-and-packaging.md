@@ -15,6 +15,17 @@ The first application package now exists under `wfrp_companion/`. Phase 1 added
 configuration loading, SQLite connection/schema initialization, and
 `tools/init_db.py`.
 
+Phase 2 added the local managed-PDF library importer:
+
+- `wfrp_companion/library/identity.py` for stable book and folder IDs.
+- `wfrp_companion/library/discovery.py` for recursive PDF discovery.
+- `wfrp_companion/library/storage.py` for SHA-256 hashing and atomic managed
+  PDF copies.
+- `wfrp_companion/library/importer.py` for SQLite-backed folder, book, and copy
+  job state.
+- `tools/import_pdfs.py` for importing all configured source PDFs into managed
+  local storage.
+
 ## Expected Development Shape
 
 [coverage: medium]
@@ -78,6 +89,28 @@ python tools/init_db.py
 The default database path is `data/wfrp_companion.sqlite`, unless
 `WFRP_DB_PATH` is set.
 
+Import all owned PDFs from the configured source root with:
+
+```bash
+conda activate wfrp-companion
+python tools/import_pdfs.py
+```
+
+The default PDF root is `/Users/aftoncarlson/TTRPGs/WFRP 2e`, unless
+`WFRP_PDF_ROOT` is set. The importer also accepts explicit overrides:
+
+```bash
+python tools/import_pdfs.py --pdf-root "/Users/aftoncarlson/TTRPGs/WFRP 2e"
+python tools/import_pdfs.py --data-dir "/path/to/private-data"
+python tools/import_pdfs.py --db-path "/path/to/wfrp.sqlite"
+python tools/import_pdfs.py --retry-running
+```
+
+`--data-dir` without `--db-path` stores the database at
+`<data-dir>/wfrp_companion.sqlite`. The importer validates the PDF root before
+initializing SQLite, so a typo in `--pdf-root` does not create a misleading
+database.
+
 ## Environment
 
 [coverage: medium]
@@ -101,6 +134,10 @@ indexes. SQLite databases, managed PDFs, generated assets, and coverage output
 are ignored by Git. UI art assets intended for the app may be committed under
 `assets/ui/`.
 
+Managed PDFs live under ignored `data/library/pdfs/<book_id>/` with versioned
+filenames like `source-<original_sha256>.pdf`. SQLite stores the active managed
+PDF path as an absolute path in `books.managed_pdf_path`.
+
 Local page-level OCR/text extraction outputs live under `data/page_text/` and
 are ignored by Git.
 
@@ -122,5 +159,6 @@ When implementation decisions become real, update:
 - `docs/audits/2026-06-03-pdf-extraction-audit.md`
 - `docs/audits/2026-06-03-page-text-ocr-extraction.md`
 - `docs/adr/0001-conda-python-tooling.md`
+- `docs/adr/0002-managed-local-pdf-storage.md`
 - `environment.yml`
 - `AGENTS.md`
