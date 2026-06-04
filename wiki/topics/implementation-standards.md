@@ -23,6 +23,9 @@ The current codebase has working local implementations for steps 1 through 3:
   `tools/import_page_text.py`.
 - Exact full-text search is owned by `wfrp_companion/search/fts.py`,
   `tools/rebuild_fts.py`, and `tools/search_text.py`.
+- Source-set scope selection is owned by
+  `wfrp_companion/library/source_sets.py` and `tools/source_sets.py`; the search
+  CLI uses the active source set by default.
 
 Steps 4 through 6 remain future work: AI question answering, cited answer
 assembly, and reader citation jumps.
@@ -63,6 +66,12 @@ assembly, and reader citation jumps.
   path in SQLite.
 - Use full-text search for exact matches.
 - Rebuild global FTS through `tools/rebuild_fts.py` after page text changes.
+- Run `tools/source_sets.py init` after importing books so built-in source sets
+  include all current books.
+- Treat `source_set_books.enabled` as scope membership only. Do not use it as a
+  replacement for readiness state.
+- Keep exact-search readiness gating in `search_exact()` and the `books`
+  lifecycle columns.
 - Use vector search for semantic matches.
 - Keep citation objects structured rather than parsing them out of prose.
 
@@ -90,6 +99,11 @@ database behavior should preserve these constraints:
   not canonical text storage.
 - Do not let exact search return pages unless `books.copy_status='copied'`,
   `books.text_status='imported'`, and `books.search_status='indexed'`.
+- Use `source_sets` for named book groups, `source_set_books.enabled` for
+  individual book toggles, and `app_settings.active_source_set_id` for the
+  default search/retrieval scope.
+- Keep source-set membership separate from the `book_readiness` view; readiness
+  is derived from lifecycle state, not from user scope selection.
 
 ## Documentation Rules
 
@@ -118,5 +132,6 @@ Before calling code work complete:
 - `AGENTS.md`
 - `docs/adr/0001-conda-python-tooling.md`
 - `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
+- `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`
 - `wiki/topics/ai-rag-system.md`
 - `wiki/topics/pdf-library-and-ingestion.md`

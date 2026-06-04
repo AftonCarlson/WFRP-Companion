@@ -16,7 +16,8 @@ configuration loading, SQLite connection/schema initialization, and
 `tools/init_db.py`.
 
 Phase 2 added the local managed-PDF library importer, page-text importer, and
-global exact-search tools:
+global exact-search tools. Phase 3 added source-set management and made local
+search source-set-aware:
 
 - `wfrp_companion/library/identity.py` for stable book and folder IDs.
 - `wfrp_companion/library/discovery.py` for recursive PDF discovery.
@@ -28,12 +29,16 @@ global exact-search tools:
   page-level OCR/text JSON into SQLite.
 - `wfrp_companion/search/fts.py` for rebuilding and querying the global SQLite
   FTS5 exact-search index.
+- `wfrp_companion/library/source_sets.py` for source-set state, active set
+  selection, and per-book enablement.
 - `tools/import_pdfs.py` for importing all configured source PDFs into managed
   local storage.
 - `tools/import_page_text.py` for importing all configured page-text JSON into
   `pages` and `page_text`.
 - `tools/rebuild_fts.py` for rebuilding `page_search` and `page_search_fts`.
-- `tools/search_text.py` for local exact-search smoke checks.
+- `tools/source_sets.py` for syncing/listing/activating source sets and
+  enabling or disabling books.
+- `tools/search_text.py` for source-set-aware exact-search smoke checks.
 
 ## Expected Development Shape
 
@@ -156,17 +161,46 @@ python tools/rebuild_fts.py --retry-running
 python tools/rebuild_fts.py --stale-running-minutes 30
 ```
 
+Sync and inspect source sets after importing books:
+
+```bash
+conda activate wfrp-companion
+python tools/source_sets.py init
+python tools/source_sets.py list
+python tools/source_sets.py books --source-set rules-core
+```
+
+The built-in source set is `rules-core` with display name `Rules/Core`. It
+enables books in `Core Book & GM Essentials` and `Rules and Mechanics Toolkits`
+by default, and leaves individual adventure/world books disabled until enabled.
+
+Switch the active source set or toggle individual books with:
+
+```bash
+python tools/source_sets.py activate rules-core
+python tools/source_sets.py enable rules-core <book_id>
+python tools/source_sets.py disable rules-core <book_id>
+```
+
+`source_set_books.enabled` is the per-book scope toggle. Search readiness is
+still owned by `books.copy_status`, `books.text_status`, `books.search_status`,
+and the `book_readiness` view.
+
 Run a local exact-search smoke check with:
 
 ```bash
 conda activate wfrp-companion
 python tools/search_text.py "critical hit"
-python tools/search_text.py "critical hit" --book-id core-rules --limit 5
+python tools/search_text.py --source-set rules-core "critical hit"
+python tools/search_text.py --book-id core-rules --limit 5 "critical hit"
+python tools/search_text.py --all-books "critical hit"
 ```
 
-`tools/search_text.py` clamps `--limit` to 100 and supports multiple
-`--book-id` filters. Search only returns hits from books that are copied,
-text-imported, and indexed.
+`tools/search_text.py` searches the active source set by default. Use
+`--source-set` for a named set, `--book-id` for direct per-book checks, or
+`--all-books` to deliberately search the whole indexed library. These scope
+flags are mutually exclusive. `--limit` is clamped to 100, and search only
+returns hits from books that are copied, text-imported, and indexed.
 
 ## Environment
 
@@ -217,6 +251,7 @@ When implementation decisions become real, update:
 - `docs/audits/2026-06-03-pdf-extraction-audit.md`
 - `docs/audits/2026-06-03-page-text-ocr-extraction.md`
 - `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
+- `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`
 - `docs/adr/0001-conda-python-tooling.md`
 - `docs/adr/0002-managed-local-pdf-storage.md`
 - `environment.yml`

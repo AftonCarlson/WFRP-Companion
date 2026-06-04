@@ -5,10 +5,10 @@
 [coverage: high]
 
 Application tests now exist for the Phase 1 SQLite/config foundation, the Phase
-2 managed PDF library importer, the page-text importer, and the global
-exact-search path. Python testing runs through the `wfrp-companion` Conda
-environment. `pytest`, `pytest-cov`, and `ruff` are included in
-`environment.yml`.
+2 managed PDF library importer, the page-text importer, the global exact-search
+path, and Phase 3 source-set management/search scoping. Python testing runs
+through the `wfrp-companion` Conda environment. `pytest`, `pytest-cov`, and
+`ruff` are included in `environment.yml`.
 
 ## Expected Coverage
 
@@ -56,7 +56,7 @@ Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.search_text --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.search_text --cov=tools.source_sets --cov-report=term-missing --cov-fail-under=100
 ```
 
 Use `python -m pytest` rather than bare `pytest`; it reliably keeps the repo
@@ -70,11 +70,13 @@ Current focused test files:
 - `tests/library/test_storage.py`
 - `tests/library/test_importer.py`
 - `tests/library/test_page_text_importer.py`
+- `tests/library/test_source_sets.py`
 - `tests/search/test_fts.py`
 - `tests/tools/test_import_pdfs.py`
 - `tests/tools/test_import_page_text.py`
 - `tests/tools/test_rebuild_fts.py`
 - `tests/tools/test_search_text.py`
+- `tests/tools/test_source_sets_cli.py`
 
 They cover configuration defaults/overrides, SQLite initialization, WAL/foreign
 key settings, lifecycle constraints, source/asset boolean constraints, asset
@@ -84,9 +86,12 @@ copy-job recovery, collision/failure reporting, the `tools/import_pdfs.py` CLI
 entrypoint, page-text JSON validation, import idempotency, failed/stale import
 repair, file-level quarantine jobs, global FTS rebuild idempotency, stale FTS
 projection cleanup, FTS integrity checks, readiness-gated exact search,
-per-book search filters, and the page-text/search CLI entrypoints.
+source-set membership sync/idempotency/conflict handling, active source-set
+selection, per-book source-set toggles, active source-set search defaults,
+whole-library override behavior, per-book search filters, and the page-text,
+source-set, and search CLI entrypoints.
 
-The latest full verification command on 2026-06-04 reported 120 tests passing
+The latest full verification command on 2026-06-04 reported 146 tests passing
 with 100% coverage across `wfrp_companion` and the tracked tool entrypoints.
 
 ## Manual QA
