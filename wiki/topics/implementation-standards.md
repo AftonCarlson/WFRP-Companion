@@ -26,9 +26,13 @@ The current codebase has working local implementations for steps 1 through 3:
 - Source-set scope selection is owned by
   `wfrp_companion/library/source_sets.py` and `tools/source_sets.py`; the search
   CLI uses the active source set by default.
+- The local API in `wfrp_companion/api/` exposes health, book catalog, guarded
+  PDF reader, source-set, and exact-search routes over the same SQLite state.
+- `wfrp_companion/search/scope.py` owns shared CLI/API scope resolution for
+  active source-set, named source-set, explicit book, and whole-library search.
 
 Steps 4 through 6 remain future work: AI question answering, cited answer
-assembly, and reader citation jumps.
+assembly, and frontend reader citation jumps.
 
 ## Rules For New Code
 
@@ -72,6 +76,14 @@ assembly, and reader citation jumps.
   replacement for readiness state.
 - Keep exact-search readiness gating in `search_exact()` and the `books`
   lifecycle columns.
+- Keep CLI and API search scope behavior in
+  `wfrp_companion/search/scope.py`; do not duplicate active-source-set or
+  conflict rules in route handlers.
+- API search should validate explicit unknown `book_id` values as `404`; CLI
+  direct book filters may continue to return zero hits for unknown IDs.
+- Keep managed filesystem paths out of JSON API responses. Serve PDFs through
+  guarded reader routes that validate the path remains under
+  `data/library/pdfs/<book_id>/` and has a `.pdf` suffix.
 - Use vector search for semantic matches.
 - Keep citation objects structured rather than parsing them out of prose.
 
@@ -121,6 +133,10 @@ database behavior should preserve these constraints:
 Before calling code work complete:
 
 - Run focused tests or explain why tests do not exist yet.
+- Run `ruff check .`.
+- Run the 100% coverage gate from
+  `wiki/topics/testing-posture-and-conventions.md` when Python behavior
+  changes.
 - Verify ingestion/search/citation behavior with a small sample document when
   relevant.
 - Check that no private PDFs, extracted book text, API keys, or indexes were
@@ -133,5 +149,6 @@ Before calling code work complete:
 - `docs/adr/0001-conda-python-tooling.md`
 - `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
 - `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`
+- `docs/plans/2026-06-04-phase-4-local-backend-api-implementation-plan.md`
 - `wiki/topics/ai-rag-system.md`
 - `wiki/topics/pdf-library-and-ingestion.md`
