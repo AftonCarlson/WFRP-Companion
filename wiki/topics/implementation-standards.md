@@ -14,6 +14,19 @@ should prove the loop:
 5. Return a cited answer.
 6. Jump from citation to PDF page.
 
+The current codebase has working local implementations for steps 1 through 3:
+
+- PDF registration/import is owned by `wfrp_companion/library/importer.py` and
+  `tools/import_pdfs.py`.
+- Page-level text import is owned by
+  `wfrp_companion/library/page_text_importer.py` and
+  `tools/import_page_text.py`.
+- Exact full-text search is owned by `wfrp_companion/search/fts.py`,
+  `tools/rebuild_fts.py`, and `tools/search_text.py`.
+
+Steps 4 through 6 remain future work: AI question answering, cited answer
+assembly, and reader citation jumps.
+
 ## Rules For New Code
 
 [coverage: high]
@@ -49,6 +62,7 @@ should prove the loop:
 - Keep managed PDF copies versioned by source SHA and store the active absolute
   path in SQLite.
 - Use full-text search for exact matches.
+- Rebuild global FTS through `tools/rebuild_fts.py` after page text changes.
 - Use vector search for semantic matches.
 - Keep citation objects structured rather than parsing them out of prose.
 
@@ -70,6 +84,12 @@ database behavior should preserve these constraints:
 - Keep SQLite transactions short around managed-file work. Hashing and copying
   large PDFs should happen outside long write transactions, with short guarded
   transitions before and after filesystem side effects.
+- Treat ignored `data/page_text/*.json` as import input only. Runtime text
+  ownership belongs to SQLite `pages` and `page_text`.
+- Treat `page_search` and `page_search_fts` as rebuildable search projections,
+  not canonical text storage.
+- Do not let exact search return pages unless `books.copy_status='copied'`,
+  `books.text_status='imported'`, and `books.search_status='indexed'`.
 
 ## Documentation Rules
 
@@ -97,5 +117,6 @@ Before calling code work complete:
 
 - `AGENTS.md`
 - `docs/adr/0001-conda-python-tooling.md`
+- `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
 - `wiki/topics/ai-rag-system.md`
 - `wiki/topics/pdf-library-and-ingestion.md`
