@@ -1,5 +1,52 @@
 # Wiki Compile Log
 
+## 2026-06-04 Page Text Import And Global FTS Search
+
+- Added the execution plan at
+  `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`.
+- Added `wfrp_companion/library/page_text_importer.py` and
+  `tools/import_page_text.py` to import ignored private
+  `data/page_text/<book_id>.json` files into SQLite `pages` and `page_text`.
+- Added `wfrp_companion/search/fts.py`, `tools/rebuild_fts.py`, and
+  `tools/search_text.py` for a whole-library SQLite FTS5 projection over
+  copied, text-imported books.
+- Kept per-book lifecycle ownership explicit through `books.text_status`,
+  `books.search_status`, and idempotent `ingest_jobs` keys for
+  `import_page_text` and `rebuild_fts`.
+- Ran the real local import and search pipeline: 26 books imported from
+  page-text JSON, 3,736 pages imported, 26 books indexed, 3,736 pages indexed,
+  and exact search returned cited book/page hits.
+- Added regression coverage for idempotent import, failed import repair,
+  malformed JSON quarantine, same-key running job protection, stale job
+  recovery, stale FTS projection cleanup, readiness-gated search, per-book
+  filters, and CLI entrypoints.
+- Ran the full coverage gate across `wfrp_companion` and tool modules: 120
+  tests passed with 100% coverage. `ruff check .` also passed.
+- Completed independent implementation review and fixed the reported P1/P2
+  issues before this wiki refresh.
+
+## 2026-06-04 Phase 2 Managed PDF Library Import
+
+- Added the Phase 2 implementation plan at
+  `docs/plans/2026-06-04-phase-2-managed-pdf-library-import-implementation-plan.md`.
+- Accepted ADR `docs/adr/0002-managed-local-pdf-storage.md` for local managed
+  PDF copies, absolute `books.managed_pdf_path`, and versioned
+  `source-<original_sha256>.pdf` filenames.
+- Added `wfrp_companion/library/` with identity, discovery, storage, and
+  importer modules for local managed PDF import.
+- Added `tools/import_pdfs.py`, which imports all readable PDFs from the
+  configured source root, validates the root before initializing SQLite, and
+  reports copy/failure summaries without printing book text.
+- Ran the importer against `/Users/aftoncarlson/TTRPGs/WFRP 2e`: 26 candidates,
+  26 copied, 0 failed. A rerun reported 26 skipped current, confirming
+  idempotency.
+- Added tests for book/folder identity, recursive PDF discovery, atomic managed
+  copy storage, SQLite import state, collision/failure reporting, stale job
+  recovery, and CLI behavior.
+- Updated `.gitignore` to scope local data ignores to repo-root paths so
+  `wfrp_companion/library/` and `tests/library/` can be tracked while generated
+  `data/` remains ignored.
+
 ## 2026-06-03 Phase 1 SQLite Foundation
 
 - Added the durable implementation plan at
