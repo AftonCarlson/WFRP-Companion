@@ -17,7 +17,7 @@ The library should track each owned PDF with:
 Avoid storing large copied text in fixtures or docs. Keep extracted text local.
 
 Phase 2 implements the managed PDF library import and the first page-text/search
-pipeline:
+pipeline. Phase 3 adds source-set selection over that indexed library:
 
 - `tools/import_pdfs.py` imports all readable PDFs from
   `/Users/aftoncarlson/TTRPGs/WFRP 2e` by default.
@@ -37,8 +37,10 @@ pipeline:
   `data/page_text/<book_id>.json` into SQLite `pages` and `page_text`.
 - `tools/rebuild_fts.py` rebuilds the global exact-search projection in
   `page_search` and `page_search_fts`.
-- `tools/search_text.py` queries imported text through SQLite FTS5 and returns
-  ranked book/page/snippet results.
+- `tools/source_sets.py` syncs the built-in `Rules/Core` source set and toggles
+  per-book membership.
+- `tools/search_text.py` queries imported text through SQLite FTS5, applies the
+  active source set by default, and returns ranked book/page/snippet results.
 
 The managed-storage decision is recorded in
 `docs/adr/0002-managed-local-pdf-storage.md`.
@@ -103,12 +105,22 @@ Exact search is implemented in `wfrp_companion/search/fts.py`:
 - Search is readiness-gated: `search_exact()` only returns hits for books with
   `copy_status='copied'`, `text_status='imported'`, and
   `search_status='indexed'`.
-- Per-book filtering is supported by `book_id`, which is the basis for future
-  user-controlled source-set toggles.
+- Per-book filtering is supported by `book_id`.
+- Source-set-aware search is implemented in `tools/search_text.py`: default
+  search uses `app_settings.active_source_set_id`, `--source-set` uses a named
+  source set, `--book-id` bypasses source sets for direct checks, and
+  `--all-books` deliberately restores whole-library search.
+- Source-set membership is owned by `source_set_books.enabled`; readiness is
+  still owned by `books` lifecycle state and enforced by `search_exact()`.
 
 The real local FTS rebuild on 2026-06-04 indexed 26 books and 3,736 pages. A
 rerun skipped the rebuild as current, and `tools/search_text.py "critical hit"`
 returned cited exact-search hits.
+
+The real local source-set sync on 2026-06-04 created `rules-core`, inserted 26
+book membership rows, set it active, and enabled the `Core Book & GM Essentials`
+and `Rules and Mechanics Toolkits` categories by default. Adventure modules and
+world/faction sourcebooks remain disabled until individually enabled.
 
 ## OCR
 
@@ -141,6 +153,7 @@ to solve map extraction before the reader plus citation loop works.
 - `wiki/topics/local-tooling-and-packaging.md`
 - `docs/adr/0002-managed-local-pdf-storage.md`
 - `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
+- `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`
 - `docs/audits/2026-06-03-pdf-extraction-audit.md`
 - `docs/audits/2026-06-03-page-text-ocr-extraction.md`
 - `wiki/concepts/private-copyright-boundary.md`

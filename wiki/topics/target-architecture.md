@@ -35,8 +35,8 @@ Phase 1 implementation has started the target architecture:
   WAL mode.
 - `tools/init_db.py` creates the local database.
 
-Phase 2 populates the first library, text, and exact-search source-of-truth
-rows:
+Phase 2 and Phase 3 populate the first library, text, exact-search, and
+source-set source-of-truth rows:
 
 - `wfrp_companion/library/` owns PDF identity, discovery, managed storage, and
   SQLite import behavior.
@@ -50,8 +50,16 @@ rows:
   `data/page_text/<book_id>.json` files into `pages` and `page_text`.
 - `wfrp_companion/search/fts.py` owns the global exact-search rebuild and query
   path over `page_search` and `page_search_fts`.
+- `wfrp_companion/library/source_sets.py` owns source-set creation, active
+  source-set selection, per-book enablement, and the built-in `Rules/Core`
+  source set.
 - `tools/import_page_text.py`, `tools/rebuild_fts.py`, and
   `tools/search_text.py` provide the local command-line pipeline.
+- `tools/source_sets.py` syncs the built-in source set and provides local
+  listing, activation, enable, and disable commands.
+- `tools/search_text.py` now searches the active source set by default, accepts
+  `--source-set` for a named set, keeps `--book-id` for direct per-book checks,
+  and uses `--all-books` as the explicit whole-library override.
 - `book_readiness.search_ready` becomes true when the managed PDF is copied,
   page text is imported, and FTS search is indexed.
 
@@ -59,8 +67,10 @@ The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval metadata. The current populated runtime source-of-truth areas
 are library folders, books, pages, page text, page search, FTS, ingest jobs, and
-the `book_readiness` view. Later phases will populate visual assets, source-set
-UI state, API surfaces, reader surfaces, and AI chat/retrieval metadata.
+the `book_readiness` view. Source-set state is now populated in `source_sets`,
+`source_set_books`, and `app_settings.active_source_set_id`. Later phases will
+populate visual assets, source-set UI surfaces, API surfaces, reader surfaces,
+and AI chat/retrieval metadata.
 
 ## Major Modules
 
@@ -103,6 +113,17 @@ Important schema decisions:
 - `ingest_jobs(job_type='import_page_text')` and
   `ingest_jobs(job_type='rebuild_fts')` record idempotent text/search work.
 - Exact search reads only books whose lifecycle columns make them search-ready.
+- `source_sets` defines named selectable book groups.
+- `source_set_books.enabled` is the explicit per-book membership toggle for a
+  source set. It is not a search-readiness flag.
+- `app_settings.active_source_set_id` stores the active source set for default
+  retrieval/search scope.
+- The built-in `rules-core` / `Rules/Core` source set enables
+  `Core Book & GM Essentials` and `Rules and Mechanics Toolkits` by default and
+  leaves other categories disabled until the user enables individual books.
+- Readiness remains owned by `books` lifecycle columns and the
+  `book_readiness` view; source sets decide scope, while search decides whether
+  a scoped book is currently searchable.
 
 ## Local-First Boundary
 
@@ -127,5 +148,6 @@ intentional decision rather than an accidental architecture drift.
 - `docs/adr/0001-conda-python-tooling.md`
 - `docs/adr/0002-managed-local-pdf-storage.md`
 - `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
+- `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`
 - `wiki/concepts/private-copyright-boundary.md`
 - `wiki/concepts/hybrid-search-for-rules.md`

@@ -9,6 +9,7 @@ if __package__ in {None, ""}:  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # pragma: no cover
 
 from wfrp_companion.config import AppConfig, load_config
+from wfrp_companion.library import source_sets
 from wfrp_companion.search.fts import SearchHit, search_exact
 
 
@@ -35,6 +36,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict search to a book id. Can be passed more than once.",
     )
     parser.add_argument(
+        "--source-set",
+        default=None,
+        help="Restrict search to enabled, search-ready books in a source set.",
+    )
+    parser.add_argument(
+        "--all-books",
+        action="store_true",
+        help="Search every indexed book instead of the active source set.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=20,
@@ -42,6 +53,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("query", nargs="+", help="Search query.")
     return parser
+
+
+def validate_search_scope(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    if args.all_books and args.source_set is not None:
+        parser.error("--all-books cannot be combined with --source-set")
+    if args.all_books and args.book_id is not None:
+        parser.error("--all-books cannot be combined with --book-id")
+    if args.source_set is not None and args.book_id is not None:
+        parser.error("--source-set cannot be combined with --book-id")
 
 
 def config_from_args(args: argparse.Namespace) -> AppConfig:
@@ -58,6 +81,19 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
     )
 
 
+def resolve_book_ids(
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> tuple[str, ...] | None:
+    if args.all_books:
+        return None
+    if args.book_id is not None:
+        return tuple(args.book_id)
+    if args.source_set is not None:
+        return source_sets.enabled_book_ids(config, args.source_set)
+    return source_sets.enabled_book_ids(config)
+
+
 def print_hits(config: AppConfig, query: str, hits: tuple[SearchHit, ...]) -> None:
     print("WFRP exact text search")
     print(f"DB path: {config.db_path}")
@@ -72,10 +108,16 @@ def print_hits(config: AppConfig, query: str, hits: tuple[SearchHit, ...]) -> No
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    validate_search_scope(parser, args)
     config = config_from_args(args)
     query = " ".join(args.query)
-    book_ids = None if args.book_id is None else tuple(args.book_id)
+    try:
+        book_ids = resolve_book_ids(config, args)
+    except source_sets.SourceSetError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     hits = search_exact(config, query, book_ids=book_ids, limit=args.limit)
     print_hits(config, query, hits)
     return 0

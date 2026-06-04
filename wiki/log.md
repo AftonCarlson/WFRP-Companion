@@ -1,5 +1,34 @@
 # Wiki Compile Log
 
+## 2026-06-04 Phase 3 Source Sets And Search Scoping
+
+- Added the Phase 3 implementation plan at
+  `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`.
+- Added `wfrp_companion/library/source_sets.py` as the SQLite-backed owner for
+  source-set sync, active source-set selection, and per-book enablement.
+- Added `tools/source_sets.py` with `init`, `list`, `books`, `activate`,
+  `enable`, and `disable` commands.
+- Created the built-in `rules-core` / `Rules/Core` source set over the real
+  local library: 26 book rows were inserted, the source set was made active,
+  core/GM essentials and rules/mechanics books were enabled by default, and
+  adventure/world books were left disabled.
+- Updated `tools/search_text.py` so exact search uses the active source set by
+  default, supports `--source-set`, keeps direct `--book-id` filters, and uses
+  `--all-books` as the explicit whole-library override.
+- Kept the ownership boundary explicit: `source_set_books.enabled` controls
+  scope membership, while `books.copy_status`, `books.text_status`,
+  `books.search_status`, `book_readiness`, and `search_exact()` control search
+  readiness.
+- Added regression coverage for source-set bootstrap/idempotency/conflicts,
+  malformed active settings, per-book toggles, source-set CLI behavior, active
+  source-set search defaults, whole-library override behavior, and enabled but
+  not-indexed books being suppressed by search readiness.
+- Ran the full coverage gate across `wfrp_companion` and tracked tool modules:
+  146 tests passed with 100% coverage. `ruff check .` also passed.
+- Completed independent implementation review, fixed the reported source-set
+  membership/readiness boundary issue, and received code green-light pending
+  this wiki refresh.
+
 ## 2026-06-04 Page Text Import And Global FTS Search
 
 - Added the execution plan at

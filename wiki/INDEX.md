@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-03 initial development scaffold
+Last compiled: 2026-06-04 Phase 3 source sets and search scoping
 
 ## Topics
 
