@@ -17,7 +17,8 @@ configuration loading, SQLite connection/schema initialization, and
 
 Phase 2 added the local managed-PDF library importer, page-text importer, and
 global exact-search tools. Phase 3 added source-set management and made local
-search source-set-aware:
+search source-set-aware. Phase 4 added the first FastAPI backend surface over
+the local SQLite library:
 
 - `wfrp_companion/library/identity.py` for stable book and folder IDs.
 - `wfrp_companion/library/discovery.py` for recursive PDF discovery.
@@ -29,8 +30,13 @@ search source-set-aware:
   page-level OCR/text JSON into SQLite.
 - `wfrp_companion/search/fts.py` for rebuilding and querying the global SQLite
   FTS5 exact-search index.
+- `wfrp_companion/search/scope.py` for shared CLI/API search scope resolution.
 - `wfrp_companion/library/source_sets.py` for source-set state, active set
   selection, and per-book enablement.
+- `wfrp_companion/library/catalog.py` for API-facing book, page, and guarded
+  managed-PDF reader read models.
+- `wfrp_companion/api/` for the FastAPI app, schemas, dependencies, error
+  mapping, and route modules.
 - `tools/import_pdfs.py` for importing all configured source PDFs into managed
   local storage.
 - `tools/import_page_text.py` for importing all configured page-text JSON into
@@ -39,6 +45,7 @@ search source-set-aware:
 - `tools/source_sets.py` for syncing/listing/activating source sets and
   enabling or disabling books.
 - `tools/search_text.py` for source-set-aware exact-search smoke checks.
+- `tools/serve_api.py` for running the local API.
 
 ## Expected Development Shape
 
@@ -202,6 +209,41 @@ python tools/search_text.py --all-books "critical hit"
 flags are mutually exclusive. `--limit` is clamped to 100, and search only
 returns hits from books that are copied, text-imported, and indexed.
 
+Run the local backend API with:
+
+```bash
+conda activate wfrp-companion
+python tools/serve_api.py
+```
+
+The server defaults to `127.0.0.1:8000` and the configured local data paths.
+It also accepts:
+
+```bash
+python tools/serve_api.py --host 127.0.0.1 --port 8000
+python tools/serve_api.py --data-dir "/path/to/private-data"
+python tools/serve_api.py --db-path "/path/to/wfrp.sqlite"
+```
+
+Current API surfaces:
+
+- `GET /api/health`
+- `GET /api/books`
+- `GET /api/books/{book_id}`
+- `GET /api/books/{book_id}/pages/{page_number}`
+- `GET /api/books/{book_id}/pdf`
+- `GET /api/source-sets`
+- `GET /api/source-sets/active`
+- `PUT /api/source-sets/active`
+- `GET /api/source-sets/{source_set_id}/books`
+- `PUT /api/source-sets/{source_set_id}/books/{book_id}`
+- `GET /api/search/exact`
+
+`/api/books/{book_id}/pdf` serves the managed local PDF inline and supports
+HTTP byte ranges through Starlette `FileResponse`, which lets PDF.js request
+only the needed bytes. JSON responses deliberately avoid returning
+`books.managed_pdf_path`.
+
 ## Environment
 
 [coverage: medium]
@@ -252,6 +294,7 @@ When implementation decisions become real, update:
 - `docs/audits/2026-06-03-page-text-ocr-extraction.md`
 - `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
 - `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`
+- `docs/plans/2026-06-04-phase-4-local-backend-api-implementation-plan.md`
 - `docs/adr/0001-conda-python-tooling.md`
 - `docs/adr/0002-managed-local-pdf-storage.md`
 - `environment.yml`

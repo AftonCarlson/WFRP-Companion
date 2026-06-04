@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-04 Phase 3 source sets and search scoping
+Last compiled: 2026-06-04 Phase 4 local backend API
 
 ## Topics
 

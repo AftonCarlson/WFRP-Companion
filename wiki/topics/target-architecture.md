@@ -63,14 +63,39 @@ source-set source-of-truth rows:
 - `book_readiness.search_ready` becomes true when the managed PDF is copied,
   page text is imported, and FTS search is indexed.
 
+Phase 4 exposes the first local backend API over that SQLite state:
+
+- `wfrp_companion/api/app.py` creates the FastAPI app and syncs the built-in
+  source set at startup.
+- `tools/serve_api.py` starts the local API with configurable host, port,
+  data directory, and database path.
+- `wfrp_companion/library/catalog.py` owns the read model for book lists, book
+  detail, page references, and guarded managed-PDF reader paths.
+- `/api/health` confirms the API is initialized without exposing private local
+  paths.
+- `/api/books`, `/api/books/{book_id}`,
+  `/api/books/{book_id}/pages/{page_number}`, and
+  `/api/books/{book_id}/pdf` expose library and reader data. The PDF route
+  serves managed PDFs inline and relies on Starlette `FileResponse` for HTTP
+  range requests.
+- `/api/source-sets`, `/api/source-sets/active`, and
+  `/api/source-sets/{source_set_id}/books/{book_id}` expose existing
+  source-set state and per-book toggles.
+- `wfrp_companion/search/scope.py` resolves default active source-set, named
+  source-set, explicit book, and whole-library search scope for both CLI and
+  API callers.
+- `/api/search/exact` returns resolved scope, ranked snippets, and book/page
+  citations while `search_exact()` remains the readiness gate.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval metadata. The current populated runtime source-of-truth areas
 are library folders, books, pages, page text, page search, FTS, ingest jobs, and
 the `book_readiness` view. Source-set state is now populated in `source_sets`,
-`source_set_books`, and `app_settings.active_source_set_id`. Later phases will
-populate visual assets, source-set UI surfaces, API surfaces, reader surfaces,
-and AI chat/retrieval metadata.
+`source_set_books`, and `app_settings.active_source_set_id`. The local API now
+surfaces library, source-set, exact-search, and managed-PDF reader operations.
+Later phases will populate visual assets, frontend reader/search surfaces, and
+AI chat/retrieval metadata.
 
 ## Major Modules
 
@@ -124,6 +149,8 @@ Important schema decisions:
 - Readiness remains owned by `books` lifecycle columns and the
   `book_readiness` view; source sets decide scope, while search decides whether
   a scoped book is currently searchable.
+- API responses must not expose `books.managed_pdf_path`; managed PDFs are only
+  served through guarded reader endpoints under the configured local data dir.
 
 ## Local-First Boundary
 
@@ -149,5 +176,6 @@ intentional decision rather than an accidental architecture drift.
 - `docs/adr/0002-managed-local-pdf-storage.md`
 - `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
 - `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`
+- `docs/plans/2026-06-04-phase-4-local-backend-api-implementation-plan.md`
 - `wiki/concepts/private-copyright-boundary.md`
 - `wiki/concepts/hybrid-search-for-rules.md`

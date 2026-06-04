@@ -1,5 +1,31 @@
 # Wiki Compile Log
 
+## 2026-06-04 Phase 4 Local Backend API
+
+- Added the Phase 4 implementation plan at
+  `docs/plans/2026-06-04-phase-4-local-backend-api-implementation-plan.md`.
+- Added the FastAPI app factory under `wfrp_companion/api/`, plus
+  `tools/serve_api.py` for starting the local API with Conda-managed Python.
+- Added `wfrp_companion/library/catalog.py` as the read model for book lists,
+  book detail, page references, and guarded managed-PDF reader paths.
+- Added `/api/books`, `/api/books/{book_id}`,
+  `/api/books/{book_id}/pages/{page_number}`, and
+  `/api/books/{book_id}/pdf`. The PDF endpoint serves managed local PDFs
+  inline with HTTP range support and rejects unavailable, missing, or unsafe
+  managed paths.
+- Added `/api/source-sets`, `/api/source-sets/active`, and per-book
+  source-set toggle routes over the existing SQLite-backed source-set service.
+- Added `wfrp_companion/search/scope.py` so the CLI and API share active
+  source-set, named source-set, per-book, and whole-library scope resolution.
+- Added `/api/search/exact`, which returns query metadata, resolved scope,
+  snippets, and book/page citations while preserving search-readiness gating.
+- Added regression coverage for API startup, health, OpenAPI route presence,
+  catalog routes, PDF range/path-safety responses, source-set routes,
+  exact-search routes, shared scope resolution, API error mapping, and the
+  `tools/serve_api.py` entrypoint.
+- Ran the full coverage gate across `wfrp_companion` and tracked tool modules:
+  178 tests passed with 100% coverage. `ruff check .` also passed.
+
 ## 2026-06-04 Phase 3 Source Sets And Search Scoping
 
 - Added the Phase 3 implementation plan at

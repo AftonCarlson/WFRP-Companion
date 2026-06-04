@@ -17,7 +17,9 @@ The library should track each owned PDF with:
 Avoid storing large copied text in fixtures or docs. Keep extracted text local.
 
 Phase 2 implements the managed PDF library import and the first page-text/search
-pipeline. Phase 3 adds source-set selection over that indexed library:
+pipeline. Phase 3 adds source-set selection over that indexed library. Phase 4
+adds local API surfaces for the library, reader PDF stream, source-set toggles,
+and exact search:
 
 - `tools/import_pdfs.py` imports all readable PDFs from
   `/Users/aftoncarlson/TTRPGs/WFRP 2e` by default.
@@ -41,6 +43,14 @@ pipeline. Phase 3 adds source-set selection over that indexed library:
   per-book membership.
 - `tools/search_text.py` queries imported text through SQLite FTS5, applies the
   active source set by default, and returns ranked book/page/snippet results.
+- `wfrp_companion/library/catalog.py` exposes API-facing book/page read models
+  and validates managed reader PDF paths.
+- `/api/books/{book_id}/pdf` serves the managed local PDF inline with HTTP
+  range support. It rejects unknown books, not-reader-ready books, missing
+  managed files, non-PDF paths, and paths outside
+  `data/library/pdfs/<book_id>/`.
+- `/api/search/exact` uses the same scope resolver as `tools/search_text.py`
+  and returns query, scope, snippets, scores, and book/page citations.
 
 The managed-storage decision is recorded in
 `docs/adr/0002-managed-local-pdf-storage.md`.
@@ -52,6 +62,17 @@ The managed-storage decision is recorded in
 The GUI should allow a GM to open a book, navigate pages, search within the
 book, and jump from a chat citation directly to the cited page. PDF.js is the
 likely browser-side renderer.
+
+The local API now provides the reader backend needed for that GUI:
+
+- `GET /api/books` lists books with readiness flags but no private filesystem
+  paths.
+- `GET /api/books/{book_id}` returns book detail plus
+  `managed_pdf_available`.
+- `GET /api/books/{book_id}/pages/{page_number}` returns page identity,
+  label, text/image counts, and text availability without returning raw page
+  text.
+- `GET /api/books/{book_id}/pdf` returns the managed PDF stream for PDF.js.
 
 ## Extraction Pipeline
 
@@ -110,6 +131,12 @@ Exact search is implemented in `wfrp_companion/search/fts.py`:
   search uses `app_settings.active_source_set_id`, `--source-set` uses a named
   source set, `--book-id` bypasses source sets for direct checks, and
   `--all-books` deliberately restores whole-library search.
+- `wfrp_companion/search/scope.py` now owns that scope resolution for both CLI
+  and API callers. API search validates explicit unknown `book_id` values as
+  `404`; the CLI preserves its historical zero-hit behavior for unknown direct
+  book IDs.
+- `/api/search/exact` accepts `query`, `limit`, `source_set_id`, repeatable
+  `book_id`, and `all_books` parameters.
 - Source-set membership is owned by `source_set_books.enabled`; readiness is
   still owned by `books` lifecycle state and enforced by `search_exact()`.
 
@@ -154,6 +181,7 @@ to solve map extraction before the reader plus citation loop works.
 - `docs/adr/0002-managed-local-pdf-storage.md`
 - `docs/plans/2026-06-04-page-text-import-global-fts-implementation-plan.md`
 - `docs/plans/2026-06-04-phase-3-source-sets-implementation-plan.md`
+- `docs/plans/2026-06-04-phase-4-local-backend-api-implementation-plan.md`
 - `docs/audits/2026-06-03-pdf-extraction-audit.md`
 - `docs/audits/2026-06-03-page-text-ocr-extraction.md`
 - `wiki/concepts/private-copyright-boundary.md`
