@@ -85,6 +85,11 @@
   frontend production build passed, and targeted coverage gates reported 100%
   for `wfrp_companion.assistant.chat_service` and
   `wfrp_companion.assistant.provider`.
+- Follow-up reconciliation on 2026-06-05 marked the Phase 6 plan checklist
+  against live code. The remaining known Phase 6 gaps are the real Familiar
+  chat-history selector UI and a successful live OpenAI rules-question QA pass;
+  the attempted live rules question exposed the page-level retrieval weakness
+  now being addressed by Phase 7 typed source-object retrieval.
 
 ## 2026-06-04 Phase 5 Browser GUI Refinement
 

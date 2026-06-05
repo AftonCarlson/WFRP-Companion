@@ -690,11 +690,11 @@ Files:
 
 Steps:
 
-- [ ] Write tests for command construction, child-process cleanup, readiness-probe success, readiness-probe failure, and frontend working-directory selection.
-- [ ] Implement `tools/dev.py` with injectable process runner and HTTP probe functions so tests do not spawn real servers.
-- [ ] Verify `python -m pytest tests/tools/test_dev.py -v`.
-- [ ] Verify full backend coverage gate.
-- [ ] Update wiki with `python tools/dev.py`.
+- [x] Write tests for command construction, child-process cleanup, readiness-probe success, readiness-probe failure, and frontend working-directory selection.
+- [x] Implement `tools/dev.py` with injectable process runner and HTTP probe functions so tests do not spawn real servers.
+- [x] Verify `python -m pytest tests/tools/test_dev.py -v`.
+- [x] Verify full backend coverage gate.
+- [x] Update wiki with `python tools/dev.py`.
 
 What intentionally does not change:
 
@@ -724,16 +724,16 @@ Files:
 
 Steps:
 
-- [ ] Add `chat_thread_source_books`, `model_runs`, and related indexes to `schema.sql`.
-- [ ] Extend schema tests to assert `chat_thread_source_books`, `model_runs`, retry lineage, active-retry uniqueness, constraints, and indexes.
-- [ ] Implement `chat_store.py` dataclasses and functions: `create_thread`, `list_threads`, `get_thread_detail`, `claim_model_run`, `insert_user_message`, `load_model_run_result`, `mark_model_run_failed`, `claim_retry_model_run`, and `load_thread_turns`.
-- [ ] Prove `create_thread` snapshots enabled book IDs into `chat_thread_source_books` and later source-set toggles do not change existing thread scope.
-- [ ] Implement chat routes for thread create/list/detail.
-- [ ] Implement a temporary message-send route that persists the user message, creates a failed `model_run` with `error_code='provider_unavailable'`, and returns a normal chat response body until Checkpoint 6.5 wires the real provider.
-- [ ] Implement a temporary streaming message route that yields `accepted` and final `failed` NDJSON events for provider-unavailable sends.
-- [ ] Implement retry route shape with idempotency and active-retry guard, returning provider-unavailable until Checkpoint 6.5.
-- [ ] Verify OpenAPI includes `/api/chat/threads`, `/api/chat/threads/{thread_id}`, `/api/chat/threads/{thread_id}/messages`, and `/api/chat/model-runs/{model_run_id}/retry`.
-- [ ] Verify full backend coverage gate.
+- [x] Add `chat_thread_source_books`, `model_runs`, and related indexes to `schema.sql`.
+- [x] Extend schema tests to assert `chat_thread_source_books`, `model_runs`, retry lineage, active-retry uniqueness, constraints, and indexes.
+- [x] Implement `chat_store.py` dataclasses and functions: `create_thread`, `list_threads`, `get_thread_detail`, `claim_model_run`, `insert_user_message`, `load_model_run_result`, `mark_model_run_failed`, `claim_retry_model_run`, and `load_thread_turns`.
+- [x] Prove `create_thread` snapshots enabled book IDs into `chat_thread_source_books` and later source-set toggles do not change existing thread scope.
+- [x] Implement chat routes for thread create/list/detail.
+- [x] Implement a temporary message-send route that persists the user message, creates a failed `model_run` with `error_code='provider_unavailable'`, and returns a normal chat response body until Checkpoint 6.5 wires the real provider.
+- [x] Implement a temporary streaming message route that yields `accepted` and final `failed` NDJSON events for provider-unavailable sends.
+- [x] Implement retry route shape with idempotency and active-retry guard, returning provider-unavailable until Checkpoint 6.5.
+- [x] Verify OpenAPI includes `/api/chat/threads`, `/api/chat/threads/{thread_id}`, `/api/chat/threads/{thread_id}/messages`, and `/api/chat/model-runs/{model_run_id}/retry`.
+- [x] Verify full backend coverage gate.
 
 What intentionally does not change:
 
@@ -758,16 +758,16 @@ Files:
 
 Steps:
 
-- [ ] Write tests proving thread retrieval scope is read from `chat_thread_source_books`.
-- [ ] Write tests proving books disabled after thread creation do not disappear from that thread's retrieval snapshot, while new threads capture the new enabled-book set.
-- [ ] Write tests proving disabled books are not included when a new thread is created after they are disabled.
-- [ ] Write tests proving natural-language questions are converted into useful exact-search candidates instead of passing every filler word into the current FTS `AND` query.
-- [ ] Write tests proving retrieval hits are persisted with rank, score, page ID, and snippet.
-- [ ] Write tests proving context windows are capped per page and total.
-- [ ] Write tests proving no managed PDF path or source filesystem path appears in prompt context.
-- [ ] Implement candidate query generation, exact-search retrieval, hit deduplication, page-text hydration, and bounded context windows.
-- [ ] Implement prompt assembly requiring citations and insufficient-context honesty.
-- [ ] Verify full backend coverage gate.
+- [x] Write tests proving thread retrieval scope is read from `chat_thread_source_books`.
+- [x] Write tests proving books disabled after thread creation do not disappear from that thread's retrieval snapshot, while new threads capture the new enabled-book set.
+- [x] Write tests proving disabled books are not included when a new thread is created after they are disabled.
+- [x] Write tests proving natural-language questions are converted into useful exact-search candidates instead of passing every filler word into the current FTS `AND` query.
+- [x] Write tests proving retrieval hits are persisted with rank, score, page ID, and snippet.
+- [x] Write tests proving context windows are capped per page and total.
+- [x] Write tests proving no managed PDF path or source filesystem path appears in prompt context.
+- [x] Implement candidate query generation, exact-search retrieval, hit deduplication, page-text hydration, and bounded context windows.
+- [x] Implement prompt assembly requiring citations and insufficient-context honesty.
+- [x] Verify full backend coverage gate.
 
 What intentionally does not change:
 
@@ -793,13 +793,14 @@ Files:
 
 Steps:
 
-- [ ] Add TypeScript chat API response types.
-- [ ] Add API client methods and tests for encoded chat endpoints, including `streamChatMessage` NDJSON parsing.
-- [ ] Update Familiar tests for enabled send, Enter-to-send, Shift+Enter newline, streaming delta rendering, pending state, history loading, error display, retry display, and citation click callback.
-- [ ] Implement Familiar state and rendering without bypassing `apiClient`.
-- [ ] Verify `cd frontend && npm run test:coverage`.
-- [ ] Verify `cd frontend && npm run build`.
-- [ ] Verify `cd frontend && npm run test:e2e`.
+- [x] Add TypeScript chat API response types.
+- [x] Add API client methods and tests for encoded chat endpoints, including `streamChatMessage` NDJSON parsing.
+- [x] Update Familiar tests for enabled send, Enter-to-send, Shift+Enter newline, streaming delta rendering, pending state, placeholder history menu, error display, retry display, and citation click callback.
+- [x] Implement Familiar state and rendering without bypassing `apiClient`.
+- [ ] Implement real chat history loading and thread selection in the Familiar history menu. Current UI has a placeholder history popover while backend thread list/detail endpoints exist.
+- [x] Verify `cd frontend && npm run test:coverage`.
+- [x] Verify `cd frontend && npm run build`.
+- [x] Verify `cd frontend && npm run test:e2e`.
 
 What intentionally does not change:
 
@@ -825,17 +826,17 @@ Files:
 
 Steps:
 
-- [ ] Add `openai` to `environment.yml`.
-- [ ] Add config fields for provider, model, context hit limit, context char limit, context window chars, and OpenAI timeout seconds.
-- [ ] Implement `Provider` protocol and `FakeProvider` for tests.
-- [ ] Implement `OpenAIProvider` using `OpenAI(max_retries=0, timeout=timeout_seconds).responses.create(...)`.
-- [ ] Implement `OpenAIProvider.stream_response(...)` using `responses.create(..., stream=True)` and map `response.output_text.delta` events into app text deltas.
-- [ ] Pass `X-Client-Request-Id` equal to `model_runs.id`.
-- [ ] Persist provider response ID and usage fields when present.
-- [ ] Map missing key to a persisted failed `model_run` with `error_code='provider_unavailable'` and a normal chat response body for accepted sends/retries.
-- [ ] Map provider errors to failed `model_runs` without assistant message insertion.
-- [ ] Verify tests use fake provider and make no network calls.
-- [ ] Verify full backend coverage gate.
+- [x] Add `openai` to `environment.yml`.
+- [x] Add config fields for provider, model, context hit limit, context char limit, context window chars, and OpenAI timeout seconds.
+- [x] Implement `Provider` protocol and `FakeProvider` for tests.
+- [x] Implement `OpenAIProvider` using `OpenAI(max_retries=0, timeout=timeout_seconds).responses.create(...)`.
+- [x] Implement `OpenAIProvider.stream_response(...)` using `responses.create(..., stream=True)` and map `response.output_text.delta` events into app text deltas.
+- [x] Pass `X-Client-Request-Id` equal to `model_runs.id`.
+- [x] Persist provider response ID and usage fields when present.
+- [x] Map missing key to a persisted failed `model_run` with `error_code='provider_unavailable'` and a normal chat response body for accepted sends/retries.
+- [x] Map provider errors to failed `model_runs` without assistant message insertion.
+- [x] Verify tests use fake provider and make no network calls.
+- [x] Verify full backend coverage gate.
 
 What intentionally does not change:
 
@@ -862,15 +863,25 @@ Files:
 
 Steps:
 
-- [ ] Run full backend coverage gate.
-- [ ] Run frontend coverage, build, and e2e.
-- [ ] Manually start with `python tools/dev.py`.
-- [ ] Verify missing `OPENAI_API_KEY` produces a clear Familiar offline state.
-- [ ] With `OPENAI_API_KEY` set locally, ask a rules question and confirm citations open Grimoire pages.
-- [ ] Update wiki with current chat/RAG state, important environment variables, and what still remains future work.
-- [ ] Request independent code review with repo, plan, and wiki context.
-- [ ] Fix review findings or document why they are not changes.
-- [ ] Push one PR for the phase.
+- [x] Run full backend coverage gate.
+- [x] Run frontend coverage, build, and e2e.
+- [x] Manually start with `python tools/dev.py`.
+- [x] Verify missing `OPENAI_API_KEY` produces a clear Familiar offline state.
+- [ ] With `OPENAI_API_KEY` set locally, ask a rules question and confirm citations open Grimoire pages. A live rules-question check was attempted, but page-level retrieval quality was not acceptable; Phase 7 typed-object retrieval is the follow-up.
+- [x] Update wiki with current chat/RAG state, important environment variables, and what still remains future work.
+- [x] Request independent code review with repo, plan, and wiki context.
+- [x] Fix review findings or document why they are not changes.
+- [x] Push one PR for the phase.
+
+Phase 6 reconciliation note, 2026-06-05:
+
+- Phase 6 implementation landed in commit `526d207` and is included in PR #5
+  rather than a separate merged Phase 6 PR.
+- The backend chat history APIs exist, but the Familiar header menu still shows
+  a placeholder instead of a real thread-selection UI.
+- The live OpenAI rules-question check exposed a systemic page-level retrieval
+  quality problem. That problem is intentionally carried into Phase 7 typed
+  source-object retrieval rather than treated as a Phase 6-only bug.
 
 ## 11. Testing Requirements
 
