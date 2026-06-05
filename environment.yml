@@ -12,6 +12,7 @@ dependencies:
   - pillow
   - opencv
   - imagehash
+  - openai
   - pytest
   - pytest-cov
   - ruff

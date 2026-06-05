@@ -149,6 +149,25 @@ book membership rows, set it active, and enabled the `Core Book & GM Essentials`
 and `Rules and Mechanics Toolkits` categories by default. Adventure modules and
 world/faction sourcebooks remain disabled until individually enabled.
 
+Phase 7 PR1 adds the source-object schema foundation for richer extraction:
+
+- `source_objects` will store typed page spans for rules sections, tables,
+  table rows, stat blocks, NPCs, monsters, locations, encounters, boxed text,
+  map references, image references, index entries, cross references, and page
+  fallback chunks.
+- `source_object_links` will store explicit relationships between extracted
+  objects and referenced objects/pages/books.
+- `book_object_status` will own per-book source-object extraction/indexing
+  readiness.
+- `book_query_profiles` will store deterministic per-book evidence for which
+  query types should be boosted.
+- `source_object_search` and `source_object_search_fts` are rebuildable search
+  projections over `source_objects`.
+
+This is schema-only at the moment. No extractor has populated these tables yet,
+and page-level `page_text` plus `page_search_fts` remain the active retrieval
+surface.
+
 ## OCR
 
 [coverage: medium]

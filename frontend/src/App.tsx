@@ -37,7 +37,18 @@ export default function App() {
 
   return (
     <AppShell
-      agent={() => <AgentChatPanel historyOpen={chatHistoryOpen} />}
+      agent={(context) => (
+        <AgentChatPanel
+          historyOpen={chatHistoryOpen}
+          onOpenCitation={(citation) =>
+            context.openPdfTab({
+              bookId: citation.book_id,
+              title: citation.title,
+              pageNumber: citation.page_number,
+            })
+          }
+        />
+      )}
       agentHeaderControls={() => (
         <AgentChatHeaderControls
           historyOpen={chatHistoryOpen}

@@ -19,7 +19,8 @@ Phase 2 added the local managed-PDF library importer, page-text importer, and
 global exact-search tools. Phase 3 added source-set management and made local
 search source-set-aware. Phase 4 added the first FastAPI backend surface over
 the local SQLite library. Phase 5 added the first browser GUI package in
-`frontend/`:
+`frontend/`. Phase 6 adds the first streaming Familiar chat loop. Phase 7 PR1
+adds explicit SQLite migrations and typed source-object model contracts:
 
 - `wfrp_companion/library/identity.py` for stable book and folder IDs.
 - `wfrp_companion/library/discovery.py` for recursive PDF discovery.
@@ -38,6 +39,12 @@ the local SQLite library. Phase 5 added the first browser GUI package in
   managed-PDF reader read models.
 - `wfrp_companion/api/` for the FastAPI app, schemas, dependencies, error
   mapping, and route modules.
+- `wfrp_companion/assistant/` for chat persistence, retrieval, prompt assembly,
+  OpenAI provider streaming, and Familiar orchestration.
+- `wfrp_companion/db/migrations.py` for applying local SQLite schema
+  migrations to existing databases.
+- `wfrp_companion/source_objects/` for typed source-object model contracts and
+  deterministic source-object IDs.
 - `tools/import_pdfs.py` for importing all configured source PDFs into managed
   local storage.
 - `tools/import_page_text.py` for importing all configured page-text JSON into
@@ -47,8 +54,13 @@ the local SQLite library. Phase 5 added the first browser GUI package in
   enabling or disabling books.
 - `tools/search_text.py` for source-set-aware exact-search smoke checks.
 - `tools/serve_api.py` for running the local API.
+- `tools/dev.py` for starting the local API and Vite frontend together with
+  readiness probes.
+- `tools/migrate_db.py` for applying explicit local database migrations and
+  reporting non-content row counts.
 - `frontend/` for the React/Vite browser GUI, including Library/Search tabs,
-  source-set book toggles, PDF.js reader tabs, and the chat shell.
+  source-set book toggles, PDF.js reader tabs, and the streaming Familiar
+  panel.
 
 ## Expected Development Shape
 
@@ -99,6 +111,7 @@ Initial Python tooling includes:
 - Poppler for `pdfinfo` / `pdftotext` cross-checks
 - Tesseract for OCR
 - FastAPI and Uvicorn for the upcoming local API
+- OpenAI Python SDK for server-side Familiar provider calls
 - Pillow, OpenCV, and ImageHash for upcoming visual asset detection
 - pytest for tests
 - pytest-cov for coverage gates
@@ -113,6 +126,25 @@ python tools/init_db.py
 
 The default database path is `data/wfrp_companion.sqlite`, unless
 `WFRP_DB_PATH` is set.
+
+Apply local SQLite migrations to an existing initialized database with:
+
+```bash
+conda activate wfrp-companion
+python tools/migrate_db.py
+```
+
+The migration tool accepts:
+
+```bash
+python tools/migrate_db.py --db-path "/path/to/wfrp.sqlite"
+```
+
+`tools/migrate_db.py` refuses missing paths and uninitialized SQLite files. It
+prints applied migration IDs and table row counts only; it must not print
+private extracted book text. The Phase 7 migration preflights legacy
+`retrieval_hits` rank conflicts before mutating the database and records
+`schema_migrations` only after the full migration succeeds.
 
 Import all owned PDFs from the configured source root with:
 
@@ -243,6 +275,12 @@ Current API surfaces:
 - `GET /api/source-sets/{source_set_id}/books`
 - `PUT /api/source-sets/{source_set_id}/books/{book_id}`
 - `GET /api/search/exact`
+- `POST /api/chat/threads`
+- `GET /api/chat/threads`
+- `GET /api/chat/threads/{thread_id}`
+- `POST /api/chat/threads/{thread_id}/messages`
+- `POST /api/chat/threads/{thread_id}/messages/stream`
+- `POST /api/chat/model-runs/{model_run_id}/retry`
 
 `/api/books/{book_id}/pdf` serves the managed local PDF inline and supports
 HTTP byte ranges through Starlette `FileResponse`, which lets PDF.js request
@@ -250,6 +288,10 @@ only the needed bytes. JSON responses deliberately avoid returning
 `books.managed_pdf_path`. `/api/books/{book_id}/pages/{page_number}/text`
 returns full imported page text from SQLite on demand; search responses keep
 returning snippets only.
+
+The chat streaming endpoint returns newline-delimited JSON events over a normal
+`POST` request so the frontend can send both message content and an idempotency
+key. OpenAI calls are backend-only; the browser never receives the API key.
 
 Run the browser GUI during development with:
 
@@ -262,6 +304,13 @@ npm run dev
 The Vite dev server defaults to `http://127.0.0.1:5173/` and proxies `/api` to
 `http://127.0.0.1:8000`, so run `python tools/serve_api.py` separately for a
 fully connected local app.
+
+To start both services together:
+
+```bash
+conda activate wfrp-companion
+python tools/dev.py
+```
 
 Current frontend commands:
 
@@ -294,6 +343,12 @@ Current local config variables:
 - `WFRP_DATA_DIR`
 - `WFRP_DB_PATH`
 - `WFRP_ASSET_DIR`
+- `OPENAI_API_KEY`
+- `WFRP_OPENAI_MODEL` defaults to `gpt-5.4-mini`
+- `WFRP_OPENAI_TIMEOUT_SECONDS` defaults to `60`
+- `WFRP_CHAT_CONTEXT_HIT_LIMIT` defaults to `6`
+- `WFRP_CHAT_CONTEXT_CHAR_LIMIT` defaults to `9000`
+- `WFRP_CHAT_CONTEXT_WINDOW_CHARS` defaults to `1600`
 
 Do not commit real API keys, PDFs, extracted copyrighted text, or local vector
 indexes. SQLite databases, managed PDFs, generated assets, and coverage output

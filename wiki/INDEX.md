@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-04 Phase 5 browser GUI refinement
+Last compiled: 2026-06-05 Phase 7 source-object schema foundation
 
 ## Topics
 

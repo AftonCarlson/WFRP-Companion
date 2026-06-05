@@ -27,6 +27,11 @@ def test_openapi_exposes_phase_4_api_paths(tmp_path: Path) -> None:
     paths = response.json()["paths"]
     assert {
         "/api/health",
+        "/api/chat/threads",
+        "/api/chat/threads/{thread_id}",
+        "/api/chat/threads/{thread_id}/messages",
+        "/api/chat/threads/{thread_id}/messages/stream",
+        "/api/chat/model-runs/{model_run_id}/retry",
         "/api/books",
         "/api/books/{book_id}",
         "/api/books/{book_id}/pages/{page_number}",

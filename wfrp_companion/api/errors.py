@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from wfrp_companion.assistant import chat_store
 from wfrp_companion.library import catalog
 from wfrp_companion.library import source_sets
 from wfrp_companion.search import scope
@@ -44,3 +45,14 @@ def search_scope_error(error: scope.SearchScopeError) -> HTTPException:
     if isinstance(error, scope.SearchBookNotFoundError):
         return http_error(404, str(error))
     return http_error(500, "Unexpected search scope error")
+
+
+def chat_store_error(error: chat_store.ChatStoreError) -> HTTPException:
+    if isinstance(
+        error,
+        chat_store.ChatThreadNotFoundError | chat_store.ModelRunNotFoundError,
+    ):
+        return http_error(404, str(error))
+    if isinstance(error, chat_store.ModelRunNotRetryableError):
+        return http_error(409, str(error))
+    return http_error(500, "Unexpected chat store error")

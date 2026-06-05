@@ -60,7 +60,13 @@ function client(): ApiClient {
       ],
     }),
     getPageText: vi.fn(),
-  } as ApiClient;
+    createChatThread: vi.fn(),
+    listChatThreads: vi.fn(),
+    getChatThread: vi.fn(),
+    sendChatMessage: vi.fn(),
+    retryModelRun: vi.fn(),
+    streamChatMessage: vi.fn(),
+  };
 }
 
 it("maps library book opens to page-one PDF requests", async () => {

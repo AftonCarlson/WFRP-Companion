@@ -1,5 +1,59 @@
 # Wiki Compile Log
 
+## 2026-06-05 Phase 7 Typed Source Object Schema Foundation
+
+- Added the Phase 7 implementation plan at
+  `docs/plans/2026-06-05-phase-7-typed-source-object-retrieval-implementation-plan.md`.
+- Added `schema_migrations` plus `wfrp_companion/db/migrations.py` and
+  `tools/migrate_db.py` for explicit local SQLite migrations.
+- Added the Phase 7 source-object schema foundation:
+  `source_objects`, `source_object_links`, `book_object_status`,
+  `book_query_profiles`, `source_object_search`, and
+  `source_object_search_fts`.
+- Updated `retrieval_hits` so future retrieval can cite typed source objects
+  while preserving legacy page-level hits as `page_fallback` snapshots.
+- Added `wfrp_companion/source_objects/models.py` with typed source-object
+  contracts and deterministic IDs that hash normalized text rather than raw OCR
+  whitespace.
+- Hardened migration safety after independent review: missing/uninitialized DB
+  paths are refused, duplicate legacy retrieval ranks are preflighted, DDL runs
+  inside a rollbackable transaction, and `schema_migrations` is recorded only
+  after all migration work succeeds.
+- Added migration, rollback, CLI, schema, source-object, chat, retrieval, and
+  frontend regression coverage.
+- Verification run for this pass: backend coverage gate reported 253 tests
+  passing with 100% coverage, `ruff check .` passed, frontend Vitest reported
+  122 tests passing with coverage above configured thresholds, frontend
+  production build passed, and Playwright e2e reported 2 tests passing.
+- Important boundary: Phase 7 PR1 is schema/model/migration foundation only.
+  It does not yet extract source objects or change Familiar retrieval ranking.
+
+## 2026-06-05 Phase 6 Familiar Streaming RAG Chat
+
+- Added the Phase 6 implementation plan at
+  `docs/plans/2026-06-05-phase-6-familiar-rag-chat-implementation-plan.md`.
+- Added `tools/dev.py` as a one-command local runner for FastAPI plus Vite,
+  with readiness probes and cleanup behavior covered by tests.
+- Added `chat_thread_source_books` and `model_runs` to the SQLite schema so
+  chat retrieval scope and model lifecycle state are app-owned and explicit.
+- Added `wfrp_companion/assistant/chat_store.py`,
+  `retrieval.py`, `prompts.py`, `provider.py`, and `chat_service.py` for
+  thread snapshots, exact-search retrieval, bounded prompt construction,
+  OpenAI Responses API streaming, and model-run completion/failure handling.
+- Added `/api/chat/*` routes, including
+  `POST /api/chat/threads/{thread_id}/messages/stream`, which returns
+  newline-delimited JSON events: `accepted`, `retrieval`, `delta`,
+  `completed`, and `failed`.
+- Updated the Familiar frontend panel to create a thread, stream assistant
+  deltas, show failed provider runs, and open cited PDF pages in Grimoire.
+- Added `openai` to `environment.yml`; the API key remains local in
+  `OPENAI_API_KEY` and is never exposed to the browser or stored in the repo.
+- Verification run for this pass: backend pytest reported 205 tests passing,
+  frontend Vitest reported 109 tests passing, `ruff check .` passed,
+  frontend production build passed, and targeted coverage gates reported 100%
+  for `wfrp_companion.assistant.chat_service` and
+  `wfrp_companion.assistant.provider`.
+
 ## 2026-06-04 Phase 5 Browser GUI Refinement
 
 - Refined the first browser GUI around the user-approved workspace language:

@@ -112,19 +112,51 @@ Phase 5 adds the first browser GUI over the local API:
   PDF through PDF.js from `/api/books/{book_id}/pdf`.
 - `PdfCanvas` has loading, error, retry, high-DPI scaling, stale-render
   cancellation, and cleanup behavior covered by tests.
-- `AgentChatPanel` is a UI-only chat shell. It does not write `chat_threads` or
-  call model APIs yet.
+- `AgentChatPanel` now creates chat threads, sends messages through
+  `/api/chat/threads/{thread_id}/messages/stream`, renders streamed Familiar
+  deltas, shows failed provider runs, and opens citations in the reader.
+- `wfrp_companion/assistant/chat_service.py` owns the server-side Familiar loop:
+  idempotent user-message acceptance, source-set snapshot retrieval, prompt
+  assembly, provider streaming, and completed/failed model-run persistence.
+- `wfrp_companion/assistant/provider.py` wraps the OpenAI Responses API with
+  `stream=True`; the API key stays server-side in `OPENAI_API_KEY`.
+- `tools/dev.py` starts the local API and Vite frontend together and waits for
+  readiness probes.
+
+Phase 7 PR1 adds the typed source-object schema and migration foundation:
+
+- `schema_migrations` records applied local SQLite migrations.
+- `wfrp_companion/db/migrations.py` owns explicit migration application for
+  existing SQLite databases. It refuses missing or uninitialized DB paths,
+  preflights legacy retrieval-hit rank conflicts, applies DDL inside a real
+  rollbackable transaction, and records a migration only after all work
+  succeeds.
+- `tools/migrate_db.py` applies pending local migrations and reports row counts
+  only. It must not print private extracted book text.
+- `source_objects`, `source_object_links`, `book_object_status`,
+  `book_query_profiles`, `source_object_search`, and
+  `source_object_search_fts` are now part of the target SQLite schema.
+- `wfrp_companion/source_objects/models.py` owns the first source-object model
+  contracts and deterministic source-object IDs. IDs hash normalized text so
+  whitespace-only OCR changes do not churn identifiers.
+
+Phase 7 PR1 is foundation-only. It does not yet populate `source_objects`,
+build object FTS rows, or change Familiar retrieval ranking.
 
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
-chat/retrieval metadata. The current populated runtime source-of-truth areas
-are library folders, books, pages, page text, page search, FTS, ingest jobs, and
-the `book_readiness` view. Source-set state is now populated in `source_sets`,
-`source_set_books`, and `app_settings.active_source_set_id`. The local API now
-surfaces library, source-set, exact-search, page-text, and managed-PDF reader
-operations. The frontend now surfaces library selection, exact search,
-page-text expansion, PDF reading, and a chat placeholder. Later phases will
-populate visual assets and AI chat/retrieval metadata.
+chat/retrieval/source-object metadata. The current populated runtime
+source-of-truth areas are library folders, books, pages, page text, page
+search, FTS, ingest jobs, source sets, chat threads, retrieval runs, model
+runs, and the `book_readiness` view. Source-set state is now populated in
+`source_sets`, `source_set_books`, and `app_settings.active_source_set_id`.
+Typed source-object tables exist but remain empty until the extractor phase.
+The local API now surfaces library, source-set, exact-search, page-text,
+managed-PDF reader, and streaming chat operations. The frontend now surfaces
+library selection, exact search, page-text expansion, PDF reading, and the
+first cited streaming Familiar chat loop. Later phases will deepen typed
+retrieval, chat history UX, campaign/session memory, visual assets, and
+adventure-generation workflows.
 
 ## Major Modules
 
@@ -172,6 +204,25 @@ Important schema decisions:
   source set. It is not a search-readiness flag.
 - `app_settings.active_source_set_id` stores the active source set for default
   retrieval/search scope.
+- `chat_thread_source_books` snapshots enabled books when a chat thread is
+  created. Existing threads do not silently change scope when the Library
+  toggles change later.
+- `model_runs` is the app-owned source of truth for Familiar generation state:
+  `queued`, `retrieving`, `calling_model`, `completed`, or `failed`.
+- `retrieval_runs` and `retrieval_hits` record the exact pages used for a chat
+  answer; citations point back to `books` and `pages`.
+- `retrieval_hits` is now forward-compatible with typed retrieval: it has an
+  app-owned `id`, optional `source_object_id`, and immutable snapshot columns
+  for source-object type, title, heading path, confidence, rank reasons,
+  text-snapshot hash, and metadata.
+- `source_objects` is the planned canonical table for typed evidence spans.
+  `source_object_search` and `source_object_search_fts` are rebuildable
+  projections over those rows.
+- `book_object_status` owns the future source-object extraction/indexing
+  lifecycle per book. Frontend inference and incidental FTS row presence should
+  not replace that lifecycle state.
+- `book_query_profiles` stores future deterministic per-book query-type boost
+  evidence; do not hard-code boost assumptions in the frontend.
 - The built-in `rules-core` / `Rules/Core` source set enables
   `Core Book & GM Essentials` and `Rules and Mechanics Toolkits` by default and
   leaves other categories disabled until the user enables individual books.

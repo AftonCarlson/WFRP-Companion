@@ -14,6 +14,44 @@ WFRP rules lookup needs hybrid retrieval:
 
 Vector search alone is not enough for rules-heavy material.
 
+The current Phase 6 implementation uses deterministic local exact search first:
+
+- New chat threads snapshot enabled books into `chat_thread_source_books`.
+- `wfrp_companion/assistant/retrieval.py` resolves retrieval scope from that
+  snapshot, not from mutable live Library toggles.
+- Retrieved pages are recorded in `retrieval_runs` and `retrieval_hits` before
+  the provider call.
+- Streaming chat events include citations that can open the exact PDF page in
+  Grimoire.
+
+Vector retrieval remains future work and should layer onto this explicit
+source-set and citation contract rather than replacing it.
+
+Phase 7 PR1 adds the typed source-object storage foundation that later
+retrieval phases will use:
+
+- `source_objects` is the future canonical table for typed evidence such as
+  `rule_section`, `table`, `table_row`, `stat_block`, `npc_profile`,
+  `monster_profile`, `location_description`, `boxed_text`, `map_reference`,
+  and `image_reference`.
+- `source_object_links` is the future app-owned relationship table for index
+  entries, cross references, table rows, stat/profile links, map/image
+  references, and entity mentions.
+- `book_object_status` will own the extraction/index lifecycle per book.
+- `book_query_profiles` will store deterministic per-book query-type boosts
+  such as rules, tables, NPCs, monsters, locations, adventure scenes, lore, and
+  source navigation.
+- `source_object_search` and `source_object_search_fts` are rebuildable
+  projections, not canonical text storage.
+- `retrieval_hits` now has its own `id`, optional `source_object_id`, and
+  snapshot fields for object type, title, heading path, confidence, rank
+  reasons, text snapshot hash, and metadata. Legacy page hits migrate as
+  `page_fallback` rows.
+
+Important current boundary: Phase 7 PR1 does **not** yet extract source objects
+or change Familiar ranking. Until a later extractor/reranker phase lands,
+Familiar still uses the Phase 6 page-level exact-search retrieval path.
+
 ## Answer Contract
 
 [coverage: high]
@@ -40,6 +78,29 @@ Prompt construction should include:
 
 Keep prompts short enough to be fast and affordable. Log retrieval metadata for
 debugging without logging unnecessary copyrighted text.
+
+Phase 6 prompt construction lives in `wfrp_companion/assistant/prompts.py`.
+It sends only bounded retrieved context plus the user question to OpenAI, scrubs
+private local paths, and instructs Familiar to cite book/page references and say
+when context is insufficient.
+
+## Streaming Provider Loop
+
+[coverage: high]
+
+Familiar streams output through the backend-owned endpoint
+`POST /api/chat/threads/{thread_id}/messages/stream`. The browser uses
+`fetch()` with a request body and reads newline-delimited JSON events:
+
+- `accepted` after the user message and `model_runs` row are persisted.
+- `retrieval` after local retrieval metadata is written.
+- `delta` for each streamed assistant text chunk.
+- `completed` after one assistant `chat_messages` row is persisted and linked.
+- `failed` when the provider is unavailable or returns an error.
+
+`wfrp_companion/assistant/provider.py` wraps the OpenAI Responses API and maps
+OpenAI text delta/completed events into app-owned events. The API key is read
+from `OPENAI_API_KEY` on the backend only.
 
 ## Adventure Generation
 

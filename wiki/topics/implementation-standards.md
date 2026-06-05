@@ -14,7 +14,7 @@ should prove the loop:
 5. Return a cited answer.
 6. Jump from citation to PDF page.
 
-The current codebase has working local implementations for steps 1 through 3:
+The current codebase has working local implementations for steps 1 through 6:
 
 - PDF registration/import is owned by `wfrp_companion/library/importer.py` and
   `tools/import_pdfs.py`.
@@ -30,9 +30,15 @@ The current codebase has working local implementations for steps 1 through 3:
   PDF reader, source-set, and exact-search routes over the same SQLite state.
 - `wfrp_companion/search/scope.py` owns shared CLI/API scope resolution for
   active source-set, named source-set, explicit book, and whole-library search.
-
-Steps 4 through 6 remain future work: AI question answering, cited answer
-assembly, and frontend reader citation jumps.
+- `wfrp_companion/assistant/` owns the first Familiar chat loop: thread
+  creation, source-set snapshot retrieval, bounded prompt construction,
+  OpenAI provider streaming, retrieval/model-run persistence, and cited
+  responses.
+- `frontend/src/components/chat/AgentChatPanel.tsx` streams Familiar output and
+  opens citations in Grimoire.
+- `wfrp_companion/db/migrations.py`, `tools/migrate_db.py`, and
+  `wfrp_companion/source_objects/` now provide the Phase 7 PR1 foundation for
+  future typed source-object extraction and object-aware retrieval.
 
 ## Rules For New Code
 
@@ -116,6 +122,14 @@ database behavior should preserve these constraints:
   default search/retrieval scope.
 - Keep source-set membership separate from the `book_readiness` view; readiness
   is derived from lifecycle state, not from user scope selection.
+- Use explicit migrations in `wfrp_companion/db/migrations.py` for existing
+  SQLite databases when a change cannot be handled by replaying
+  `schema.sql`.
+- Migration tools must refuse typo/missing DB paths and uninitialized SQLite
+  files rather than creating partial application state.
+- Keep typed source-object extraction state explicit in
+  `book_object_status`; do not infer readiness from frontend state or incidental
+  FTS projection rows.
 
 ## Documentation Rules
 

@@ -56,6 +56,7 @@
 .agent-chat__transcript article {
   display: grid;
   gap: 5px;
+  margin-bottom: 8px;
   padding: 9px;
   background: #10171a;
   border: 1px solid var(--color-border);
@@ -66,6 +67,36 @@
   margin: 0;
   color: #cbd8d2;
   line-height: 1.45;
+}
+
+.agent-chat__turn {
+  align-content: start;
+}
+
+.agent-chat__error {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  color: #f0c7c0;
+  background: #372725;
+  border: 1px solid #6f4640;
+  border-radius: 5px;
+}
+
+.agent-chat__error button,
+.agent-chat__citations button {
+  justify-self: start;
+  color: var(--color-text);
+  background: var(--color-panel-strong);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 4px 7px;
+}
+
+.agent-chat__citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .agent-chat__composer {
