@@ -64,6 +64,8 @@ export type SearchHitResponse = {
   category: string;
   page_id: string;
   page_number: number;
+  pdf_page_number: number;
+  page_label: string | null;
   snippet: string;
   score: number;
 };
@@ -128,9 +130,12 @@ export type ChatCitationResponse = {
   category: string;
   page_id: string;
   page_number: number;
+  pdf_page_number: number;
+  page_label: string | null;
   snippet: string;
   rank: number;
   score: number;
+  page_range_label?: string | null;
 };
 
 export type SendChatMessageResponse = {

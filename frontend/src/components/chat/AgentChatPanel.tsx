@@ -15,6 +15,7 @@ import type {
   ChatStreamEvent,
   ModelRunResponse,
 } from "../../types/api";
+import { MarkdownText } from "./MarkdownText";
 import "./AgentChatPanel.css";
 
 export type AgentChatPanelProps = {
@@ -224,7 +225,7 @@ export function AgentChatPanel({
             {turn.assistantContent ? (
               <>
                 <strong>Familiar</strong>
-                <p>{turn.assistantContent}</p>
+                <MarkdownText content={turn.assistantContent} />
               </>
             ) : null}
             {turn.errorMessage ? (
@@ -247,11 +248,11 @@ export function AgentChatPanel({
               <div className="agent-chat__citations" aria-label="Citations">
                 {turn.citations.map((citation) => (
                   <button
-                    key={`${citation.book_id}:${citation.page_number}:${citation.rank}`}
+                    key={`${citation.book_id}:${citation.pdf_page_number}:${citation.rank}`}
                     onClick={() => onOpenCitation?.(citation)}
                     type="button"
                   >
-                    Open {citation.title} page {citation.page_number}
+                    {citationButtonLabel(citation)}
                   </button>
                 ))}
               </div>
@@ -286,4 +287,20 @@ export function AgentChatPanel({
       </form>
     </div>
   );
+}
+
+function citationButtonLabel(citation: ChatCitationResponse) {
+  if (citation.page_range_label) {
+    if (citation.page_range_label.includes("-")) {
+      return `Open ${citation.title} printed pages ${citation.page_range_label}`;
+    }
+    return `Open ${citation.title} printed page ${citation.page_range_label}`;
+  }
+  if (
+    citation.page_label &&
+    citation.page_label !== String(citation.pdf_page_number)
+  ) {
+    return `Open ${citation.title} printed page ${citation.page_label}`;
+  }
+  return `Open ${citation.title} page ${citation.page_number}`;
 }

@@ -11,16 +11,17 @@ screen should help the GM read, search, ask, and prep.
 
 [coverage: high]
 
-- Library: grouped book selector with per-book checkboxes, status text, compact
-  book-icon open actions, and a separate Search tab.
+- Library: grouped book selector with per-book checkboxes, section-level bulk
+  checkboxes, compact book-icon open actions, and a separate Search tab.
 - Grimoire: PDF.js view with source tabs, Chrome-style close controls, page
   navigation, single-page/two-page view toggles, zoom, retry-on-error, and
   citation jump targets.
 - Search: exact results grouped by book with snippets, full-page text expansion,
-  and `Open PDF page` actions.
+  and compact book-icon open actions labelled with explicit PDF page targets.
 - Familiar: chat-shaped shell with transcript, composer, in-header history
   control, and history popover.
-  The assistant is intentionally offline until the AI/RAG phase.
+  The assistant streams model output during the AI/RAG phase and renders common
+  markdown structures as readable UI.
 - Campaign: notes, session summaries, NPC/location/adventure prep.
 
 ## Table-Use Defaults
@@ -82,6 +83,10 @@ Implemented Phase 5 accessibility rules:
 - Panel content must remain height-bounded inside the viewport; page-level
   scrolling should not be required to reach library/search results or the
   Familiar composer.
+- Library category headings include a tri-state checkbox for selecting or
+  clearing every visible book in that category. Per-book readiness words such
+  as `ready` are intentionally not rendered in the list to keep the selector
+  scan-friendly.
 - Grimoire header controls own page number, single-page/two-page view mode,
   zoom out/in, and fit-width reset. Previous/next page controls live beside the
   PDF canvas as minimal `<` and `>` side buttons.
@@ -92,6 +97,12 @@ Implemented Phase 5 accessibility rules:
   contains only the transcript/history overlay and message composer.
 - The Familiar send action is positioned inside the lower-right corner of the
   message text field.
+- Search result opens and Familiar citation opens use `pdf_page_number` as the
+  Grimoire jump target and force single-page mode. When `page_label` differs
+  from the PDF page number, labels should show both values, for example
+  `PDF page 133 (printed page 132)`.
+- Familiar answer text should render headings, lists, tables, bold text, and
+  inline code safely instead of displaying markdown as one flat paragraph.
 
 ## Sources
 

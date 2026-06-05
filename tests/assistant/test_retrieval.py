@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from wfrp_companion.assistant import chat_store
+from wfrp_companion.assistant import candidates as retrieval_candidates
 from wfrp_companion.assistant import retrieval
+from wfrp_companion.assistant import source_map as retrieval_source_map
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database, open_connection
 from wfrp_companion.library import source_sets
@@ -41,6 +44,8 @@ def insert_searchable_page(
     category: str,
     page_number: int,
     text: str,
+    page_label: str | None = None,
+    page_count: int = 1,
 ) -> None:
     insert_folder(connection)
     connection.execute(
@@ -63,9 +68,10 @@ def insert_searchable_page(
           discovered_at,
           updated_at
         )
-        values (?, 'core', ?, ?, ?, ?, ?, ?, ?, 1, 'copied', 'imported',
+        values (?, 'core', ?, ?, ?, ?, ?, ?, ?, ?, 'copied', 'imported',
                 'not_indexed', 'not_scanned', '2026-06-04T00:00:00Z',
                 '2026-06-04T00:00:00Z')
+        on conflict(id) do nothing
         """,
         (
             book_id,
@@ -76,6 +82,7 @@ def insert_searchable_page(
             f"/managed/{book_id}.pdf",
             f"sha-{book_id}",
             f"sha-{book_id}",
+            page_count,
         ),
     )
     page_id = f"{book_id}:{page_number}"
@@ -85,6 +92,7 @@ def insert_searchable_page(
           id,
           book_id,
           page_number,
+          page_label,
           extraction_method,
           embedded_text_chars,
           text_chars,
@@ -93,9 +101,9 @@ def insert_searchable_page(
           ocr_attempted,
           has_text
         )
-        values (?, ?, ?, 'ocr', 0, ?, ?, 0, 1, 1)
+        values (?, ?, ?, ?, 'ocr', 0, ?, ?, 0, 1, 1)
         """,
-        (page_id, book_id, page_number, len(text), len(text.split())),
+        (page_id, book_id, page_number, page_label, len(text), len(text.split())),
     )
     connection.execute(
         """
@@ -103,6 +111,58 @@ def insert_searchable_page(
         values (?, ?, ?, '2026-06-04T00:00:00Z')
         """,
         (page_id, text, f"sha-{page_id}"),
+    )
+
+
+def insert_source_object(
+    connection: sqlite3.Connection,
+    *,
+    object_id: str,
+    book_id: str,
+    page_id: str,
+    object_type: str,
+    title: str,
+    heading_path: tuple[str, ...],
+    page_start: int,
+    page_end: int,
+    text: str,
+) -> None:
+    connection.execute(
+        """
+        insert into source_objects (
+          id,
+          book_id,
+          page_id,
+          object_type,
+          title,
+          heading_path_json,
+          page_start,
+          page_end,
+          text,
+          search_text,
+          confidence,
+          extraction_method,
+          text_snapshot_sha256,
+          created_at,
+          updated_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.91, 'test', ?, ?, ?)
+        """,
+        (
+            object_id,
+            book_id,
+            page_id,
+            object_type,
+            title,
+            json.dumps(list(heading_path)),
+            page_start,
+            page_end,
+            text,
+            " ".join((*heading_path, text)),
+            f"sha-{object_id}",
+            "2026-06-05T00:00:00Z",
+            "2026-06-05T00:00:00Z",
+        ),
     )
 
 
@@ -144,7 +204,7 @@ def test_query_candidates_drop_filler_words_and_keep_useful_phrases() -> None:
     assert "what happens when" not in candidates
 
 
-def test_retrieval_uses_thread_source_snapshot_not_live_source_set(
+def test_retrieval_keeps_thread_snapshot_for_history_but_uses_live_scope(
     tmp_path: Path,
 ) -> None:
     config = make_config(tmp_path)
@@ -152,30 +212,464 @@ def test_retrieval_uses_thread_source_snapshot_not_live_source_set(
     original_thread = chat_store.create_thread(config)
     source_sets.set_book_enabled(config, "rules-core", "core-rules", False)
     source_sets.set_book_enabled(config, "rules-core", "barony", True)
-    new_thread = chat_store.create_thread(config)
+    original_detail = chat_store.get_thread_detail(config, original_thread.id)
 
-    original_context = retrieval.retrieve_context(
+    context = retrieval.retrieve_context(
         config,
         original_thread.id,
-        "What happens when a character takes a critical hit?",
-        hit_limit=4,
-        total_char_limit=500,
-        window_chars=120,
-    )
-    new_context = retrieval.retrieve_context(
-        config,
-        new_thread.id,
         "Where is the black knight?",
         hit_limit=4,
         total_char_limit=500,
         window_chars=120,
     )
 
-    assert [hit.book_id for hit in original_context.hits] == ["core-rules"]
-    assert [hit.book_id for hit in new_context.hits] == ["barony"]
-    assert "critical hit" in original_context.hits[0].context_text.lower()
-    assert "black knight" in new_context.hits[0].context_text.lower()
-    assert "/managed/" not in original_context.hits[0].context_text
+    assert original_detail.source_book_ids == ("core-rules",)
+    assert context.source_book_ids == ("barony",)
+    assert [hit.book_id for hit in context.hits] == ["barony"]
+    assert "black knight" in context.hits[0].context_text.lower()
+    assert "/managed/" not in context.hits[0].context_text
+
+
+def test_retrieval_uses_current_enabled_books_not_stale_thread_snapshot(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_store.create_thread(config)
+    source_sets.set_book_enabled(config, "rules-core", "core-rules", False)
+    source_sets.set_book_enabled(config, "rules-core", "barony", True)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Where is the black knight?",
+        hit_limit=4,
+        total_char_limit=500,
+        window_chars=120,
+    )
+
+    assert context.source_set_id == "rules-core"
+    assert context.source_book_ids == ("barony",)
+    assert [hit.book_id for hit in context.hits] == ["barony"]
+    assert all(entry.book_id == "barony" for entry in context.source_map)
+
+
+def test_retrieval_broad_pool_reranks_relevant_hit_over_filler(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="filler",
+            title="Conversational Primer",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text=(
+                "You tell me which powerful king you have in mind. "
+                "This page is conversational filler and has no regional lore."
+            ),
+        )
+        insert_searchable_page(
+            connection,
+            book_id="grail",
+            title="Knights of the Grail",
+            category="World Guides and Faction Sourcebooks",
+            page_number=12,
+            text=(
+                "Bretonnia is divided into duchies ruled by dukes. "
+                "The king stands above the dukes as the most powerful noble."
+            ),
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    source_sets.set_book_enabled(config, "rules-core", "grail", True)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Can you tell me which Bretonia duchy has a powerful king?",
+        hit_limit=1,
+        total_char_limit=500,
+        window_chars=180,
+    )
+
+    assert context.source_book_ids == ("filler", "grail")
+    assert [hit.book_id for hit in context.hits] == ["grail"]
+    assert "bretonnia" in context.hits[0].context_text.lower()
+    assert any(
+        "expanded:bretonia->bretonnia" in reason
+        for reason in context.hits[0].rank_reasons
+    )
+    assert any(
+        "semantic_overlap" in reason for reason in context.hits[0].rank_reasons
+    )
+
+
+def test_retrieval_resolves_hits_to_complete_source_object_spans(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    section_text = (
+        "Critical Hits\n"
+        "A critical hit begins with a table result on the first page.\n"
+        "The second page explains how the result continues and is applied."
+    )
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            page_label="10",
+            page_count=2,
+            text="Critical Hits\nA critical hit begins with a table result on the first page.",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=2,
+            page_label="11",
+            page_count=2,
+            text="The second page explains how the result continues and is applied.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Chapter I: Combat", "Critical Hits"),
+            page_start=1,
+            page_end=2,
+            text=section_text,
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "How do critical hits continue?",
+        hit_limit=1,
+        total_char_limit=600,
+        window_chars=120,
+    )
+
+    assert len(context.hits) == 1
+    hit = context.hits[0]
+    assert hit.source_object_id == "core-rules:critical-hits"
+    assert hit.object_type == "rule_section"
+    assert hit.heading_path == ("Chapter I: Combat", "Critical Hits")
+    assert hit.page_start == 1
+    assert hit.page_end == 2
+    assert hit.page_label == "10"
+    assert hit.page_range_label == "10-11"
+    assert "first page" in hit.context_text
+    assert "second page" in hit.context_text
+    assert "source_object:rule_section" in hit.rank_reasons
+
+
+def test_retrieval_falls_back_to_active_source_set_for_legacy_threads(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into chat_threads (id, title, active_source_set_id, created_at, updated_at)
+            values ('legacy-thread', null, null, '2026-06-05T00:00:00Z',
+                    '2026-06-05T00:00:00Z')
+            """
+        )
+        connection.commit()
+
+    context = retrieval.retrieve_context(
+        config,
+        "legacy-thread",
+        "critical hit",
+        hit_limit=1,
+        total_char_limit=200,
+        window_chars=120,
+    )
+
+    assert context.source_set_id == "rules-core"
+    assert context.source_book_ids == ("core-rules",)
+    assert context.hits[0].book_id == "core-rules"
+
+
+def test_retrieval_returns_empty_scope_when_no_active_source_set(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into chat_threads (id, title, active_source_set_id, created_at, updated_at)
+            values ('unscoped-thread', null, null, '2026-06-05T00:00:00Z',
+                    '2026-06-05T00:00:00Z')
+            """
+        )
+
+    context = retrieval.retrieve_context(
+        config,
+        "unscoped-thread",
+        "critical hit",
+        hit_limit=1,
+        total_char_limit=200,
+        window_chars=120,
+    )
+
+    assert context.source_set_id is None
+    assert context.source_book_ids == ()
+    assert context.source_map == ()
+    assert context.hits == ()
+
+
+def test_retrieval_skips_selected_hit_when_truncation_removes_context(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="critical",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:blank-critical",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Critical",
+            heading_path=("Critical",),
+            page_start=1,
+            page_end=1,
+            text=" critical body",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "critical",
+        hit_limit=1,
+        total_char_limit=1,
+        window_chars=120,
+    )
+
+    assert context.hits == ()
+
+
+def test_page_hit_falls_back_when_source_object_has_no_semantic_overlap(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Critical hit rules are here.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:lantern",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Lanterns",
+            heading_path=("Equipment", "Lanterns"),
+            page_start=1,
+            page_end=1,
+            text="Lantern oil and tunnel light.",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "critical hit",
+        hit_limit=1,
+        total_char_limit=200,
+        window_chars=120,
+    )
+
+    assert context.hits[0].source_object_id is None
+    assert context.hits[0].object_type == "page_fallback"
+
+
+def test_source_map_and_candidate_helper_edges(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Bretonnia critical lantern",
+            page_label="i",
+        )
+        for index in range(12):
+            insert_source_object(
+                connection,
+                object_id=f"core-rules:section-{index}",
+                book_id="core-rules",
+                page_id="core-rules:1",
+                object_type="rule_section",
+                title=f"Section {index}",
+                heading_path=(f"Chapter {index}", f"Section {index}"),
+                page_start=1,
+                page_end=1,
+                text=f"Section {index} Bretonnia critical lantern",
+            )
+        connection.execute(
+            """
+            insert into source_object_search (
+              source_object_id,
+              book_id,
+              page_id,
+              object_type,
+              title,
+              heading_path,
+              page_start,
+              page_end,
+              confidence,
+              search_text
+            )
+            values (
+              'core-rules:section-0',
+              'core-rules',
+              'core-rules:1',
+              'rule_section',
+              'Section 0',
+              'Chapter 0 > Section 0',
+              1,
+              1,
+              0.91,
+              'Section 0 Bretonnia critical lantern'
+            )
+            """
+        )
+        connection.execute(
+            "insert into source_object_search_fts(source_object_search_fts) values('rebuild')"
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+
+    with open_connection(config.db_path) as connection:
+        assert len(retrieval.source_map_chapters(connection, "core-rules")) == 10
+        aliases = retrieval.source_map_aliases(
+            connection,
+            "core-rules",
+            title="One Two Three",
+            category="Four Five Six",
+            chapters=("Seven Eight Nine Ten Eleven",),
+            query_terms=("bretonia",),
+        )
+        assert "bretonnia" in aliases
+
+        monkeypatch.setattr(retrieval_source_map, "SOURCE_MAP_PAGE_CHAR_LIMIT", 10)
+        vocabulary = retrieval.source_vocabulary(connection, "core-rules")
+        assert vocabulary
+
+        fts_candidates = retrieval.search_source_object_candidates(
+            connection,
+            "critical",
+            book_ids=("core-rules",),
+            limit=5,
+        )
+        assert fts_candidates[0].channel == "source_object_fts"
+        assert retrieval.collect_evidence_candidates(
+            config,
+            source_book_ids=(),
+            query_plan=retrieval.plan_query("critical", ()),
+            per_candidate_limit=5,
+        ) == ()
+        assert retrieval.search_source_object_candidates(
+            connection,
+            "critical",
+            book_ids=(),
+            limit=5,
+        ) == ()
+        assert retrieval.search_source_object_fts_candidates(
+            connection,
+            "!!!",
+            book_ids=("core-rules",),
+            limit=5,
+        ) == ()
+        assert retrieval.search_source_object_like_candidates(
+            connection,
+            "!!!",
+            book_ids=("core-rules",),
+            limit=5,
+        ) == ()
+        assert retrieval.load_page_range_label(
+            connection,
+            book_id="core-rules",
+            page_start=1,
+            page_end=1,
+        ) == "i"
+
+
+def test_semantic_helper_edges(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+
+    assert retrieval.build_enabled_source_map(config, (), query_terms=("critical",)) == ()
+    assert retrieval.load_page_text(config, "core-rules:1").startswith("Critical")
+    assert retrieval.parse_heading_path(None) == ()
+    assert retrieval.parse_heading_path("{bad json") == ()
+    assert retrieval.parse_heading_path('{"not": "a list"}') == ()
+    assert retrieval.phrase_matches(("critical",), "critical hit") is False
+    assert retrieval.semantic_overlaps(("critical", "critical"), "critical hit") == (
+        "critical",
+    )
+    assert retrieval.token_matches_source("it", {"lantern"}) is False
+    assert retrieval.terms_are_close("same", "same") is True
+    assert retrieval.edit_distance_at_most_one("same", "same") is True
+
+    candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:1",
+        page_number=1,
+        pdf_page_number=1,
+        page_label=None,
+        page_start=1,
+        page_end=1,
+        page_range_label=None,
+        snippet="lantern",
+        base_score=0,
+        context_text="lantern oil",
+        channel="page_fts",
+    )
+    assert retrieval.rerank_candidates(
+        (candidate,),
+        retrieval.plan_query("critical hit", ()),
+    ) == ()
 
 
 def test_retrieval_records_ranked_hits(tmp_path: Path) -> None:
@@ -206,16 +700,24 @@ def test_retrieval_records_ranked_hits(tmp_path: Path) -> None:
         source_set_id=thread.active_source_set_id,
         query="critical hit",
         hits=context.hits,
+        source_book_ids=context.source_book_ids,
+        source_map=context.source_map,
+        candidates=context.candidates,
     )
 
     with open_connection(config.db_path) as connection:
         run = connection.execute(
-            "select query from retrieval_runs where id = ?",
+            "select query, metadata_json from retrieval_runs where id = ?",
             (retrieval_run_id,),
         ).fetchone()
         hits = connection.execute(
             """
-            select retrieval_hits.page_id, retrieval_hits.rank, retrieval_hits.snippet
+            select
+              retrieval_hits.page_id,
+              retrieval_hits.rank,
+              retrieval_hits.snippet,
+              retrieval_hits.object_type_snapshot,
+              retrieval_hits.rank_reasons_json
             from retrieval_hits
             where retrieval_run_id = ?
             """,
@@ -223,8 +725,14 @@ def test_retrieval_records_ranked_hits(tmp_path: Path) -> None:
         ).fetchall()
 
     assert run["query"] == "critical hit"
+    metadata = json.loads(run["metadata_json"])
+    assert metadata["source_book_ids"] == ["core-rules"]
+    assert metadata["source_map"][0]["book_id"] == "core-rules"
+    assert "critical hit" in metadata["candidates"]
     assert [(hit["page_id"], hit["rank"]) for hit in hits] == [("core-rules:1", 1)]
     assert "Critical" in hits[0]["snippet"]
+    assert hits[0]["object_type_snapshot"] == "page_fallback"
+    assert json.loads(hits[0]["rank_reasons_json"])
 
 
 def test_retrieval_returns_no_hits_for_zero_limit(tmp_path: Path) -> None:
@@ -280,7 +788,11 @@ def test_retrieval_skips_hits_with_no_page_text(
         rank = 1
         score = 0.5
 
-    monkeypatch.setattr(retrieval, "search_exact", lambda *args, **kwargs: (FakeHit(),))
+    monkeypatch.setattr(
+        retrieval_candidates,
+        "search_exact",
+        lambda *args, **kwargs: (FakeHit(),),
+    )
 
     context = retrieval.retrieve_context(
         config,

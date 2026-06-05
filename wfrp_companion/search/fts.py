@@ -28,6 +28,8 @@ class SearchHit:
     category: str
     page_id: str
     page_number: int
+    pdf_page_number: int
+    page_label: str | None
     snippet: str
     rank: int
     score: float
@@ -476,11 +478,13 @@ def search_exact(
           page_search.title,
           page_search.category,
           page_search.page_id,
-          page_search.page_number,
+          pages.page_number as pdf_page_number,
+          pages.page_label,
           snippet(page_search_fts, 1, '[', ']', '...', 12) as snippet,
           bm25(page_search_fts) as score
         from page_search_fts
         join page_search on page_search.rowid = page_search_fts.rowid
+        join pages on pages.id = page_search.page_id
         join books on books.id = page_search.book_id
         where page_search_fts match ?
           and books.copy_status = 'copied'
@@ -493,7 +497,7 @@ def search_exact(
         sql += f" and page_search.book_id in ({placeholders})"
         parameters.extend(selected_book_ids)
     sql += """
-        order by score asc, page_search.title asc, page_search.page_number asc
+        order by score asc, page_search.title asc, pages.page_number asc
         limit ?
     """
     parameters.append(bounded_limit)
@@ -507,7 +511,9 @@ def search_exact(
             title=row["title"],
             category=row["category"],
             page_id=row["page_id"],
-            page_number=row["page_number"],
+            page_number=row["pdf_page_number"],
+            pdf_page_number=row["pdf_page_number"],
+            page_label=row["page_label"],
             snippet=row["snippet"],
             rank=rank,
             score=float(row["score"]),

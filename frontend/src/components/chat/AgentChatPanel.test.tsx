@@ -91,6 +91,8 @@ describe("AgentChatPanel", () => {
               category: "Core",
               page_id: "core-rules:1",
               page_number: 1,
+              pdf_page_number: 1,
+              page_label: null,
               snippet: "Critical hit",
               rank: 1,
               score: -1,
@@ -114,6 +116,99 @@ describe("AgentChatPanel", () => {
     expect(await screen.findByText("Critical hits")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open Core Rules page 1" }));
     expect(opened).toEqual(["core-rules"]);
+  });
+
+  it("renders streamed markdown tables as readable tables", async () => {
+    const user = userEvent.setup();
+    const client = chatClient({
+      async streamChatMessage(threadId, options) {
+        options.onEvent({
+          type: "accepted",
+          user_message: {
+            id: "m1",
+            thread_id: threadId,
+            role: "user",
+            content: options.content,
+            created_at: "now",
+          },
+        });
+        options.onEvent({
+          type: "completed",
+          assistant_message: {
+            id: "m2",
+            thread_id: threadId,
+            role: "assistant",
+            content:
+              "### Critical Hits\n\n| Rule | What happens |\n|---|---|\n| Trigger | Roll **10** on damage. |",
+            created_at: "later",
+          },
+          citations: [],
+        });
+      },
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={false} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "critical hit");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(await screen.findByRole("heading", { name: "Critical Hits" })).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Rule" })).toBeInTheDocument();
+    expect(screen.getByText("10").closest("strong")).not.toBeNull();
+  });
+
+  it("labels citation buttons with printed page ranges and keeps PDF target hidden", async () => {
+    const user = userEvent.setup();
+    const client = chatClient({
+      async streamChatMessage(threadId, options) {
+        options.onEvent({
+          type: "accepted",
+          user_message: {
+            id: "m1",
+            thread_id: threadId,
+            role: "user",
+            content: options.content,
+            created_at: "now",
+          },
+        });
+        options.onEvent({
+          type: "retrieval",
+          citations: [
+            {
+              book_id: "core-rules",
+              title: "Core Rules",
+              category: "Core",
+              page_id: "core-rules:133",
+              page_number: 133,
+              pdf_page_number: 133,
+              page_label: "132",
+              page_range_label: "132-133",
+              snippet: "Critical hit",
+              rank: 1,
+              score: -1,
+            },
+          ],
+        });
+      },
+    });
+    const opened: number[] = [];
+    renderApp(
+      <AgentChatPanel
+        client={client}
+        historyOpen={false}
+        onOpenCitation={(citation) => opened.push(citation.pdf_page_number)}
+      />,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "critical hit");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Open Core Rules printed pages 132-133",
+      }),
+    );
+    expect(opened).toEqual([133]);
   });
 
   it("keeps a single thread while sending multiple messages", async () => {
@@ -181,6 +276,8 @@ describe("AgentChatPanel", () => {
               category: "Core",
               page_id: "core-rules:134",
               page_number: 134,
+              pdf_page_number: 134,
+              page_label: null,
               snippet: "Critical hit",
               rank: 1,
               score: -1,
@@ -451,6 +548,8 @@ describe("AgentChatPanel", () => {
               category: "Core",
               page_id: "core-rules:2",
               page_number: 2,
+              pdf_page_number: 2,
+              page_label: null,
               snippet: "Fear",
               rank: 1,
               score: -2,
@@ -466,7 +565,9 @@ describe("AgentChatPanel", () => {
     await user.click(await screen.findByRole("button", { name: "Retry message" }));
 
     expect(await screen.findByText("Retry succeeded.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Core Rules page 2" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open Core Rules page 2" }),
+    ).toBeInTheDocument();
   });
 
   it("surfaces retry errors and ignores retry aborts", async () => {

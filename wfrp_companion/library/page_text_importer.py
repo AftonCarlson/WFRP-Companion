@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import fitz
+
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
 
@@ -53,6 +55,7 @@ class PageTextImportSummary:
 @dataclass(frozen=True)
 class PageTextRecord:
     page_number: int
+    page_label: str | None
     text: str
     extraction_method: str
     embedded_text_chars: int
@@ -401,6 +404,7 @@ def parse_page_text(
 
     return PageTextRecord(
         page_number=required_int(raw, "page_number", relative_path, book_id),
+        page_label=normalize_page_label(raw.get("page_label")),
         text=required_str(
             raw,
             "text",
@@ -494,6 +498,49 @@ def optional_int(value: Any) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def normalize_page_label(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def pdf_page_labels_for_book(
+    connection: sqlite3.Connection,
+    book_id: str,
+    page_count: int,
+) -> dict[int, str]:
+    row = connection.execute(
+        "select managed_pdf_path from books where id = ?",
+        (book_id,),
+    ).fetchone()
+    if row is None or row["managed_pdf_path"] is None:  # pragma: no cover
+        return {}  # pragma: no cover
+
+    path = Path(row["managed_pdf_path"])
+    if not path.exists():
+        return {}
+
+    try:
+        with fitz.open(path) as document:
+            labels: dict[int, str] = {}
+            for index in range(min(page_count, document.page_count)):
+                label = normalize_page_label(document[index].get_label())
+                if label is not None:
+                    labels[index + 1] = label
+            return labels
+    except Exception:  # pragma: no cover
+        return {}  # pragma: no cover
+
+
+def page_label_for_import(
+    page: PageTextRecord,
+    *,
+    pdf_page_labels: dict[int, str],
+) -> str | None:
+    return page.page_label or pdf_page_labels.get(page.page_number)
+
+
 def validate_filename_matches_book(
     relative_path: str,
     book_id: str,
@@ -572,6 +619,7 @@ def imported_text_current(
         """
         select
           pages.page_number,
+          pages.page_label,
           pages.metadata_json,
           page_text.text_sha256,
           page_text.generated_at
@@ -586,6 +634,11 @@ def imported_text_current(
         return False
 
     expected = {page.page_number: page for page in document.pages}
+    pdf_page_labels = pdf_page_labels_for_book(
+        connection,
+        document.book_id,
+        document.page_count,
+    )
     for row in rows:
         page = expected.get(row["page_number"])
         if page is None or row["text_sha256"] is None:
@@ -600,6 +653,12 @@ def imported_text_current(
         if row["text_sha256"] != expected_hash:
             return False
         if row["generated_at"] != document.generated_at:
+            return False
+        expected_label = page_label_for_import(
+            page,
+            pdf_page_labels=pdf_page_labels,
+        )
+        if row["page_label"] != expected_label:
             return False
     return True
 
@@ -649,6 +708,11 @@ def write_book_text(
     force: bool,
     now: str,
 ) -> int:
+    pdf_page_labels = pdf_page_labels_for_book(
+        connection,
+        document.book_id,
+        document.page_count,
+    )
     metadata_json = json.dumps(
         {
             "source": "data/page_text",
@@ -698,12 +762,13 @@ def write_book_text(
                   has_text,
                   metadata_json
                 )
-                values (?, ?, ?, null, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     page_id,
                     document.book_id,
                     page.page_number,
+                    page_label_for_import(page, pdf_page_labels=pdf_page_labels),
                     page.extraction_method,
                     page.embedded_text_chars,
                     page.text_chars,

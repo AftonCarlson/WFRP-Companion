@@ -62,9 +62,12 @@ class ChatCitation:
     category: str
     page_id: str
     page_number: int
+    pdf_page_number: int
+    page_label: str | None
     snippet: str
     rank: int
     score: float
+    page_range_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -615,9 +618,17 @@ def record_retrieval_run(
     source_set_id: str | None,
     query: str,
     hits: Sequence[object],
+    source_book_ids: Sequence[str] = (),
+    source_map: Sequence[object] = (),
+    candidates: Sequence[str] = (),
 ) -> str:
     retrieval_run_id = new_id("retrieval")
     now = utc_timestamp()
+    metadata = retrieval_run_metadata(
+        source_book_ids=source_book_ids,
+        source_map=source_map,
+        candidates=candidates,
+    )
     with initialize_database(config.db_path) as connection:
         thread_row(connection, thread_id)
         with connection:
@@ -629,17 +640,31 @@ def record_retrieval_run(
                   message_id,
                   source_set_id,
                   query,
+                  metadata_json,
                   created_at
                 )
-                values (?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (retrieval_run_id, thread_id, message_id, source_set_id, query, now),
+                (
+                    retrieval_run_id,
+                    thread_id,
+                    message_id,
+                    source_set_id,
+                    query,
+                    json.dumps(metadata, sort_keys=True),
+                    now,
+                ),
             )
             for hit in hits:
                 source_object_id = getattr(hit, "source_object_id", None)
                 object_type = getattr(hit, "object_type", None)
                 heading_path = tuple(getattr(hit, "heading_path", ()) or ())
                 rank_reasons = tuple(getattr(hit, "rank_reasons", ()) or ())
+                hit_metadata = {
+                    "page_start": getattr(hit, "page_start", None),
+                    "page_end": getattr(hit, "page_end", None),
+                    "page_range_label": getattr(hit, "page_range_label", None),
+                }
                 connection.execute(
                     """
                     insert into retrieval_hits (
@@ -655,9 +680,10 @@ def record_retrieval_run(
                       heading_path_snapshot_json,
                       confidence_snapshot,
                       rank_reasons_json,
-                      text_snapshot_sha256
+                      text_snapshot_sha256,
+                      metadata_json
                     )
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_id("retrieval-hit"),
@@ -668,14 +694,40 @@ def record_retrieval_run(
                         int(getattr(hit, "rank")),
                         getattr(hit, "snippet"),
                         object_type or "page_fallback",
-                        getattr(hit, "title", None),
+                        getattr(hit, "object_title", None) or getattr(hit, "title", None),
                         json.dumps(list(heading_path)),
                         getattr(hit, "confidence", None),
                         json.dumps(list(rank_reasons)),
                         getattr(hit, "text_snapshot_sha256", None),
+                        json.dumps(hit_metadata, sort_keys=True),
                     ),
                 )
     return retrieval_run_id
+
+
+def retrieval_run_metadata(
+    *,
+    source_book_ids: Sequence[str],
+    source_map: Sequence[object],
+    candidates: Sequence[str],
+) -> dict[str, object]:
+    return {
+        "source_book_ids": list(source_book_ids),
+        "source_map": [source_map_entry_to_metadata(entry) for entry in source_map],
+        "candidates": list(candidates),
+    }
+
+
+def source_map_entry_to_metadata(entry: object) -> dict[str, object]:
+    return {
+        "book_id": getattr(entry, "book_id", None),
+        "title": getattr(entry, "title", None),
+        "category": getattr(entry, "category", None),
+        "summary": getattr(entry, "summary", None),
+        "aliases": list(getattr(entry, "aliases", ()) or ()),
+        "best_source_for": list(getattr(entry, "best_source_for", ()) or ()),
+        "chapters": list(getattr(entry, "chapters", ()) or ()),
+    }
 
 
 def enabled_book_ids_from_connection(
@@ -831,9 +883,11 @@ def citations_for_model_run(
           books.category,
           pages.id as page_id,
           pages.page_number,
+          pages.page_label,
           retrieval_hits.snippet,
           retrieval_hits.rank,
-          retrieval_hits.score
+          retrieval_hits.score,
+          retrieval_hits.metadata_json
         from retrieval_hits
         join pages on pages.id = retrieval_hits.page_id
         join books on books.id = pages.book_id
@@ -849,12 +903,28 @@ def citations_for_model_run(
             category=row["category"],
             page_id=row["page_id"],
             page_number=row["page_number"],
+            pdf_page_number=row["page_number"],
+            page_label=row["page_label"],
             snippet=row["snippet"] or "",
             rank=row["rank"],
             score=row["score"],
+            page_range_label=retrieval_hit_page_range_label(row["metadata_json"]),
         )
         for row in rows
     )
+
+
+def retrieval_hit_page_range_label(metadata_json: str | None) -> str | None:
+    if not metadata_json:
+        return None
+    try:
+        metadata = json.loads(metadata_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    page_range_label = metadata.get("page_range_label")
+    return page_range_label if isinstance(page_range_label, str) else None
 
 
 def touch_thread(

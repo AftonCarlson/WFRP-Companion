@@ -354,6 +354,16 @@ def test_complete_model_run_is_idempotent_and_rejects_wrong_status(
     assert count_rows(config, "chat_messages") == 2
 
 
+def test_retrieval_hit_page_range_label_handles_missing_or_malformed_metadata() -> None:
+    assert chat_store.retrieval_hit_page_range_label(None) is None
+    assert chat_store.retrieval_hit_page_range_label("{bad json") is None
+    assert chat_store.retrieval_hit_page_range_label("[]") is None
+    assert (
+        chat_store.retrieval_hit_page_range_label('{"page_range_label":"10-11"}')
+        == "10-11"
+    )
+
+
 def test_result_loading_rejects_or_skips_orphaned_model_runs(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_books(config)

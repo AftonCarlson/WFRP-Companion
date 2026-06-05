@@ -21,6 +21,7 @@ export type PdfTabInput = {
   bookId: string;
   title: string;
   pageNumber?: number;
+  viewMode?: PdfViewMode;
 };
 
 export type WorkspaceLayout = {
@@ -137,6 +138,7 @@ export function openPdfTab(
   if (existing) {
     existing.pageNumber = input.pageNumber ?? existing.pageNumber;
     existing.title = input.title;
+    existing.viewMode = input.viewMode ?? existing.viewMode;
     next.activePdfTabId = existing.id;
     return next;
   }
@@ -147,7 +149,7 @@ export function openPdfTab(
     title: input.title,
     pageNumber: input.pageNumber ?? 1,
     zoom: 1,
-    viewMode: "single",
+    viewMode: input.viewMode ?? "single",
   };
   next.openPdfTabs.push(tab);
   next.activePdfTabId = tab.id;

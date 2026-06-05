@@ -99,8 +99,10 @@ Phase 5 adds the first browser GUI over the local API:
   and open PDF tabs.
 - `localStorage` state is validated deeply before use. Malformed saved layouts
   fall back to defaults rather than reaching `AppShell`.
-- The Library tab groups books by SQLite category and persists per-book toggles
-  through `PUT /api/source-sets/{source_set_id}/books/{book_id}`.
+- The Library tab groups books by SQLite category, persists per-book toggles
+  through `PUT /api/source-sets/{source_set_id}/books/{book_id}`, and exposes
+  section-level bulk checkboxes that call the same endpoint for each changed
+  book in the visible category.
 - The Search tab calls `/api/search/exact`, shows grouped snippet results,
   lazily fetches full page text through
   `/api/books/{book_id}/pages/{page_number}/text`, and can open exact pages in
@@ -156,8 +158,33 @@ Phase 7 PR2 adds the first deterministic source-object extraction foundation:
   hashes so unrelated earlier same-page headings do not churn unchanged later
   section IDs.
 
-Phase 7 PR2 still does not build object FTS rows or change Familiar retrieval
-ranking.
+Phase 7 PR3 adds the first Familiar source-map/object-aware retrieval
+integration:
+
+- Source-object extraction now writes `source_object_search` rows and rebuilds
+  `source_object_search_fts`; `book_object_status.status='indexed'` means the
+  extracted objects have a current search projection.
+- Familiar resolves checked books from the thread's active source set for each
+  new model run and stores that source snapshot in
+  `retrieval_runs.metadata_json`.
+- Retrieval builds a compact enabled-book source map, generates page-FTS and
+  source-object candidates, resolves candidates to complete source-object spans
+  when available, and reranks candidates with deterministic semantic-overlap
+  scoring before prompt assembly.
+- Prompt context and citations are assembled only from the checked-book
+  snapshot. Citations retain `pdf_page_number` for Grimoire jumps while
+  displaying printed page labels or ranges.
+
+Phase 7 PR4 keeps retrieval behavior stable while splitting
+`wfrp_companion/assistant/retrieval.py` into focused retrieval modules:
+
+- `retrieval.py` remains the public facade for `retrieve_context()` and
+  re-exports the current retrieval contracts for compatibility.
+- `source_map.py`, `query_planner.py`, `candidates.py`, `evidence.py`, and
+  `reranking.py` now own the separable parts of the retrieval pipeline.
+- This split is the scaffolding for later durable source-map/profile state,
+  object-search backfills, rank fusion, vector candidates, table/stat/glossary
+  extraction, and page-label calibration.
 
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
@@ -167,8 +194,8 @@ search, FTS, ingest jobs, source sets, chat threads, retrieval runs, model
 runs, and the `book_readiness` view. Source-set state is now populated in
 `source_sets`, `source_set_books`, and `app_settings.active_source_set_id`.
 Typed source-object tables can now be populated with deterministic
-`rule_section` and `page_chunk` rows, but object search projections remain
-unpopulated until the object FTS phase.
+`rule_section` and `page_chunk` rows, and their object search projections are
+rebuilt during extraction.
 The local API now surfaces library, source-set, exact-search, page-text,
 managed-PDF reader, and streaming chat operations. The frontend now surfaces
 library selection, exact search, page-text expansion, PDF reading, and the

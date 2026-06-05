@@ -8,9 +8,10 @@ Application tests now exist for the Phase 1 SQLite/config foundation, the Phase
 2 managed PDF library importer, the page-text importer, the global exact-search
 path, Phase 3 source-set management/search scoping, Phase 4 local FastAPI
 backend API, Phase 5 browser GUI, Phase 6 Familiar chat loop, Phase 7 PR1
-source-object migration/model foundation, and Phase 7 PR2 deterministic
-source-object extraction foundation. Python testing runs through the
-`wfrp-companion` Conda environment. Frontend testing runs through npm in
+source-object migration/model foundation, Phase 7 PR2 deterministic
+source-object extraction foundation, Phase 7 PR3 Familiar source-map/object
+retrieval, and Phase 7 PR4 retrieval-module split. Python testing runs through
+the `wfrp-companion` Conda environment. Frontend testing runs through npm in
 `frontend/`.
 
 ## Expected Coverage
@@ -87,6 +88,12 @@ Current focused test files:
 - `tests/api/test_openapi.py`
 - `tests/api/test_search_routes.py`
 - `tests/api/test_source_set_routes.py`
+- `tests/assistant/test_chat_service.py`
+- `tests/assistant/test_chat_store.py`
+- `tests/assistant/test_prompts.py`
+- `tests/assistant/test_provider.py`
+- `tests/assistant/test_retrieval.py`
+- `tests/assistant/test_retrieval_module_contracts.py`
 - `tests/db/test_schema.py`
 - `tests/db/test_migrations.py`
 - `tests/library/test_identity.py`
@@ -143,14 +150,16 @@ entrypoints.
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
 behavior, Library/Search tabs, grouped book sections, per-book source-set
-toggles, search result full text expansion/error handling, Grimoire tab, page,
-zoom, and view-mode behavior, two-page spread math, guarded PDF.js
-rendering/retry and cancellation behavior, Familiar shell behavior, and browser
-e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
+toggles, section-level Library bulk toggles, absence of noisy per-book
+readiness labels, search result full text expansion/error handling, Grimoire
+tab, page, zoom, and view-mode behavior, two-page spread math, guarded PDF.js
+rendering/retry and cancellation behavior, Familiar shell behavior, safe
+Familiar markdown rendering, explicit PDF-page citation/search opens, and
+browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-05 reported 283 tests
+The latest full backend verification command on 2026-06-05 reported 300 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
-entrypoints. The latest frontend verification reported 122 Vitest tests
+entrypoints. The latest frontend verification reported 127 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful
 production build, and two Playwright browser e2e tests passing.
 
@@ -172,6 +181,13 @@ search for `critical hit`, verify grouped results, open a result into a
 Grimoire tab at page 134, confirm source tabs omit page-number suffixes, confirm
 two-page view can be toggled, and confirm the Familiar composer remains
 reachable without page-level scrolling.
+
+The 2026-06-05 page-drift regression pass added a live local check that search
+results display explicit `PDF page` labels and that opening a search hit lands
+Grimoire on the same PDF page in single-page mode. Automated coverage also
+checks `pdf_page_number`/`page_label` API fields, search and Familiar citation
+open behavior, page-label import freshness, and markdown table rendering in
+Familiar output.
 
 ## Sources
 

@@ -27,6 +27,7 @@ DEFAULT_DPI = 200
 @dataclass
 class PageText:
     page_number: int
+    page_label: str | None
     text: str
     extraction_method: str
     embedded_text_chars: int
@@ -107,6 +108,13 @@ def normalize_text(text: str) -> str:
     return "\n".join(normalized_lines).strip()
 
 
+def normalize_page_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def extract_ocr_text(page: fitz.Page, language: str, dpi: int) -> str:
     try:
         text_page = page.get_textpage_ocr(language=language, dpi=dpi)
@@ -160,6 +168,7 @@ def extract_page_text(
 
     return PageText(
         page_number=page.number + 1,
+        page_label=normalize_page_label(page.get_label()),
         text=text,
         extraction_method=extraction_method,
         embedded_text_chars=embedded_text_chars,

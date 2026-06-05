@@ -373,10 +373,40 @@ def replace_book_source_objects(
                     now,
                 ),
             )
+            connection.execute(
+                """
+                insert into source_object_search (
+                  source_object_id,
+                  book_id,
+                  page_id,
+                  object_type,
+                  title,
+                  heading_path,
+                  page_start,
+                  page_end,
+                  confidence,
+                  search_text
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_object.id,
+                    source_object.book_id,
+                    source_object.page_id,
+                    source_object.object_type,
+                    source_object.title,
+                    " > ".join(source_object.heading_path),
+                    source_object.page_start,
+                    source_object.page_end,
+                    source_object.confidence,
+                    source_object.search_text,
+                ),
+            )
+        rebuild_source_object_fts_table(connection)
         connection.execute(
             """
             update book_object_status
-            set status = 'extracted',
+            set status = 'indexed',
                 object_count = ?,
                 table_count = 0,
                 stat_block_count = 0,
@@ -430,3 +460,9 @@ def mark_extraction_failed(
             """,
             (error, now, job_id),
         )
+
+
+def rebuild_source_object_fts_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "insert into source_object_search_fts(source_object_search_fts) values('rebuild')"
+    )

@@ -104,6 +104,8 @@ class SearchHitResponse(BaseModel):
     category: str
     page_id: str
     page_number: int
+    pdf_page_number: int
+    page_label: str | None
     snippet: str
     score: float
 
@@ -146,9 +148,12 @@ class ChatCitationResponse(BaseModel):
     category: str
     page_id: str
     page_number: int
+    pdf_page_number: int
+    page_label: str | None
     snippet: str
     rank: int
     score: float
+    page_range_label: str | None = None
 
 
 class SendChatMessageRequest(BaseModel):

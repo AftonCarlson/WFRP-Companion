@@ -358,6 +358,8 @@ def test_response_helpers_include_citations(tmp_path: Path) -> None:
         category="Core Book & GM Essentials",
         page_id="core-rules:1",
         page_number=1,
+        pdf_page_number=1,
+        page_label="132",
         snippet="Fear rules",
         rank=1,
         score=0.5,
@@ -375,6 +377,8 @@ def test_response_helpers_include_citations(tmp_path: Path) -> None:
 
     assert response.citations[0].book_id == "core-rules"
     assert citation_response.page_number == 1
+    assert citation_response.pdf_page_number == 1
+    assert citation_response.page_label == "132"
 
 
 class FakeProvider:

@@ -14,15 +14,16 @@ WFRP rules lookup needs hybrid retrieval:
 
 Vector search alone is not enough for rules-heavy material.
 
-The current Phase 6 implementation uses deterministic local exact search first:
+Phase 6 added deterministic local exact search first:
 
 - New chat threads snapshot enabled books into `chat_thread_source_books`.
-- `wfrp_companion/assistant/retrieval.py` resolves retrieval scope from that
-  snapshot, not from mutable live Library toggles.
 - Retrieved pages are recorded in `retrieval_runs` and `retrieval_hits` before
   the provider call.
 - Streaming chat events include citations that can open the exact PDF page in
   Grimoire.
+- Chat citation payloads carry `pdf_page_number` for the Grimoire jump target
+  and optional `page_label` for printed-page context. Frontend code must not
+  infer a PDF jump target from citation display text.
 
 Vector retrieval remains future work and should layer onto this explicit
 source-set and citation contract rather than replacing it.
@@ -52,8 +53,7 @@ Important current boundary: Phase 7 PR1 does **not** yet extract source objects
 or change Familiar ranking. Until a later extractor/reranker phase lands,
 Familiar still uses the Phase 6 page-level exact-search retrieval path.
 
-Phase 7 PR2 adds deterministic source-object extraction, but not retrieval
-integration:
+Phase 7 PR2 adds deterministic source-object extraction:
 
 - `tools/extract_source_objects.py` can populate `source_objects` with
   heading-derived `rule_section` objects and `page_chunk` fallback objects for
@@ -61,11 +61,67 @@ integration:
 - `book_object_status` now records per-book extraction state and the page-text
   snapshot hash used for idempotency.
 - Extracted objects preserve book/page/character-span citations and confidence
-  metadata, but `source_object_search_fts`, object-aware query planning, and
-  Familiar reranking are still later Phase 7 work.
-- Current Familiar answers still come from page-level exact search. Poor
-  answers caused by page-only retrieval are not fully solved until the
-  object-FTS/reranker/chat integration PRs land.
+  metadata.
+
+Phase 7 PR3 integrates the first source-map-aware hybrid retrieval slice into
+Familiar:
+
+- New Familiar model runs resolve checked books from the thread's active source
+  set at message time, so Library checkbox changes affect the next answer.
+  `chat_thread_source_books` remains a historical thread-creation snapshot, but
+  it is no longer the authoritative source for new retrieval runs.
+- `retrieval_runs.metadata_json` stores the per-run checked-book snapshot,
+  compact enabled-book source map, and candidate strings used for the run.
+- `wfrp_companion/source_objects/store.py` now fills
+  `source_object_search` and rebuilds `source_object_search_fts` when source
+  objects are extracted; `book_object_status.status='indexed'` means the object
+  projection was built.
+- `wfrp_companion/assistant/retrieval.py` generates a broad candidate pool from
+  page FTS and source-object evidence, expands close enabled-source vocabulary
+  terms such as OCR/spelling variants, resolves page hits to owning
+  source-object spans when available, and applies deterministic semantic
+  reranking before prompt assembly.
+- `retrieval_hits` snapshots object type, object title, heading path,
+  confidence, rank reasons, text snapshot hash, and page-range metadata.
+- Familiar prompt context now includes only the enabled-book source map and
+  final reranked evidence packets. Citation buttons can display printed page
+  ranges while retaining `pdf_page_number` as the hidden Grimoire jump target.
+
+Vector retrieval, glossary/index extraction, table/stat-block extraction, and
+LLM/cross-encoder reranking remain later phases. The current reranker is a
+deterministic local relevance filter over lexical/object candidates, not a
+provider-backed semantic model.
+
+Phase 7 PR4 splits Familiar retrieval into focused modules without changing
+behavior:
+
+- `wfrp_companion/assistant/retrieval.py` is now the compatibility facade and
+  orchestration entrypoint for `retrieve_context()`.
+- `wfrp_companion/assistant/source_map.py` owns current checked-source scope
+  resolution and runtime enabled-book source-map construction.
+- `wfrp_companion/assistant/query_planner.py` owns stopword filtering,
+  candidate query construction, source-map term expansion, and fuzzy term
+  helpers.
+- `wfrp_companion/assistant/candidates.py` owns page FTS, source-object FTS,
+  source-object fallback scans, page-hit-to-object resolution, and candidate
+  deduplication.
+- `wfrp_companion/assistant/evidence.py` owns retrieval/evidence dataclasses,
+  page text loading, context windows, heading-path parsing, and printed page
+  range labels.
+- `wfrp_companion/assistant/reranking.py` owns deterministic semantic-overlap
+  reranking and rank-reason helpers.
+- `tests/assistant/test_retrieval_module_contracts.py` locks the facade to the
+  focused module contracts so future phases can move behavior without breaking
+  existing callers.
+
+The next retrieval architecture decision is captured in
+`docs/handoffs/2026-06-05-source-map-hybrid-retrieval-handoff.md`: Familiar
+should move toward source-map-aware hybrid retrieval with semantic reranking
+and section-aware evidence. That handoff preserves the user-observed Bretonnia
+retrieval failure, Library checkbox source-scope requirement, printed-page
+label issue, multi-page evidence requirement, and the research basis for using
+lexical search, vector search, source-object search, query rewriting, rank
+fusion, and semantic reranking together.
 
 ## Answer Contract
 
@@ -99,6 +155,11 @@ It sends only bounded retrieved context plus the user question to OpenAI, scrubs
 private local paths, and instructs Familiar to cite book/page references and say
 when context is insufficient.
 
+Phase 7 PR3 prompt construction also includes a compact source map for checked
+books and section-aware evidence labels such as object title, heading path, and
+printed page/page-range labels. Unchecked books are explicitly out of scope in
+the system prompt.
+
 ## Streaming Provider Loop
 
 [coverage: high]
@@ -116,6 +177,10 @@ Familiar streams output through the backend-owned endpoint
 `wfrp_companion/assistant/provider.py` wraps the OpenAI Responses API and maps
 OpenAI text delta/completed events into app-owned events. The API key is read
 from `OPENAI_API_KEY` on the backend only.
+
+The Familiar frontend renders streamed assistant text through a safe local
+markdown renderer for common model output structures: headings, paragraphs,
+lists, tables, bold text, and inline code. It does not use raw HTML injection.
 
 ## Adventure Generation
 

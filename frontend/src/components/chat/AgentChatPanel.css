@@ -69,6 +69,65 @@
   line-height: 1.45;
 }
 
+.agent-chat__markdown {
+  display: grid;
+  gap: 8px;
+  color: #cbd8d2;
+  line-height: 1.45;
+}
+
+.agent-chat__markdown h2,
+.agent-chat__markdown h3,
+.agent-chat__markdown h4,
+.agent-chat__markdown h5 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 0.94rem;
+}
+
+.agent-chat__markdown p,
+.agent-chat__markdown ul,
+.agent-chat__markdown ol {
+  margin: 0;
+}
+
+.agent-chat__markdown ul,
+.agent-chat__markdown ol {
+  padding-left: 20px;
+}
+
+.agent-chat__markdown code {
+  padding: 1px 4px;
+  color: var(--color-text);
+  background: #1a2428;
+  border: 1px solid #26343a;
+  border-radius: 4px;
+}
+
+.agent-chat__table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.agent-chat__markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.agent-chat__markdown th,
+.agent-chat__markdown td {
+  padding: 5px 6px;
+  border: 1px solid #26343a;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-chat__markdown th {
+  color: var(--color-text);
+  background: #1a2428;
+}
+
 .agent-chat__turn {
   align-content: start;
 }

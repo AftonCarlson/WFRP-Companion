@@ -5,7 +5,7 @@ import type {
   SearchHitResponse,
   SourceSetBookResponse,
 } from "../../types/api";
-import type { LeftTab } from "../../state/workspaceState";
+import type { LeftTab, PdfViewMode } from "../../state/workspaceState";
 import { LibraryTab } from "./LibraryTab";
 import { SearchTab } from "./SearchTab";
 import "./LibrarySearchPanel.css";
@@ -16,7 +16,12 @@ export type LibrarySearchPanelProps = {
   client?: ApiClient;
   collapsedCategories: string[];
   leftTab: LeftTab;
-  onOpenPdfPage: (input: { bookId: string; title: string; pageNumber: number }) => void;
+  onOpenPdfPage: (input: {
+    bookId: string;
+    title: string;
+    pageNumber: number;
+    viewMode?: PdfViewMode;
+  }) => void;
   onSetLeftTab: (leftTab: LeftTab) => void;
   onSourceSetBookUpdated: (book: SourceSetBookResponse) => void;
   onToggleCategory: (category: string) => void;
@@ -47,7 +52,8 @@ export function LibrarySearchPanel({
     onOpenPdfPage({
       bookId: hit.book_id,
       title: hit.title,
-      pageNumber: hit.page_number,
+      pageNumber: hit.pdf_page_number,
+      viewMode: "single",
     });
   }
 

@@ -44,7 +44,8 @@ export default function App() {
             context.openPdfTab({
               bookId: citation.book_id,
               title: citation.title,
-              pageNumber: citation.page_number,
+              pageNumber: citation.pdf_page_number,
+              viewMode: "single",
             })
           }
         />
@@ -63,8 +64,8 @@ export default function App() {
           books={data?.books ?? []}
           collapsedCategories={context.layout.collapsedLibraryCategories}
           leftTab={context.layout.leftTab}
-          onOpenPdfPage={({ bookId, title, pageNumber }) =>
-            context.openPdfTab({ bookId, title, pageNumber })
+          onOpenPdfPage={({ bookId, title, pageNumber, viewMode }) =>
+            context.openPdfTab({ bookId, title, pageNumber, viewMode })
           }
           onSetLeftTab={context.setLeftTab}
           onSourceSetBookUpdated={handleSourceSetBookUpdated}

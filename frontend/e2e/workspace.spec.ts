@@ -83,6 +83,8 @@ async function mockApi(page: Page) {
             category: "Rules / Core",
             page_id: "core-rules:134",
             page_number: 134,
+            pdf_page_number: 134,
+            page_label: null,
             snippet: "Critical hit table result from indexed text.",
             score: 1.0,
           },
@@ -132,6 +134,8 @@ async function mockOverflowApi(page: Page) {
           category: "Rules / Core",
           page_id: `core-rules:${index + 1}`,
           page_number: index + 1,
+          pdf_page_number: index + 1,
+          page_label: null,
           snippet:
             "A deliberately long search snippet that should scroll inside the search results panel instead of increasing the page height.",
           score: 1.0,
@@ -161,7 +165,7 @@ test("workspace supports library, search, PDF tabs, and chat shell", async ({
   await page.getByRole("button", { name: "Show full text" }).click();
   await expect(page.getByText("Full page text from SQLite")).toBeVisible();
 
-  await page.getByRole("button", { name: "Open PDF page" }).click();
+  await page.getByRole("button", { name: "Open Core Rules PDF page 134" }).click();
   await expect(page.getByRole("tab", { name: "Core Rules" })).toBeVisible();
 
   await page.getByRole("button", { name: "Open chat history" }).click();

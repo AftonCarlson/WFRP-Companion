@@ -193,13 +193,15 @@ def test_extract_source_object_library_persists_objects_status_and_job(
     assert summary.skipped_current == 0
     assert summary.failed == 0
     assert count_rows(config, "source_objects") == 2
+    assert count_rows(config, "source_object_search") == 2
+    assert count_rows(config, "source_object_search_fts") == 2
     status = fetch_one(config, "select * from book_object_status")
     job = fetch_one(config, "select * from ingest_jobs where job_type = 'extract_source_objects'")
     rule = fetch_one(
         config,
         "select * from source_objects where object_type = 'rule_section'",
     )
-    assert status["status"] == "extracted"
+    assert status["status"] == "indexed"
     assert status["object_count"] == 2
     assert status["text_snapshot_sha256"] == summary.book_summaries[0].text_snapshot_sha256
     assert job["status"] == "succeeded"
@@ -208,6 +210,17 @@ def test_extract_source_object_library_persists_objects_status_and_job(
         summary.book_summaries[0].text_snapshot_sha256,
     )
     assert rule["title"] == "Critical Hits"
+    with open_connection(config.db_path) as connection:
+        row = connection.execute(
+            """
+            select source_object_search.source_object_id
+            from source_object_search_fts
+            join source_object_search
+              on source_object_search.rowid = source_object_search_fts.rowid
+            where source_object_search_fts match '"critical"'
+            """
+        ).fetchone()
+    assert row["source_object_id"] == rule["id"]
 
 
 def test_extract_source_object_library_initializes_missing_database(

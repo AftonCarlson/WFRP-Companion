@@ -1,5 +1,103 @@
 # Wiki Compile Log
 
+## 2026-06-05 Retrieval Module Split
+
+- Split the Familiar retrieval implementation into focused modules while
+  keeping `wfrp_companion/assistant/retrieval.py` as the public compatibility
+  facade for `retrieve_context()` and existing tests/callers.
+- Added `source_map.py`, `query_planner.py`, `candidates.py`, `evidence.py`,
+  and `reranking.py` under `wfrp_companion/assistant/` so later retrieval
+  phases can add durable source maps, rank fusion, vector candidates, and typed
+  evidence without growing one monolithic module.
+- Added `tests/assistant/test_retrieval_module_contracts.py` to lock facade
+  re-exports to the focused module contracts.
+- Completed independent code review for the split with no blocking findings.
+- Verification run for this pass: focused retrieval/chat tests reported 39
+  tests passing; full Python tests reported 300 tests passing with one
+  existing Starlette/httpx deprecation warning; the backend coverage gate
+  reported 300 tests passing with 100.00% coverage; `ruff check .` passed;
+  frontend Vitest reported 127 tests passing; frontend coverage passed above
+  configured thresholds; frontend production build passed with the existing
+  large PDF worker chunk warning; Playwright e2e reported 2 tests passing.
+
+## 2026-06-05 Source-Map-Aware Familiar Retrieval Slice
+
+- Changed Familiar retrieval so new model runs resolve checked books from the
+  thread's active source set at message time. `chat_thread_source_books` remains
+  a historical thread-creation snapshot; `retrieval_runs.metadata_json` now
+  stores the per-run checked-book snapshot, compact source map, and candidate
+  list.
+- Added source-object search projection population during extraction:
+  `source_object_search`, `source_object_search_fts`, and
+  `book_object_status.status='indexed'` now represent searchable extracted
+  objects.
+- Added broad page/object candidate generation, source-object span resolution,
+  deterministic semantic reranking, rank-reason snapshots, source-map prompt
+  injection, and printed page-range citation labels for Familiar.
+- Verification for this pass: full Python tests reported 290 tests passing;
+  the backend coverage gate reported 298 tests passing with 100.00% coverage;
+  both Python runs had one existing Starlette/httpx deprecation warning;
+  `ruff check .` passed; frontend Vitest reported 127 tests passing; frontend
+  coverage passed above configured thresholds; frontend production build
+  passed with the existing large PDF worker chunk warning; Playwright e2e
+  reported 2 tests passing.
+
+## 2026-06-05 Retrieval Architecture Handoff
+
+- Added
+  `docs/handoffs/2026-06-05-source-map-hybrid-retrieval-handoff.md` as the
+  durable handoff for the next retrieval phase.
+- Captured the target direction as source-map-aware hybrid retrieval with
+  semantic reranking and section-aware evidence, combining exact FTS, future
+  vector search, source-object search, glossary/index routing, query rewriting,
+  rank fusion, and semantic relevance filtering.
+- Preserved the key user-observed requirements: Library checkboxes must gate
+  Familiar prompt/retrieval scope per message, lexical hits must be semantically
+  judged before entering context, topics must resolve to multi-page
+  source-object spans when needed, and UI citations/search results should show
+  printed page labels rather than raw PDF page numbers.
+
+## 2026-06-05 Library Bulk Toggle Refinement
+
+- Removed per-book readiness words from the Library book selector so rows show
+  the book title, source-set checkbox, and compact Grimoire open action without
+  repeated `ready` noise.
+- Added tri-state category-heading checkboxes to select or clear every visible
+  book in a Library category. The bulk control persists changes through the
+  same per-book source-set endpoint as individual checkboxes.
+- Verification run for this pass: focused Library tests reported 9 tests
+  passing, frontend coverage reported 127 Vitest tests passing above configured
+  thresholds, frontend production build passed, and Playwright e2e reported 2
+  tests passing.
+
+## 2026-06-05 Search/Citation Page Drift And Familiar Rendering Fix
+
+- Split search hits and chat citations into explicit PDF jump metadata:
+  `pdf_page_number` plus optional `page_label`, while preserving the existing
+  `page_number` compatibility field.
+- Changed `/api/search/exact`, Familiar retrieval, stored chat citation read
+  models, and frontend API types so Search and Familiar open Grimoire using the
+  PDF page number instead of inferring from display text.
+- Search result opens and Familiar citation opens now force Grimoire back to
+  single-page mode so an existing two-page spread cannot make the reader appear
+  one page behind the clicked citation.
+- Updated search result labels and citation buttons to say `PDF page N`, with
+  `(printed page X)` appended when a distinct `pages.page_label` is available.
+- Added safe Familiar markdown rendering for headings, paragraphs, lists,
+  tables, bold text, and inline code so streamed model output no longer appears
+  as one unreadable text blob.
+- Updated `tools/extract_page_text.py` and
+  `wfrp_companion/library/page_text_importer.py` so page labels from JSON or
+  managed PDFs are preserved in SQLite `pages.page_label`; label-only drift now
+  causes page-text import freshness checks to fail rather than silently
+  skipping stale rows.
+- Verification run for this pass: backend coverage reported 286 tests passing
+  with 100% coverage, `ruff check .` passed, frontend Vitest reported 125 tests
+  passing with coverage above configured thresholds, frontend production build
+  passed, Playwright e2e reported 2 tests passing, `git diff --check` passed,
+  and a live browser smoke check opened an exact-search result into Grimoire at
+  PDF page 134 in single-page mode.
+
 ## 2026-06-05 Phase 7 Deterministic Source Object Extraction Foundation
 
 - Added `wfrp_companion/source_objects/layout.py`,

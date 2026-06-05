@@ -121,7 +121,7 @@ def stream_queued_result(
         return
 
     try:
-        retrieving = chat_store.transition_model_run(
+        chat_store.transition_model_run(
             config,
             result.model_run.id,
             from_statuses=("queued",),
@@ -139,9 +139,12 @@ def stream_queued_result(
             config,
             thread_id=result.thread.id,
             message_id=result.user_message.id,
-            source_set_id=retrieving.thread.active_source_set_id,
+            source_set_id=context.source_set_id,
             query=content,
             hits=context.hits,
+            source_book_ids=context.source_book_ids,
+            source_map=context.source_map,
+            candidates=context.candidates,
         )
         retrieved = chat_store.attach_retrieval_run(
             config,
@@ -160,6 +163,7 @@ def stream_queued_result(
         prompt_messages = prompts.build_prompt_messages(
             question=content,
             hits=context.hits,
+            source_map=context.source_map,
             recent_messages=(),
             context_char_limit=config.chat_context_char_limit,
         )
@@ -257,9 +261,12 @@ def citations_from_hits(
             category=hit.category,
             page_id=hit.page_id,
             page_number=hit.page_number,
+            pdf_page_number=hit.pdf_page_number,
+            page_label=hit.page_label,
             snippet=hit.snippet,
             rank=hit.rank,
             score=hit.score,
+            page_range_label=hit.page_range_label,
         )
         for hit in hits
     )

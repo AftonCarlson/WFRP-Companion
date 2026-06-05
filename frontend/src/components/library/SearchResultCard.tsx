@@ -34,7 +34,7 @@ export function SearchResultCard({
     setLoading(true);
     setError(null);
     try {
-      const pageText = await client.getPageText(hit.book_id, hit.page_number);
+      const pageText = await client.getPageText(hit.book_id, hit.pdf_page_number);
       setFullText(pageText.text);
     } catch (caught) {
       setError(errorMessage(caught));
@@ -47,10 +47,11 @@ export function SearchResultCard({
     <article className="search-result-card">
       <div className="search-result-card__header">
         <strong>
-          {hit.title} p. {hit.page_number}
+          {hit.title} PDF page {hit.pdf_page_number}
+          {visiblePrintedPage(hit) ? ` (printed page ${hit.page_label})` : null}
         </strong>
         <button
-          aria-label="Open PDF page"
+          aria-label={openPdfPageLabel(hit)}
           className="search-result-card__open"
           onClick={() => onOpenPdfPage(hit)}
           type="button"
@@ -76,4 +77,15 @@ export function SearchResultCard({
       ) : null}
     </article>
   );
+}
+
+function visiblePrintedPage(hit: SearchHitResponse) {
+  return hit.page_label && hit.page_label !== String(hit.pdf_page_number);
+}
+
+function openPdfPageLabel(hit: SearchHitResponse) {
+  if (visiblePrintedPage(hit)) {
+    return `Open ${hit.title} PDF page ${hit.pdf_page_number} (printed page ${hit.page_label})`;
+  }
+  return `Open ${hit.title} PDF page ${hit.pdf_page_number}`;
 }

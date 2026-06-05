@@ -37,6 +37,10 @@ and exact search:
   with `--retry-running`.
 - `tools/import_page_text.py` imports private OCR/text JSON from
   `data/page_text/<book_id>.json` into SQLite `pages` and `page_text`.
+- Page-text import preserves optional page labels from JSON and, when JSON has
+  no label, reads labels from the managed PDF with PyMuPDF. Runtime page
+  identity is therefore `pages.page_number` for the PDF jump target plus
+  optional `pages.page_label` for the printed/display page label.
 - `tools/rebuild_fts.py` rebuilds the global exact-search projection in
   `page_search` and `page_search_fts`.
 - `tools/source_sets.py` syncs the built-in `Rules/Core` source set and toggles
@@ -110,7 +114,8 @@ source of truth:
   `import_page_text_file:<relative_json_path>:<json_sha256>` with no
   `target_id`.
 - A current imported book is only skipped when the book status, JSON SHA, page
-  counts, page text hashes, and generated timestamps still match.
+  counts, page text hashes, generated timestamps, and resolved page labels
+  still match.
 - Failed or stale imports are repairable with a normal rerun, `--force`,
   `--retry-running`, or `--stale-running-minutes`.
 
@@ -137,6 +142,9 @@ Exact search is implemented in `wfrp_companion/search/fts.py`:
   book IDs.
 - `/api/search/exact` accepts `query`, `limit`, `source_set_id`, repeatable
   `book_id`, and `all_books` parameters.
+- `/api/search/exact` returns `pdf_page_number` for reader jumps and
+  `page_label` when available. The frontend should use `pdf_page_number` for
+  Grimoire opens and display `page_label` only as printed-page context.
 - Source-set membership is owned by `source_set_books.enabled`; readiness is
   still owned by `books` lifecycle state and enforced by `search_exact()`.
 
@@ -213,6 +221,10 @@ The page-text extraction tool is `tools/extract_page_text.py`. It generated
 local text references for 26 PDFs / 3,736 pages under `data/page_text/` on
 2026-06-03. The run produced 391 embedded-text pages, 3,214 OCR pages, and 131
 empty OCR pages with source references preserved.
+
+As of 2026-06-05, `tools/extract_page_text.py` also writes optional
+`page_label` values from PyMuPDF, and the importer can backfill labels from the
+managed PDF even for older JSON files that do not contain that field.
 
 ## Maps And Images
 

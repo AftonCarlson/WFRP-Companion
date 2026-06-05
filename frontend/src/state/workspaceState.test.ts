@@ -123,6 +123,24 @@ describe("workspaceState", () => {
     expect(setPdfTabViewMode(opened, "missing", "two-page")).toEqual(opened);
   });
 
+  it("can force explicit PDF page jumps back to single-page view", () => {
+    const opened = openPdfTab(defaultWorkspaceLayout, {
+      bookId: "core-rules",
+      title: "Core Rules",
+      pageNumber: 131,
+    });
+    const spread = setPdfTabViewMode(opened, "core-rules", "two-page");
+    const jumped = openPdfTab(spread, {
+      bookId: "core-rules",
+      title: "Core Rules",
+      pageNumber: 132,
+      viewMode: "single",
+    });
+
+    expect(jumped.openPdfTabs[0].pageNumber).toBe(132);
+    expect(jumped.openPdfTabs[0].viewMode).toBe("single");
+  });
+
   it("ignores tab mutations for unknown tabs", () => {
     const opened = openPdfTab(defaultWorkspaceLayout, {
       bookId: "core-rules",

@@ -63,8 +63,8 @@ adds explicit SQLite migrations and typed source-object model contracts; Phase
 - `tools/extract_source_objects.py` for extracting deterministic
   `rule_section` and `page_chunk` rows into `source_objects`.
 - `frontend/` for the React/Vite browser GUI, including Library/Search tabs,
-  source-set book toggles, PDF.js reader tabs, and the streaming Familiar
-  panel.
+  per-book and section-level source-set book toggles, PDF.js reader tabs, and
+  the streaming Familiar panel.
 
 ## Expected Development Shape
 
