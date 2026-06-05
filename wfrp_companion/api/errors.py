@@ -17,6 +17,7 @@ def catalog_error(error: catalog.CatalogError) -> HTTPException:
     if isinstance(
         error,
         catalog.ReaderUnavailableError
+        | catalog.PageTextUnavailableError
         | catalog.ManagedPdfMissingError
         | catalog.ManagedPdfPathRejectedError,
     ):

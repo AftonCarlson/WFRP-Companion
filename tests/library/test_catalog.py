@@ -163,6 +163,22 @@ def test_get_page_returns_page_reference_without_text(tmp_path: Path) -> None:
     )
 
 
+def test_get_page_text_requires_search_ready_book(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_book(config, search_status="not_indexed")
+    with initialize_database(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into page_text (page_id, text, text_sha256, generated_at)
+            values ('core-rules:1', 'private text', 'text-sha',
+                    '2026-06-04T00:00:00Z')
+            """
+        )
+
+    with pytest.raises(catalog.PageTextUnavailableError, match="core-rules"):
+        catalog.get_page_text(config, "core-rules", 1)
+
+
 def test_reader_pdf_path_requires_ready_managed_pdf(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     pdf_path = seed_book(config)

@@ -18,7 +18,8 @@ configuration loading, SQLite connection/schema initialization, and
 Phase 2 added the local managed-PDF library importer, page-text importer, and
 global exact-search tools. Phase 3 added source-set management and made local
 search source-set-aware. Phase 4 added the first FastAPI backend surface over
-the local SQLite library:
+the local SQLite library. Phase 5 added the first browser GUI package in
+`frontend/`:
 
 - `wfrp_companion/library/identity.py` for stable book and folder IDs.
 - `wfrp_companion/library/discovery.py` for recursive PDF discovery.
@@ -46,6 +47,8 @@ the local SQLite library:
   enabling or disabling books.
 - `tools/search_text.py` for source-set-aware exact-search smoke checks.
 - `tools/serve_api.py` for running the local API.
+- `frontend/` for the React/Vite browser GUI, including Library/Search tabs,
+  source-set book toggles, PDF.js reader tabs, and the chat shell.
 
 ## Expected Development Shape
 
@@ -63,8 +66,9 @@ Once implementation begins, prefer a simple layout:
 - `docs/audits/` for committed audit summaries that avoid private extracted
   text.
 
-Use one package/workspace system only after the stack is chosen. For Python,
-Conda is already chosen; add Python dependencies to `environment.yml`.
+Python dependencies belong in `environment.yml`. Frontend dependencies belong
+in `frontend/package.json` and `frontend/package-lock.json`; use npm for the
+frontend package.
 
 ## Conda Workflow
 
@@ -231,6 +235,7 @@ Current API surfaces:
 - `GET /api/books`
 - `GET /api/books/{book_id}`
 - `GET /api/books/{book_id}/pages/{page_number}`
+- `GET /api/books/{book_id}/pages/{page_number}/text`
 - `GET /api/books/{book_id}/pdf`
 - `GET /api/source-sets`
 - `GET /api/source-sets/active`
@@ -242,7 +247,35 @@ Current API surfaces:
 `/api/books/{book_id}/pdf` serves the managed local PDF inline and supports
 HTTP byte ranges through Starlette `FileResponse`, which lets PDF.js request
 only the needed bytes. JSON responses deliberately avoid returning
-`books.managed_pdf_path`.
+`books.managed_pdf_path`. `/api/books/{book_id}/pages/{page_number}/text`
+returns full imported page text from SQLite on demand; search responses keep
+returning snippets only.
+
+Run the browser GUI during development with:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The Vite dev server defaults to `http://127.0.0.1:5173/` and proxies `/api` to
+`http://127.0.0.1:8000`, so run `python tools/serve_api.py` separately for a
+fully connected local app.
+
+Current frontend commands:
+
+```bash
+cd frontend
+npm run test
+npm run test:coverage
+npm run build
+npm run test:e2e
+```
+
+`npm run test:e2e` starts Vite automatically and mocks API responses for the
+browser-flow test. If Playwright browser binaries are missing on a new machine,
+run `cd frontend && npx playwright install chromium`.
 
 ## Environment
 

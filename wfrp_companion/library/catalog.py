@@ -41,6 +41,16 @@ class PageReference:
     image_count: int
 
 
+@dataclass(frozen=True)
+class PageTextReference:
+    page_id: str
+    book_id: str
+    page_number: int
+    page_label: str | None
+    text: str
+    text_chars: int
+
+
 class CatalogError(Exception):
     pass
 
@@ -54,6 +64,10 @@ class PageNotFoundError(CatalogError):
 
 
 class ReaderUnavailableError(CatalogError):
+    pass
+
+
+class PageTextUnavailableError(CatalogError):
     pass
 
 
@@ -139,6 +153,47 @@ def get_page(config: AppConfig, book_id: str, page_number: int) -> PageReference
         has_text=bool(row["has_text"]),
         text_chars=row["text_chars"],
         image_count=row["image_count"],
+    )
+
+
+def get_page_text(
+    config: AppConfig,
+    book_id: str,
+    page_number: int,
+) -> PageTextReference:
+    with initialize_database(config.db_path) as connection:
+        book = book_row(connection, book_id)
+        if not bool(book["search_ready"]):
+            raise PageTextUnavailableError(
+                f"Page text is unavailable for book: {book_id}"
+            )
+        row = connection.execute(
+            """
+            select
+              pages.id,
+              pages.book_id,
+              pages.page_number,
+              pages.page_label,
+              pages.text_chars,
+              page_text.text
+            from pages
+            join page_text on page_text.page_id = pages.id
+            where pages.book_id = ?
+              and pages.page_number = ?
+            """,
+            (book_id, page_number),
+        ).fetchone()
+
+    if row is None:
+        raise PageNotFoundError(f"Page text not found: {book_id} p. {page_number}")
+
+    return PageTextReference(
+        page_id=row["id"],
+        book_id=row["book_id"],
+        page_number=row["page_number"],
+        page_label=row["page_label"],
+        text=row["text"],
+        text_chars=row["text_chars"],
     )
 
 

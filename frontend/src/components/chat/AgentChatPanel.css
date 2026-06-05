@@ -1,0 +1,111 @@
+.agent-chat {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 36px minmax(0, 1fr) minmax(110px, auto);
+  background: #0f1518;
+}
+
+.agent-chat__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+
+.agent-chat__header button,
+.agent-chat__composer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text);
+  background: var(--color-panel-strong);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.agent-chat__header button {
+  width: 27px;
+  height: 26px;
+}
+
+.agent-chat__history {
+  position: absolute;
+  top: 34px;
+  left: 8px;
+  right: 8px;
+  z-index: 3;
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-panel);
+}
+
+.agent-chat__history p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.agent-chat__transcript {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.agent-chat__transcript article {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  background: #10171a;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.agent-chat__transcript p {
+  margin: 0;
+  color: #cbd8d2;
+  line-height: 1.45;
+}
+
+.agent-chat__composer {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 7px;
+  padding: 9px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+
+.agent-chat__composer textarea {
+  width: 100%;
+  min-width: 0;
+  max-height: 160px;
+  resize: vertical;
+  overflow-y: auto;
+  color: var(--color-text);
+  background: #10171a;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 8px;
+  line-height: 1.4;
+}
+
+.agent-chat__composer button {
+  width: 34px;
+  height: 34px;
+  align-self: end;
+}
+
+.agent-chat__composer button:disabled {
+  color: var(--color-muted);
+}

@@ -138,6 +138,39 @@ def test_books_detail_and_page_routes_return_reader_metadata(tmp_path: Path) -> 
     assert "private page text" not in page_response.text
 
 
+def test_page_text_route_returns_explicit_page_text(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_book(config)
+    client = TestClient(create_app(config))
+
+    response = client.get("/api/books/core-rules/pages/1/text")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "page_id": "core-rules:1",
+        "book_id": "core-rules",
+        "page_number": 1,
+        "page_label": "i",
+        "text": "private page text must not be returned",
+        "text_chars": 42,
+    }
+    assert "managed_pdf_path" not in response.text
+    assert "original_source_path" not in response.text
+
+
+def test_page_text_route_requires_search_ready_book(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_book(config, search_status="not_indexed")
+    client = TestClient(create_app(config))
+
+    response = client.get("/api/books/core-rules/pages/1/text")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Page text is unavailable for book: core-rules",
+    }
+
+
 def test_pdf_route_serves_inline_pdf_and_supports_ranges(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_book(config)
@@ -170,9 +203,18 @@ def test_library_routes_map_missing_rows_to_404(tmp_path: Path) -> None:
 
     missing_book = client.get("/api/books/missing-book")
     missing_page = client.get("/api/books/core-rules/pages/9")
+    missing_book_text = client.get("/api/books/missing-book/pages/1/text")
+    missing_page_text = client.get("/api/books/core-rules/pages/9/text")
+
+    with initialize_database(config.db_path) as connection:
+        connection.execute("delete from page_text where page_id = 'core-rules:1'")
+    missing_text_row = client.get("/api/books/core-rules/pages/1/text")
 
     assert missing_book.status_code == 404
     assert missing_page.status_code == 404
+    assert missing_book_text.status_code == 404
+    assert missing_page_text.status_code == 404
+    assert missing_text_row.status_code == 404
 
 
 def test_pdf_route_maps_unavailable_or_unsafe_files_to_409(tmp_path: Path) -> None:

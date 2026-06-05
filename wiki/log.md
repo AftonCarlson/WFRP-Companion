@@ -1,5 +1,38 @@
 # Wiki Compile Log
 
+## 2026-06-04 Phase 5 Browser GUI Shell
+
+- Added the Phase 5 implementation plan at
+  `docs/plans/2026-06-04-phase-5-browser-gui-shell-implementation-plan.md`.
+- Added the first committed browser GUI under `frontend/` using React, Vite,
+  TypeScript, Vitest, Playwright, PDF.js, and lucide icons.
+- Added `GET /api/books/{book_id}/pages/{page_number}/text` so the GUI can
+  lazily load full imported page text from SQLite without reading ignored JSON
+  files or exposing local filesystem paths. The endpoint is guarded by
+  `book_readiness.search_ready`.
+- Added a dockable three-panel workspace with collapsible/resizable/maximizable
+  Library/Search, PDF Reader, and Agent Chat panels.
+- Added Library/Search tabs with grouped source-set book checkboxes, collapsible
+  categories, exact-search results, full-page text expansion, and `Open PDF page`
+  actions.
+- Added multi-source PDF reader tabs over the existing managed PDF endpoint,
+  with page navigation, zoom controls, PDF.js canvas rendering, retry handling,
+  stale-render cancellation, and accessible tab/panel wiring.
+- Added keyboard-resizable panel splitters with vertical separator ARIA
+  metadata.
+- Added a UI-only agent chat shell with scrollable transcript, controlled
+  composer, and chat-history popover. Real AI/RAG behavior remains deferred to a
+  later phase.
+- Copied the current UI banner into the frontend public asset pipeline at
+  `frontend/public/assets/buttlordxai-hero.png`.
+- Added frontend unit, coverage, build, and Playwright e2e verification.
+  Backend verification reported 181 tests passing with 100% coverage; frontend
+  verification reported 74 Vitest tests passing, 100% statement/line/function
+  coverage, a successful production build, and one browser e2e test passing.
+- Completed independent implementation review, fixed the reported important
+  workspace-storage/PDF/chat issues, then fixed the remaining ARIA tab/popover
+  follow-ups before this wiki refresh.
+
 ## 2026-06-04 Phase 4 Local Backend API
 
 - Added the Phase 4 implementation plan at
