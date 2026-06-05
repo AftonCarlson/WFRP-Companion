@@ -111,6 +111,36 @@ async function mockApi(page: Page) {
   });
 }
 
+async function mockOverflowApi(page: Page) {
+  await mockApi(page);
+  await page.unroute("**/api/search/exact?**");
+  await page.route("**/api/search/exact?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        query: "black knight",
+        scope: {
+          label: "Rules/Core",
+          source_set_id: "rules-core",
+          book_ids: ["core-rules"],
+          all_books: false,
+        },
+        hits: Array.from({ length: 18 }, (_, index) => ({
+          rank: index + 1,
+          book_id: "core-rules",
+          title: "Core Rules",
+          category: "Rules / Core",
+          page_id: `core-rules:${index + 1}`,
+          page_number: index + 1,
+          snippet:
+            "A deliberately long search snippet that should scroll inside the search results panel instead of increasing the page height.",
+          score: 1.0,
+        })),
+      }),
+    });
+  });
+}
+
 test("workspace supports library, search, PDF tabs, and chat shell", async ({
   page,
 }) => {
@@ -140,4 +170,57 @@ test("workspace supports library, search, PDF tabs, and chat shell", async ({
   await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue(
     "What happens next?",
   );
+});
+
+test("workspace panels contain their own vertical overflow", async ({ page }) => {
+  await mockOverflowApi(page);
+  await page.setViewportSize({ width: 1440, height: 760 });
+  await page.goto("/");
+
+  await page.getByRole("tab", { name: "Search" }).click();
+  await page.getByRole("searchbox", { name: "Search book text" }).fill("black knight");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByText("18 hits")).toBeVisible();
+
+  await page.getByRole("textbox", { name: "Message" }).fill(
+    Array.from({ length: 20 }, () => "Describe this scene in detail.").join("\n"),
+  );
+
+  const measurements = await page.evaluate(() => {
+    const scrollingElement = document.scrollingElement ?? document.documentElement;
+    const searchResults = document.querySelector(".search-tab__results");
+    const transcript = document.querySelector(".agent-chat__transcript");
+    const composer = document.querySelector(".agent-chat__composer");
+    const composerBox = composer?.getBoundingClientRect();
+    const searchBox = searchResults?.getBoundingClientRect();
+    const transcriptBox = transcript?.getBoundingClientRect();
+
+    return {
+      pageScrollHeight: scrollingElement.scrollHeight,
+      viewportHeight: window.innerHeight,
+      searchCanScroll:
+        searchResults !== null &&
+        searchResults.scrollHeight > searchResults.clientHeight,
+      transcriptFits:
+        transcriptBox !== undefined &&
+        transcriptBox.top >= 0 &&
+        transcriptBox.bottom <= window.innerHeight,
+      composerFits:
+        composerBox !== undefined &&
+        composerBox.top >= 0 &&
+        composerBox.bottom <= window.innerHeight,
+      searchFits:
+        searchBox !== undefined &&
+        searchBox.top >= 0 &&
+        searchBox.bottom <= window.innerHeight,
+    };
+  });
+
+  expect(measurements.pageScrollHeight).toBeLessThanOrEqual(
+    measurements.viewportHeight,
+  );
+  expect(measurements.searchCanScroll).toBe(true);
+  expect(measurements.searchFits).toBe(true);
+  expect(measurements.transcriptFits).toBe(true);
+  expect(measurements.composerFits).toBe(true);
 });

@@ -30,8 +30,10 @@
 .library-tab,
 .search-tab,
 .library-search-panel [role="tabpanel"] {
+  height: 100%;
   min-height: 0;
   display: grid;
+  overflow: hidden;
 }
 
 .library-tab,
@@ -54,11 +56,17 @@
 .library-tab__list,
 .search-tab__results {
   min-height: 0;
+  max-height: 100%;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding-right: 2px;
+}
+
+.library-tab__list > *,
+.search-tab__results > * {
+  flex: 0 0 auto;
 }
 
 .book-category,
