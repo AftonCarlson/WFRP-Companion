@@ -87,15 +87,44 @@ Phase 4 exposes the first local backend API over that SQLite state:
 - `/api/search/exact` returns resolved scope, ranked snippets, and book/page
   citations while `search_exact()` remains the readiness gate.
 
+Phase 5 adds the first browser GUI over the local API:
+
+- `frontend/` is a React/Vite/TypeScript package with Vitest, Testing Library,
+  Playwright, PDF.js, and lucide icons.
+- `frontend/src/lib/apiClient.ts` is the only frontend module that calls
+  `fetch()`.
+- `frontend/src/state/workspaceState.ts` and
+  `frontend/src/state/workspaceStorage.ts` own view-only state: panel sizes,
+  collapsed/maximized panels, left-tab selection, collapsed library categories,
+  and open PDF tabs.
+- `localStorage` state is validated deeply before use. Malformed saved layouts
+  fall back to defaults rather than reaching `AppShell`.
+- The Library tab groups books by SQLite category and persists per-book toggles
+  through `PUT /api/source-sets/{source_set_id}/books/{book_id}`.
+- The Search tab calls `/api/search/exact`, shows grouped snippet results,
+  lazily fetches full page text through
+  `/api/books/{book_id}/pages/{page_number}/text`, and can open exact pages in
+  the reader.
+- `/api/books/{book_id}/pages/{page_number}/text` is search-readiness guarded;
+  direct requests cannot return page text for books that are not indexed and
+  searchable.
+- `PdfReaderPanel` maintains one tab per opened book and renders the managed
+  PDF through PDF.js from `/api/books/{book_id}/pdf`.
+- `PdfCanvas` has loading, error, retry, high-DPI scaling, stale-render
+  cancellation, and cleanup behavior covered by tests.
+- `AgentChatPanel` is a UI-only chat shell. It does not write `chat_threads` or
+  call model APIs yet.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval metadata. The current populated runtime source-of-truth areas
 are library folders, books, pages, page text, page search, FTS, ingest jobs, and
 the `book_readiness` view. Source-set state is now populated in `source_sets`,
 `source_set_books`, and `app_settings.active_source_set_id`. The local API now
-surfaces library, source-set, exact-search, and managed-PDF reader operations.
-Later phases will populate visual assets, frontend reader/search surfaces, and
-AI chat/retrieval metadata.
+surfaces library, source-set, exact-search, page-text, and managed-PDF reader
+operations. The frontend now surfaces library selection, exact search,
+page-text expansion, PDF reading, and a chat placeholder. Later phases will
+populate visual assets and AI chat/retrieval metadata.
 
 ## Major Modules
 
@@ -151,6 +180,9 @@ Important schema decisions:
   a scoped book is currently searchable.
 - API responses must not expose `books.managed_pdf_path`; managed PDFs are only
   served through guarded reader endpoints under the configured local data dir.
+- `/api/books/{book_id}/pages/{page_number}/text` reads full imported page text
+  from SQLite `page_text`, requires `book_readiness.search_ready`, and
+  intentionally returns no filesystem paths.
 
 ## Local-First Boundary
 

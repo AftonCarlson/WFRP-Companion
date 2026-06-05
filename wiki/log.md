@@ -1,5 +1,64 @@
 # Wiki Compile Log
 
+## 2026-06-04 Phase 5 Browser GUI Refinement
+
+- Refined the first browser GUI around the user-approved workspace language:
+  `Library`, `Grimoire`, and `Familiar`.
+- Moved Grimoire page/zoom/view controls into the panel header, centered them
+  in the header, and kept previous/next page movement as minimal side controls
+  beside the PDF viewport.
+- Added single-page/two-page Grimoire view mode. Two-page mode shows pages 1
+  and 2 alone, then pairs pages from 3/4 onward, with an unpaired final page
+  shown alone.
+- Changed Grimoire source tabs to show source titles only, placed close controls
+  visually inside the tabs, and kept close controls outside the semantic
+  `tablist` while sharing the tab strip scroll layer.
+- Changed Library/Search open actions to compact book-icon buttons.
+- Moved the Familiar history hamburger into the panel header, removed the
+  duplicate internal chat header, and positioned the send action inside the
+  lower-right corner of the message text field.
+- Added tests for the refined panel labels, header controls, PDF tab labels,
+  two-page spread math, clamped PDF page behavior, compact open actions, and
+  Familiar composer layout.
+- Completed independent review, fixed the reported tab-scroll and out-of-range
+  PDF page consistency issues, then reran the frontend gate: 106 Vitest tests
+  passed with 100% statements / branches / functions / lines coverage,
+  production build passed, Playwright e2e passed, and `git diff --check` was
+  clean.
+
+## 2026-06-04 Phase 5 Browser GUI Shell
+
+- Added the Phase 5 implementation plan at
+  `docs/plans/2026-06-04-phase-5-browser-gui-shell-implementation-plan.md`.
+- Added the first committed browser GUI under `frontend/` using React, Vite,
+  TypeScript, Vitest, Playwright, PDF.js, and lucide icons.
+- Added `GET /api/books/{book_id}/pages/{page_number}/text` so the GUI can
+  lazily load full imported page text from SQLite without reading ignored JSON
+  files or exposing local filesystem paths. The endpoint is guarded by
+  `book_readiness.search_ready`.
+- Added a dockable three-panel workspace with collapsible/resizable/maximizable
+  Library/Search, PDF Reader, and Agent Chat panels.
+- Added Library/Search tabs with grouped source-set book checkboxes, collapsible
+  categories, exact-search results, full-page text expansion, and `Open PDF page`
+  actions.
+- Added multi-source PDF reader tabs over the existing managed PDF endpoint,
+  with page navigation, zoom controls, PDF.js canvas rendering, retry handling,
+  stale-render cancellation, and accessible tab/panel wiring.
+- Added keyboard-resizable panel splitters with vertical separator ARIA
+  metadata.
+- Added a UI-only agent chat shell with scrollable transcript, controlled
+  composer, and chat-history popover. Real AI/RAG behavior remains deferred to a
+  later phase.
+- Copied the current UI banner into the frontend public asset pipeline at
+  `frontend/public/assets/buttlordxai-hero.png`.
+- Added frontend unit, coverage, build, and Playwright e2e verification.
+  Backend verification reported 181 tests passing with 100% coverage; frontend
+  verification reported 74 Vitest tests passing, 100% statement/line/function
+  coverage, a successful production build, and one browser e2e test passing.
+- Completed independent implementation review, fixed the reported important
+  workspace-storage/PDF/chat issues, then fixed the remaining ARIA tab/popover
+  follow-ups before this wiki refresh.
+
 ## 2026-06-04 Phase 4 Local Backend API
 
 - Added the Phase 4 implementation plan at

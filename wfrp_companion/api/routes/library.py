@@ -10,6 +10,7 @@ from wfrp_companion.api.schemas import (
     BooksResponse,
     BookSummaryResponse,
     PageReferenceResponse,
+    PageTextResponse,
 )
 from wfrp_companion.library import catalog
 
@@ -37,6 +38,22 @@ def get_page(
     except catalog.CatalogError as error:
         raise errors.catalog_error(error) from error
     return PageReferenceResponse(**page.__dict__)
+
+
+@router.get(
+    "/books/{book_id}/pages/{page_number}/text",
+    response_model=PageTextResponse,
+)
+def get_page_text(
+    book_id: str,
+    page_number: int,
+    config: ConfigDependency,
+) -> PageTextResponse:
+    try:
+        page = catalog.get_page_text(config, book_id, page_number)
+    except catalog.CatalogError as error:
+        raise errors.catalog_error(error) from error
+    return PageTextResponse(**page.__dict__)
 
 
 @router.get("/books/{book_id}/pdf")

@@ -9,12 +9,18 @@ screen should help the GM read, search, ask, and prep.
 
 ## Core Views
 
-[coverage: medium]
+[coverage: high]
 
-- Library: books, status, import actions, quick search.
-- Reader: PDF view with page navigation and citation jump targets.
-- Search: exact and semantic results with book/page provenance.
-- Assistant: chat with cited answers and context controls.
+- Library: grouped book selector with per-book checkboxes, status text, compact
+  book-icon open actions, and a separate Search tab.
+- Grimoire: PDF.js view with source tabs, Chrome-style close controls, page
+  navigation, single-page/two-page view toggles, zoom, retry-on-error, and
+  citation jump targets.
+- Search: exact results grouped by book with snippets, full-page text expansion,
+  and `Open PDF page` actions.
+- Familiar: chat-shaped shell with transcript, composer, in-header history
+  control, and history popover.
+  The assistant is intentionally offline until the AI/RAG phase.
 - Campaign: notes, session summaries, NPC/location/adventure prep.
 
 ## Table-Use Defaults
@@ -41,6 +47,11 @@ generated pixel-art banner intended for the initial app hero, banner, or
 background treatment. When the web app is scaffolded, route it through that
 frontend's normal public/static asset pipeline.
 
+Phase 5 copies that asset to
+`frontend/public/assets/buttlordxai-hero.png`. The first committed GUI keeps
+the visual treatment restrained so later custom graphics, animation, and layout
+polish can be layered onto stable panels and state boundaries.
+
 ## Accessibility
 
 [coverage: medium]
@@ -48,6 +59,39 @@ frontend's normal public/static asset pipeline.
 Support keyboard navigation, readable contrast, responsive layouts, and text
 that does not overlap or truncate inside controls. The PDF reader and chat panel
 should remain usable on laptop screens.
+
+Implemented Phase 5 accessibility rules:
+
+- Library/Search uses proper `tablist`, `tab`, and `tabpanel` wiring.
+- PDF source tabs use `aria-controls`, `aria-selected`, and a paired
+  `tabpanel`; close buttons are visually inside each tab while remaining
+  outside the semantic `tablist`, and the tab strip scrolls as one layer so tab
+  labels and close controls do not desynchronize.
+- The View control is a plain popover trigger with `aria-expanded` and
+  `aria-controls`, not a fake menu.
+- Panel splitters expose vertical separator metadata and support keyboard
+  resizing with arrow/Home/End keys.
+- Chat history uses a dynamic open/close label and plain popover semantics.
+- Saved workspace layout is treated as untrusted data and validated before use.
+
+## Phase 5 Current UI Contract
+
+[coverage: high]
+
+- The three workspace panels are titled `Library`, `Grimoire`, and `Familiar`.
+- Panel content must remain height-bounded inside the viewport; page-level
+  scrolling should not be required to reach library/search results or the
+  Familiar composer.
+- Grimoire header controls own page number, single-page/two-page view mode,
+  zoom out/in, and fit-width reset. Previous/next page controls live beside the
+  PDF canvas as minimal `<` and `>` side buttons.
+- Grimoire tabs show book/source titles only, not page-number suffixes.
+- Two-page mode keeps pages 1 and 2 as single pages, then displays page pairs
+  starting at 3/4, 5/6, and so on. An unpaired final page is shown alone.
+- The Familiar header owns the chat-history hamburger. The chat panel itself
+  contains only the transcript/history overlay and message composer.
+- The Familiar send action is positioned inside the lower-right corner of the
+  message text field.
 
 ## Sources
 

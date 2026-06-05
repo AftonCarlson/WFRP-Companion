@@ -42,6 +42,15 @@ class PageReferenceResponse(BaseModel):
     image_count: int
 
 
+class PageTextResponse(BaseModel):
+    page_id: str
+    book_id: str
+    page_number: int
+    page_label: str | None
+    text: str
+    text_chars: int
+
+
 class SourceSetResponse(BaseModel):
     id: str
     name: str

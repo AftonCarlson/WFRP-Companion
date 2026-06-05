@@ -30,6 +30,7 @@ def test_openapi_exposes_phase_4_api_paths(tmp_path: Path) -> None:
         "/api/books",
         "/api/books/{book_id}",
         "/api/books/{book_id}/pages/{page_number}",
+        "/api/books/{book_id}/pages/{page_number}/text",
         "/api/books/{book_id}/pdf",
         "/api/source-sets",
         "/api/source-sets/active",
