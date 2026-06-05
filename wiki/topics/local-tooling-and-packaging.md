@@ -20,7 +20,8 @@ global exact-search tools. Phase 3 added source-set management and made local
 search source-set-aware. Phase 4 added the first FastAPI backend surface over
 the local SQLite library. Phase 5 added the first browser GUI package in
 `frontend/`. Phase 6 adds the first streaming Familiar chat loop. Phase 7 PR1
-adds explicit SQLite migrations and typed source-object model contracts:
+adds explicit SQLite migrations and typed source-object model contracts; Phase
+7 PR2 adds the first deterministic source-object extraction command:
 
 - `wfrp_companion/library/identity.py` for stable book and folder IDs.
 - `wfrp_companion/library/discovery.py` for recursive PDF discovery.
@@ -43,8 +44,9 @@ adds explicit SQLite migrations and typed source-object model contracts:
   OpenAI provider streaming, and Familiar orchestration.
 - `wfrp_companion/db/migrations.py` for applying local SQLite schema
   migrations to existing databases.
-- `wfrp_companion/source_objects/` for typed source-object model contracts and
-  deterministic source-object IDs.
+- `wfrp_companion/source_objects/` for typed source-object model contracts,
+  deterministic source-object IDs, layout metadata loading, extraction state,
+  and heading/page-chunk source-object extraction.
 - `tools/import_pdfs.py` for importing all configured source PDFs into managed
   local storage.
 - `tools/import_page_text.py` for importing all configured page-text JSON into
@@ -58,6 +60,8 @@ adds explicit SQLite migrations and typed source-object model contracts:
   readiness probes.
 - `tools/migrate_db.py` for applying explicit local database migrations and
   reporting non-content row counts.
+- `tools/extract_source_objects.py` for extracting deterministic
+  `rule_section` and `page_chunk` rows into `source_objects`.
 - `frontend/` for the React/Vite browser GUI, including Library/Search tabs,
   source-set book toggles, PDF.js reader tabs, and the streaming Familiar
   panel.
@@ -244,6 +248,33 @@ python tools/search_text.py --all-books "critical hit"
 `--all-books` to deliberately search the whole indexed library. These scope
 flags are mutually exclusive. `--limit` is clamped to 100, and search only
 returns hits from books that are copied, text-imported, and indexed.
+
+Extract deterministic source objects after page text and global FTS are ready:
+
+```bash
+conda activate wfrp-companion
+python tools/extract_source_objects.py
+```
+
+The source-object extractor accepts:
+
+```bash
+python tools/extract_source_objects.py --data-dir "/path/to/private-data"
+python tools/extract_source_objects.py --db-path "/path/to/wfrp.sqlite"
+python tools/extract_source_objects.py --book-id <book_id>
+python tools/extract_source_objects.py --book-id <book_id> --book-id <other_book_id>
+python tools/extract_source_objects.py --force
+python tools/extract_source_objects.py --retry-running
+python tools/extract_source_objects.py --stale-running-minutes 30
+```
+
+The extractor only considers copied, text-imported, and exact-search-indexed
+books. It writes canonical rows to `source_objects`, updates
+`book_object_status`, records idempotent `ingest_jobs` with
+`job_type='extract_source_objects'`, and prints counts plus truncated failure
+summaries only. Current extraction types are `rule_section` and `page_chunk`;
+object FTS, table/stat/location passes, and Familiar object-aware ranking are
+later Phase 7 work.
 
 Run the local backend API with:
 

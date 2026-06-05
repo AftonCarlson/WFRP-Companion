@@ -164,9 +164,37 @@ Phase 7 PR1 adds the source-object schema foundation for richer extraction:
 - `source_object_search` and `source_object_search_fts` are rebuildable search
   projections over `source_objects`.
 
-This is schema-only at the moment. No extractor has populated these tables yet,
-and page-level `page_text` plus `page_search_fts` remain the active retrieval
-surface.
+Phase 7 PR2 adds the first deterministic extractor:
+
+- `wfrp_companion/source_objects/layout.py` reads optional PyMuPDF page layout
+  metadata from managed PDFs when available and falls back safely when the PDF
+  is missing or unreadable.
+- `wfrp_companion/source_objects/store.py` owns eligible-book selection,
+  text-snapshot hashing, extraction job claims, stale-running recovery, page
+  loading, source-object replacement, and `book_object_status` updates.
+- `wfrp_companion/source_objects/extractor.py` extracts page-local,
+  deterministic `rule_section` objects from heading patterns and
+  lower-confidence `page_chunk` fallback objects for uncovered text.
+- `tools/extract_source_objects.py` runs extraction for all eligible books or
+  repeatable `--book-id` filters, with `--force`, `--retry-running`, and
+  `--stale-running-minutes` recovery options.
+- OCR-derived pages are detected from `pages.extraction_method` values that
+  start with `ocr`; confidence is capped when word geometry is unavailable.
+- Rule-section IDs use page-local title-bucket ordinals and normalized text so
+  inserting or removing unrelated earlier same-page headings does not churn
+  unchanged later section IDs.
+- CLI output reports counts and truncated failure summaries only. It must not
+  print extracted book text.
+
+The real local source-object smoke run on 2026-06-05 extracted one indexed
+book into 738 source objects, then skipped the same book as current on rerun.
+This proves the extractor, status row, job idempotency, and snapshot-drift
+checks work against the live private database without committing private text.
+
+Current boundary: source objects can now be populated, but object FTS,
+table/stat/location extraction, and Familiar object-aware ranking remain later
+Phase 7 PRs. Page-level `page_text` plus `page_search_fts` still remain the
+active retrieval surface for Familiar and exact search.
 
 ## OCR
 

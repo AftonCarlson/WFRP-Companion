@@ -52,6 +52,21 @@ Important current boundary: Phase 7 PR1 does **not** yet extract source objects
 or change Familiar ranking. Until a later extractor/reranker phase lands,
 Familiar still uses the Phase 6 page-level exact-search retrieval path.
 
+Phase 7 PR2 adds deterministic source-object extraction, but not retrieval
+integration:
+
+- `tools/extract_source_objects.py` can populate `source_objects` with
+  heading-derived `rule_section` objects and `page_chunk` fallback objects for
+  all eligible copied/imported/indexed books or selected `--book-id` values.
+- `book_object_status` now records per-book extraction state and the page-text
+  snapshot hash used for idempotency.
+- Extracted objects preserve book/page/character-span citations and confidence
+  metadata, but `source_object_search_fts`, object-aware query planning, and
+  Familiar reranking are still later Phase 7 work.
+- Current Familiar answers still come from page-level exact search. Poor
+  answers caused by page-only retrieval are not fully solved until the
+  object-FTS/reranker/chat integration PRs land.
+
 ## Answer Contract
 
 [coverage: high]

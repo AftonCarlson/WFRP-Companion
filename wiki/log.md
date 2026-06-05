@@ -1,5 +1,37 @@
 # Wiki Compile Log
 
+## 2026-06-05 Phase 7 Deterministic Source Object Extraction Foundation
+
+- Added `wfrp_companion/source_objects/layout.py`,
+  `wfrp_companion/source_objects/store.py`,
+  `wfrp_companion/source_objects/extractor.py`, and
+  `tools/extract_source_objects.py`.
+- Implemented deterministic source-object extraction over copied,
+  text-imported, exact-search-indexed books.
+- Added per-book text snapshot hashing, explicit `book_object_status`
+  lifecycle updates, idempotent `extract_source_objects` ingest jobs,
+  stale-running recovery, and failure recording.
+- Added PyMuPDF layout metadata loading with safe fallback when managed PDFs
+  are missing or unreadable.
+- Added heading-derived `rule_section` extraction and lower-confidence
+  `page_chunk` fallback extraction for pages/regions not covered by rule
+  sections.
+- Kept object IDs stable by using page-local title-bucket ordinals plus
+  normalized text hashes, including a regression for unrelated earlier
+  same-page heading insertion.
+- Ran a live private smoke check for one indexed book: 738 source objects were
+  written on the first run and the same book was skipped as current on rerun.
+  No private extracted text was committed or logged in wiki output.
+- Completed independent review, fixed the reported same-page ID churn issue,
+  and reran verification.
+- Verification run for this pass: focused source-object/tool tests reported 30
+  tests passing, backend coverage reported 283 tests passing with 100%
+  coverage, `ruff check .` passed, frontend Vitest reported 122 tests passing
+  with coverage above configured thresholds, frontend production build passed,
+  and Playwright e2e reported 2 tests passing.
+- Important boundary: object FTS, table/stat/location extraction, and Familiar
+  object-aware ranking remain later Phase 7 PRs.
+
 ## 2026-06-05 Phase 7 Typed Source Object Schema Foundation
 
 - Added the Phase 7 implementation plan at

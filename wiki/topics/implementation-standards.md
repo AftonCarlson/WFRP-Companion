@@ -37,8 +37,10 @@ The current codebase has working local implementations for steps 1 through 6:
 - `frontend/src/components/chat/AgentChatPanel.tsx` streams Familiar output and
   opens citations in Grimoire.
 - `wfrp_companion/db/migrations.py`, `tools/migrate_db.py`, and
-  `wfrp_companion/source_objects/` now provide the Phase 7 PR1 foundation for
-  future typed source-object extraction and object-aware retrieval.
+  `wfrp_companion/source_objects/` now provide the Phase 7 source-object
+  foundation: explicit migrations, typed model contracts, deterministic
+  `rule_section` and `page_chunk` extraction, and object extraction lifecycle
+  state for future object-aware retrieval.
 
 ## Rules For New Code
 
@@ -78,6 +80,8 @@ The current codebase has working local implementations for steps 1 through 6:
 - Rebuild global FTS through `tools/rebuild_fts.py` after page text changes.
 - Run `tools/source_sets.py init` after importing books so built-in source sets
   include all current books.
+- Run `tools/extract_source_objects.py` after page text import and global FTS
+  rebuild when typed source-object rows need to be refreshed.
 - Treat `source_set_books.enabled` as scope membership only. Do not use it as a
   replacement for readiness state.
 - Keep exact-search readiness gating in `search_exact()` and the `books`
@@ -130,6 +134,11 @@ database behavior should preserve these constraints:
 - Keep typed source-object extraction state explicit in
   `book_object_status`; do not infer readiness from frontend state or incidental
   FTS projection rows.
+- Treat `source_objects` as canonical private local structured evidence and
+  `source_object_search` / `source_object_search_fts` as rebuildable
+  projections.
+- Keep source-object extractor output count-oriented. Do not log or commit
+  extracted book text.
 
 ## Documentation Rules
 

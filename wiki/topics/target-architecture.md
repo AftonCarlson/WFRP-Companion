@@ -140,8 +140,24 @@ Phase 7 PR1 adds the typed source-object schema and migration foundation:
   contracts and deterministic source-object IDs. IDs hash normalized text so
   whitespace-only OCR changes do not churn identifiers.
 
-Phase 7 PR1 is foundation-only. It does not yet populate `source_objects`,
-build object FTS rows, or change Familiar retrieval ranking.
+Phase 7 PR2 adds the first deterministic source-object extraction foundation:
+
+- `wfrp_companion/source_objects/layout.py` reads PyMuPDF page layout metadata
+  when the managed PDF is available and returns an empty layout set when it is
+  missing or unreadable.
+- `wfrp_companion/source_objects/store.py` owns source-object extraction
+  eligibility, text snapshot hashes, job claims, stale-running recovery,
+  source-object replacement, and `book_object_status` updates.
+- `wfrp_companion/source_objects/extractor.py` creates `rule_section` objects
+  from heading patterns and `page_chunk` fallback objects for uncovered text.
+- `tools/extract_source_objects.py` runs that extraction for the eligible
+  library or selected `--book-id` values.
+- Rule-section IDs use page-local title-bucket ordinals plus normalized text
+  hashes so unrelated earlier same-page headings do not churn unchanged later
+  section IDs.
+
+Phase 7 PR2 still does not build object FTS rows or change Familiar retrieval
+ranking.
 
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
@@ -150,7 +166,9 @@ source-of-truth areas are library folders, books, pages, page text, page
 search, FTS, ingest jobs, source sets, chat threads, retrieval runs, model
 runs, and the `book_readiness` view. Source-set state is now populated in
 `source_sets`, `source_set_books`, and `app_settings.active_source_set_id`.
-Typed source-object tables exist but remain empty until the extractor phase.
+Typed source-object tables can now be populated with deterministic
+`rule_section` and `page_chunk` rows, but object search projections remain
+unpopulated until the object FTS phase.
 The local API now surfaces library, source-set, exact-search, page-text,
 managed-PDF reader, and streaming chat operations. The frontend now surfaces
 library selection, exact search, page-text expansion, PDF reading, and the

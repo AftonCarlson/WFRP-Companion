@@ -893,21 +893,22 @@ Files:
 - Create: `wfrp_companion/source_objects/store.py`
 - Create: `tools/extract_source_objects.py`
 - Create: `tests/source_objects/test_extractor.py`
+- Create: `tests/source_objects/test_layout.py`
 - Create: `tests/source_objects/test_store.py`
 - Create: `tests/tools/test_extract_source_objects.py`
 
 Tasks:
 
-- [ ] Implement per-book text snapshot hashing.
-- [ ] Implement guarded extraction job claim and stale-running recovery.
-- [ ] Implement page text loading from SQLite.
-- [ ] Implement PyMuPDF layout loading from `books.managed_pdf_path` when available.
-- [ ] Implement OCR-derived page detection from imported page metadata and cap layout-dependent confidence when word geometry is unavailable.
-- [ ] Extract `rule_section` objects from heading patterns and page text spans.
-- [ ] Create `page_chunk` fallback objects for pages/regions not covered by stronger types.
-- [ ] Persist `book_object_status`.
-- [ ] Add synthetic born-digital and OCR-only fixtures with fake RPG-like text, not WFRP book text.
-- [ ] Run focused extractor/store/tool tests.
+- [x] Implement per-book text snapshot hashing.
+- [x] Implement guarded extraction job claim and stale-running recovery.
+- [x] Implement page text loading from SQLite.
+- [x] Implement PyMuPDF layout loading from `books.managed_pdf_path` when available.
+- [x] Implement OCR-derived page detection from imported page metadata and cap layout-dependent confidence when word geometry is unavailable.
+- [x] Extract `rule_section` objects from heading patterns and page text spans.
+- [x] Create `page_chunk` fallback objects for pages/regions not covered by stronger types.
+- [x] Persist `book_object_status`.
+- [x] Add synthetic born-digital and OCR-only fixtures with fake RPG-like text, not WFRP book text.
+- [x] Run focused extractor/store/tool tests.
 
 What does not change yet:
 

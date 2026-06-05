@@ -7,8 +7,9 @@
 Application tests now exist for the Phase 1 SQLite/config foundation, the Phase
 2 managed PDF library importer, the page-text importer, the global exact-search
 path, Phase 3 source-set management/search scoping, Phase 4 local FastAPI
-backend API, Phase 5 browser GUI, Phase 6 Familiar chat loop, and Phase 7 PR1
-source-object migration/model foundation. Python testing runs through the
+backend API, Phase 5 browser GUI, Phase 6 Familiar chat loop, Phase 7 PR1
+source-object migration/model foundation, and Phase 7 PR2 deterministic
+source-object extraction foundation. Python testing runs through the
 `wfrp-companion` Conda environment. Frontend testing runs through npm in
 `frontend/`.
 
@@ -58,7 +59,7 @@ Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
 ```
 
 Current frontend verification commands:
@@ -104,8 +105,12 @@ Current focused test files:
 - `tests/tools/test_serve_api.py`
 - `tests/tools/test_dev.py`
 - `tests/tools/test_migrate_db.py`
+- `tests/tools/test_extract_source_objects.py`
 - `tests/tools/test_source_sets_cli.py`
 - `tests/source_objects/test_models.py`
+- `tests/source_objects/test_extractor.py`
+- `tests/source_objects/test_layout.py`
+- `tests/source_objects/test_store.py`
 - `frontend/src/**/*.test.ts`
 - `frontend/src/**/*.test.tsx`
 - `frontend/e2e/workspace.spec.ts`
@@ -115,9 +120,14 @@ key settings, lifecycle constraints, source/asset boolean constraints, asset
 page consistency, explicit schema migrations, migration rollback behavior,
 missing/uninitialized DB refusal, duplicate legacy retrieval-rank preflights,
 source-object constraints and deterministic normalized IDs, the
-`tools/init_db.py` CLI entrypoint, managed PDF identity, recursive discovery,
-SHA/atomic-copy storage helpers, idempotent library import, copy-job recovery,
-collision/failure reporting, the `tools/import_pdfs.py` CLI entrypoint,
+source-object constraints and deterministic normalized IDs, source-object
+extraction lifecycle/status/job behavior, text snapshot hashing, layout
+fallback, OCR confidence metadata, heading-derived rule sections, page-chunk
+fallback, same-page/same-title object ID stability, the
+`tools/extract_source_objects.py` CLI entrypoint, the `tools/init_db.py` CLI
+entrypoint, managed PDF identity, recursive discovery, SHA/atomic-copy storage
+helpers, idempotent library import, copy-job recovery, collision/failure
+reporting, the `tools/import_pdfs.py` CLI entrypoint,
 page-text JSON validation, import idempotency, failed/stale import repair,
 file-level quarantine jobs, global FTS rebuild idempotency, stale FTS
 projection cleanup, FTS integrity checks, readiness-gated exact search,
@@ -127,7 +137,8 @@ whole-library override behavior, per-book search filters, shared search scope
 resolution, API startup/health, OpenAPI route presence, API error mapping,
 book/page/page-text/PDF reader routes, PDF range/path-safety responses,
 source-set routes, exact-search routes, chat routes, and the page-text,
-source-set, search, API, dev, and migration CLI entrypoints.
+source-set, search, API, dev, migration, and source-object extraction CLI
+entrypoints.
 
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
@@ -137,7 +148,7 @@ zoom, and view-mode behavior, two-page spread math, guarded PDF.js
 rendering/retry and cancellation behavior, Familiar shell behavior, and browser
 e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-05 reported 253 tests
+The latest full backend verification command on 2026-06-05 reported 283 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 122 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful
