@@ -24,21 +24,26 @@ function renderShell() {
 it("renders the three workspace panel slots", () => {
   renderShell();
 
+  expect(screen.getByRole("region", { name: "Library" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Grimoire" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Familiar" })).toBeInTheDocument();
   expect(screen.getByText("Library slot")).toBeInTheDocument();
   expect(screen.getByText("Reader slot")).toBeInTheDocument();
   expect(screen.getByText("Chat slot")).toBeInTheDocument();
   expect(screen.getByText("3 books enabled")).toBeInTheDocument();
+  expect(screen.queryByText("Library / Search")).not.toBeInTheDocument();
+  expect(screen.queryByText("Agent Chat")).not.toBeInTheDocument();
 });
 
 it("collapses and restores a panel", async () => {
   const user = userEvent.setup();
   renderShell();
 
-  await user.click(screen.getByRole("button", { name: "Collapse Agent Chat" }));
+  await user.click(screen.getByRole("button", { name: "Collapse Familiar" }));
 
   expect(screen.queryByText("Chat slot")).not.toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "Agent Chat" }));
+  await user.click(screen.getByRole("button", { name: "Familiar" }));
 
   expect(screen.getByText("Chat slot")).toBeInTheDocument();
 });
@@ -47,14 +52,58 @@ it("maximizes and restores a panel", async () => {
   const user = userEvent.setup();
   renderShell();
 
-  await user.click(screen.getByRole("button", { name: "Maximize PDF Reader" }));
+  await user.click(screen.getByRole("button", { name: "Maximize Grimoire" }));
 
   expect(screen.getByText("Reader slot")).toBeInTheDocument();
   expect(screen.queryByText("Library slot")).not.toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "Restore PDF Reader" }));
+  await user.click(screen.getByRole("button", { name: "Restore Grimoire" }));
 
   expect(screen.getByText("Library slot")).toBeInTheDocument();
+});
+
+it("renders GRIMOIRE header controls in the reader panel header", () => {
+  renderApp(
+    <AppShell
+      agent={() => <div>Chat slot</div>}
+      agentHeaderControls={() => null}
+      enabledBookCount={1}
+      left={() => <div>Library slot</div>}
+      reader={() => <div>Reader slot</div>}
+      readerHeaderControls={() => (
+        <div aria-label="PDF controls">
+          <button type="button">Single-page view</button>
+        </div>
+      )}
+    />,
+  );
+
+  expect(screen.getByRole("region", { name: "Grimoire" })).toBeInTheDocument();
+  expect(screen.getByText("Grimoire")).toBeInTheDocument();
+  expect(screen.queryByText("PDF Reader")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("PDF controls")).toBeInTheDocument();
+  expect(screen.getByLabelText("PDF controls").parentElement).toHaveClass(
+    "workspace-panel__header-tools--center",
+  );
+});
+
+it("renders Familiar header controls in the agent panel header", () => {
+  renderApp(
+    <AppShell
+      agent={() => <div>Chat slot</div>}
+      agentHeaderControls={() => (
+        <button aria-label="Open chat history" type="button">
+          History
+        </button>
+      )}
+      enabledBookCount={1}
+      left={() => <div>Library slot</div>}
+      reader={() => <div>Reader slot</div>}
+    />,
+  );
+
+  expect(screen.getByRole("region", { name: "Familiar" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Open chat history")).toBeInTheDocument();
 });
 
 it("shows loading and error banners", () => {
@@ -98,6 +147,38 @@ it("opens the view menu and resets persisted layout", async () => {
   expect(screen.getByText("Library slot")).toBeInTheDocument();
 });
 
+it("focuses the library tab from the top bar", async () => {
+  const user = userEvent.setup();
+  localStorage.setItem(
+    WORKSPACE_STORAGE_KEY,
+    JSON.stringify({
+      leftTab: "search",
+      panels: {
+        left: { size: 500, collapsed: false, maximized: false },
+        reader: { size: 1, collapsed: false, maximized: false },
+        agent: { size: 330, collapsed: false, maximized: false },
+      },
+      collapsedLibraryCategories: [],
+      openPdfTabs: [],
+      activePdfTabId: null,
+    }),
+  );
+
+  renderApp(
+    <AppShell
+      agent={() => <div>Chat slot</div>}
+      enabledBookCount={1}
+      left={(context) => <div>Left tab {context.layout.leftTab}</div>}
+      reader={() => <div>Reader slot</div>}
+    />,
+  );
+
+  expect(screen.getByText("Left tab search")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Library" }));
+
+  expect(screen.getByText("Left tab library")).toBeInTheDocument();
+});
+
 it("restores the library panel from top bar controls", async () => {
   const user = userEvent.setup();
   localStorage.setItem(
@@ -118,7 +199,35 @@ it("restores the library panel from top bar controls", async () => {
 
   expect(screen.queryByText("Library slot")).not.toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "Library" }));
+  await user.click(screen.getByRole("button", { name: "3 books enabled" }));
+
+  expect(screen.getByText("Library slot")).toBeInTheDocument();
+});
+
+it("restores the library panel from its restore rail", async () => {
+  const user = userEvent.setup();
+  localStorage.setItem(
+    WORKSPACE_STORAGE_KEY,
+    JSON.stringify({
+      leftTab: "search",
+      panels: {
+        left: { size: 500, collapsed: true, maximized: false },
+        reader: { size: 1, collapsed: false, maximized: false },
+        agent: { size: 330, collapsed: false, maximized: false },
+      },
+      collapsedLibraryCategories: [],
+      openPdfTabs: [],
+      activePdfTabId: null,
+    }),
+  );
+  renderShell();
+
+  const restoreLibrary = screen
+    .getAllByRole("button", { name: "Library" })
+    .find((button) => button.classList.contains("restore-rail"));
+  expect(restoreLibrary).toBeDefined();
+
+  await user.click(restoreLibrary!);
 
   expect(screen.getByText("Library slot")).toBeInTheDocument();
 });
@@ -166,6 +275,7 @@ it("passes workspace state actions into panel slots", async () => {
             <span>Open tabs {context.layout.openPdfTabs.length}</span>
             <span>Active page {activeTab?.pageNumber ?? "none"}</span>
             <span>Active zoom {activeTab?.zoom ?? "none"}</span>
+            <span>Active view {activeTab?.viewMode ?? "none"}</span>
             <button onClick={() => context.selectPdfTab("core-rules")} type="button">
               Select context PDF
             </button>
@@ -180,6 +290,12 @@ it("passes workspace state actions into panel slots", async () => {
               type="button"
             >
               Set context zoom
+            </button>
+            <button
+              onClick={() => context.setPdfTabViewMode("core-rules", "two-page")}
+              type="button"
+            >
+              Set context view
             </button>
             <button onClick={() => context.closePdfTab("core-rules")} type="button">
               Close context PDF
@@ -196,11 +312,13 @@ it("passes workspace state actions into panel slots", async () => {
   await user.click(screen.getByRole("button", { name: "Select context PDF" }));
   await user.click(screen.getByRole("button", { name: "Set context page" }));
   await user.click(screen.getByRole("button", { name: "Set context zoom" }));
+  await user.click(screen.getByRole("button", { name: "Set context view" }));
   await user.click(screen.getByRole("button", { name: "Set search tab" }));
   await user.click(screen.getByRole("button", { name: "Toggle category" }));
 
   expect(screen.getByText("Active page 12")).toBeInTheDocument();
   expect(screen.getByText("Active zoom 2")).toBeInTheDocument();
+  expect(screen.getByText("Active view two-page")).toBeInTheDocument();
   expect(screen.getByText("Left tab search")).toBeInTheDocument();
   expect(screen.getByText("Collapsed categories Rules / Core")).toBeInTheDocument();
 
@@ -213,7 +331,7 @@ it("resizes side panels by dragging dividers", () => {
   renderShell();
 
   fireEvent.pointerDown(
-    screen.getByRole("separator", { name: "Resize Library and PDF Reader" }),
+    screen.getByRole("separator", { name: "Resize Library and Grimoire" }),
     { clientX: 300 },
   );
   fireEvent.pointerMove(window, { clientX: 340 });
@@ -228,7 +346,7 @@ it("resizes the agent panel by dragging the right divider", () => {
   renderShell();
 
   fireEvent.pointerDown(
-    screen.getByRole("separator", { name: "Resize PDF Reader and Agent Chat" }),
+    screen.getByRole("separator", { name: "Resize Grimoire and Familiar" }),
     { clientX: 700 },
   );
   fireEvent.pointerMove(window, { clientX: 680 });

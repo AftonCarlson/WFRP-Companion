@@ -2,6 +2,7 @@ import { RotateCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { errorMessage } from "../../lib/apiError";
+import { visiblePdfPages } from "../../lib/pdfPages";
 import {
   getDocument,
   type PDFDocumentLoadingTask,
@@ -12,65 +13,119 @@ import { pdfUrlForBook } from "../../lib/pdfUrl";
 import type { PdfTab } from "../../state/workspaceState";
 
 export type PdfCanvasProps = {
+  onDocumentLoaded?: (pageCount: number) => void;
   tab: PdfTab;
 };
 
 type RenderStatus = "idle" | "loading" | "rendering" | "ready" | "error";
 
-export function PdfCanvas({ tab }: PdfCanvasProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+export function PdfCanvas({ onDocumentLoaded, tab }: PdfCanvasProps) {
+  const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
+  const documentRef = useRef<PDFDocumentProxy | null>(null);
+  const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
+  const onDocumentLoadedRef = useRef(onDocumentLoaded);
+  const renderTasksRef = useRef<RenderTask[]>([]);
+  const [pageCount, setPageCount] = useState<number | null>(null);
   const [status, setStatus] = useState<RenderStatus>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [renderAttempt, setRenderAttempt] = useState(0);
 
   useEffect(() => {
-    let cancelled = false;
-    let loadingTask: PDFDocumentLoadingTask | null = null;
-    let documentProxy: PDFDocumentProxy | null = null;
-    let renderTask: RenderTask | null = null;
+    onDocumentLoadedRef.current = onDocumentLoaded;
+  }, [onDocumentLoaded]);
 
-    async function renderPage() {
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDocument() {
       setStatus("loading");
+      setMessage(null);
+      setPageCount(null);
+      documentRef.current = null;
+
+      try {
+        const loadingTask = getDocument({ url: pdfUrlForBook(tab.bookId) });
+        loadingTaskRef.current = loadingTask;
+        const documentProxy = await loadingTask.promise;
+        if (cancelled) {
+          return;
+        }
+        documentRef.current = documentProxy;
+        onDocumentLoadedRef.current?.(documentProxy.numPages);
+        setPageCount(documentProxy.numPages);
+      } catch (error) {
+        if (!cancelled) {
+          setStatus("error");
+          setMessage(errorMessage(error));
+        }
+      }
+    }
+
+    void loadDocument();
+
+    return () => {
+      cancelled = true;
+      cancelRenderTasks();
+      void loadingTaskRef.current?.destroy();
+      void documentRef.current?.cleanup();
+      loadingTaskRef.current = null;
+      documentRef.current = null;
+    };
+  }, [tab.bookId, renderAttempt]);
+
+  const visiblePages = visiblePdfPages(
+    tab.pageNumber,
+    pageCount ?? tab.pageNumber,
+    tab.viewMode,
+  );
+  const visiblePageKey = visiblePages.join(",");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function renderPages() {
+      const documentProxy = documentRef.current;
+      if (!documentProxy || pageCount === null) {
+        return;
+      }
+      cancelRenderTasks();
+      setStatus("rendering");
       setMessage(null);
 
       try {
-        loadingTask = getDocument({ url: pdfUrlForBook(tab.bookId) });
-        documentProxy = await loadingTask.promise;
-        if (cancelled) {
-          return;
-        }
+        await Promise.all(
+          visiblePages.map(async (pageNumber) => {
+            const page = await documentProxy.getPage(pageNumber);
+            if (cancelled) {
+              return;
+            }
 
-        const pageNumber = Math.min(
-          Math.max(tab.pageNumber, 1),
-          documentProxy.numPages,
+            const canvas = canvasRefs.current[pageNumber];
+            const canvasContext = canvas?.getContext("2d");
+            if (!canvas || !canvasContext) {
+              throw new Error("Unable to create PDF canvas context.");
+            }
+
+            const viewport = page.getViewport({ scale: tab.zoom });
+            const outputScale = window.devicePixelRatio || 1;
+            canvas.width = Math.floor(viewport.width * outputScale);
+            canvas.height = Math.floor(viewport.height * outputScale);
+            canvas.style.width = `${viewport.width}px`;
+            canvas.style.height = `${viewport.height}px`;
+
+            const renderTask = page.render({
+              canvas,
+              canvasContext,
+              viewport,
+              transform:
+                outputScale === 1
+                  ? undefined
+                  : [outputScale, 0, 0, outputScale, 0, 0],
+            });
+            renderTasksRef.current.push(renderTask);
+            await renderTask.promise;
+          }),
         );
-        const page = await documentProxy.getPage(pageNumber);
-        if (cancelled) {
-          return;
-        }
-
-        const canvas = canvasRef.current;
-        const canvasContext = canvas?.getContext("2d");
-        if (!canvas || !canvasContext) {
-          throw new Error("Unable to create PDF canvas context.");
-        }
-
-        const viewport = page.getViewport({ scale: tab.zoom });
-        const outputScale = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = `${viewport.width}px`;
-        canvas.style.height = `${viewport.height}px`;
-
-        setStatus("rendering");
-        renderTask = page.render({
-          canvas,
-          canvasContext,
-          viewport,
-          transform:
-            outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0],
-        });
-        await renderTask.promise;
 
         if (!cancelled) {
           setStatus("ready");
@@ -83,18 +138,16 @@ export function PdfCanvas({ tab }: PdfCanvasProps) {
       }
     }
 
-    void renderPage();
+    void renderPages();
 
     return () => {
       cancelled = true;
-      renderTask?.cancel();
-      void loadingTask?.destroy();
-      void documentProxy?.cleanup();
+      cancelRenderTasks();
     };
-  }, [tab.bookId, tab.pageNumber, tab.zoom, renderAttempt]);
+  }, [pageCount, tab.zoom, visiblePageKey]);
 
   return (
-    <div className="pdf-canvas" aria-live="polite">
+    <div className={`pdf-canvas pdf-canvas--${tab.viewMode}`} aria-live="polite">
       {status === "loading" || status === "rendering" ? (
         <div className="pdf-canvas__status">
           {status === "loading" ? "Loading PDF..." : "Rendering page..."}
@@ -102,7 +155,7 @@ export function PdfCanvas({ tab }: PdfCanvasProps) {
       ) : null}
       {status === "error" ? (
         <div className="pdf-canvas__status pdf-canvas__status--error">
-          <span>{message ?? "Unable to render PDF page."}</span>
+          <span>{message}</span>
           <button
             aria-label="Retry PDF render"
             onClick={() => setRenderAttempt((attempt) => attempt + 1)}
@@ -113,7 +166,24 @@ export function PdfCanvas({ tab }: PdfCanvasProps) {
           </button>
         </div>
       ) : null}
-      <canvas ref={canvasRef} aria-label={`${tab.title} page ${tab.pageNumber}`} />
+      <div className="pdf-canvas__pages">
+        {visiblePages.map((pageNumber) => (
+          <canvas
+            aria-label={`${tab.title} page ${pageNumber}`}
+            key={pageNumber}
+            ref={(canvas) => {
+              canvasRefs.current[pageNumber] = canvas;
+            }}
+          />
+        ))}
+      </div>
     </div>
   );
+
+  function cancelRenderTasks() {
+    for (const task of renderTasksRef.current) {
+      task.cancel();
+    }
+    renderTasksRef.current = [];
+  }
 }

@@ -97,6 +97,7 @@ it("renders grouped checkbox rows and opens books", async () => {
   );
 
   expect(screen.getByRole("button", { name: /Rules \/ Core/i })).toBeInTheDocument();
+  expect(screen.queryByText("Open")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Open Core Rules" }));
 
   expect(onOpenBook).toHaveBeenCalledWith(expect.objectContaining({ book_id: "core-rules" }));

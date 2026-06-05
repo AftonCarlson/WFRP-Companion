@@ -1,5 +1,31 @@
 # Wiki Compile Log
 
+## 2026-06-04 Phase 5 Browser GUI Refinement
+
+- Refined the first browser GUI around the user-approved workspace language:
+  `Library`, `Grimoire`, and `Familiar`.
+- Moved Grimoire page/zoom/view controls into the panel header, centered them
+  in the header, and kept previous/next page movement as minimal side controls
+  beside the PDF viewport.
+- Added single-page/two-page Grimoire view mode. Two-page mode shows pages 1
+  and 2 alone, then pairs pages from 3/4 onward, with an unpaired final page
+  shown alone.
+- Changed Grimoire source tabs to show source titles only, placed close controls
+  visually inside the tabs, and kept close controls outside the semantic
+  `tablist` while sharing the tab strip scroll layer.
+- Changed Library/Search open actions to compact book-icon buttons.
+- Moved the Familiar history hamburger into the panel header, removed the
+  duplicate internal chat header, and positioned the send action inside the
+  lower-right corner of the message text field.
+- Added tests for the refined panel labels, header controls, PDF tab labels,
+  two-page spread math, clamped PDF page behavior, compact open actions, and
+  Familiar composer layout.
+- Completed independent review, fixed the reported tab-scroll and out-of-range
+  PDF page consistency issues, then reran the frontend gate: 106 Vitest tests
+  passed with 100% statements / branches / functions / lines coverage,
+  production build passed, Playwright e2e passed, and `git diff --check` was
+  clean.
+
 ## 2026-06-04 Phase 5 Browser GUI Shell
 
 - Added the Phase 5 implementation plan at

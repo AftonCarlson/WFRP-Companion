@@ -117,7 +117,7 @@ it("opens a PDF tab from the library", async () => {
   await user.click(await screen.findByRole("button", { name: "Open Core Rules" }));
 
   expect(
-    screen.getByRole("tab", { name: /Core Rules p\. 1/i }),
+    screen.getByRole("tab", { name: "Core Rules" }),
   ).toBeInTheDocument();
   expect(screen.getByTestId("pdf-canvas")).toBeInTheDocument();
 });

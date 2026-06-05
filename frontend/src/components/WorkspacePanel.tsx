@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 export type WorkspacePanelProps = {
   children: ReactNode;
   collapsed: boolean;
+  headerTools?: ReactNode;
   maximized: boolean;
   onCollapse: () => void;
   onMaximize: () => void;
@@ -13,6 +14,7 @@ export type WorkspacePanelProps = {
 export function WorkspacePanel({
   children,
   collapsed,
+  headerTools,
   maximized,
   onCollapse,
   onMaximize,
@@ -25,7 +27,10 @@ export function WorkspacePanel({
   return (
     <section className="workspace-panel" aria-label={title}>
       <header className="workspace-panel__header">
-        <strong>{title}</strong>
+        <strong className="workspace-panel__title">{title}</strong>
+        {headerTools ? (
+          <div className="workspace-panel__header-tools">{headerTools}</div>
+        ) : null}
         <div className="workspace-panel__controls">
           <button type="button" onClick={onCollapse} aria-label={`Collapse ${title}`}>
             <PanelLeftClose aria-hidden="true" size={15} />

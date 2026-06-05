@@ -1,15 +1,22 @@
 import { useEffect, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
-import { AgentChatPanel } from "./components/chat/AgentChatPanel";
+import {
+  AgentChatHeaderControls,
+  AgentChatPanel,
+} from "./components/chat/AgentChatPanel";
 import { LibrarySearchPanel } from "./components/library/LibrarySearchPanel";
-import { PdfReaderPanel } from "./components/pdf/PdfReaderPanel";
+import {
+  PdfReaderControls,
+  PdfReaderPanel,
+} from "./components/pdf/PdfReaderPanel";
 import { useInitialWorkspaceData } from "./hooks/useInitialWorkspaceData";
 import type { SourceSetBookResponse } from "./types/api";
 import "./App.css";
 
 export default function App() {
   const { data, error, loading } = useInitialWorkspaceData();
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
   const [sourceSetBooks, setSourceSetBooks] = useState<
     SourceSetBookResponse[]
   >([]);
@@ -30,7 +37,13 @@ export default function App() {
 
   return (
     <AppShell
-      agent={() => <AgentChatPanel />}
+      agent={() => <AgentChatPanel historyOpen={chatHistoryOpen} />}
+      agentHeaderControls={() => (
+        <AgentChatHeaderControls
+          historyOpen={chatHistoryOpen}
+          setHistoryOpen={setChatHistoryOpen}
+        />
+      )}
       enabledBookCount={enabledBookCount}
       error={error}
       left={(context) => (
@@ -55,6 +68,14 @@ export default function App() {
           onCloseTab={context.closePdfTab}
           onSelectTab={context.selectPdfTab}
           onSetPage={context.setPdfTabPage}
+          openTabs={context.layout.openPdfTabs}
+        />
+      )}
+      readerHeaderControls={(context) => (
+        <PdfReaderControls
+          activeTabId={context.layout.activePdfTabId}
+          onSetPage={context.setPdfTabPage}
+          onSetViewMode={context.setPdfTabViewMode}
           onSetZoom={context.setPdfTabZoom}
           openTabs={context.layout.openPdfTabs}
         />

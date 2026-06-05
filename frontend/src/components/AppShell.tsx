@@ -11,9 +11,11 @@ import {
   selectPdfTab,
   setLeftTab,
   setPdfTabPage,
+  setPdfTabViewMode,
   setPdfTabZoom,
   toggleLibraryCategory,
   togglePanelCollapsed,
+  type PdfViewMode,
   type PdfTabInput,
   type LeftTab,
   type PanelId,
@@ -32,11 +34,13 @@ import "./AppShell.css";
 
 export type AppShellProps = {
   agent: (context: AppShellContext) => ReactNode;
+  agentHeaderControls?: (context: AppShellContext) => ReactNode;
   enabledBookCount: number;
   error?: string | null;
   left: (context: AppShellContext) => ReactNode;
   loading?: boolean;
   reader: (context: AppShellContext) => ReactNode;
+  readerHeaderControls?: (context: AppShellContext) => ReactNode;
 };
 
 export type AppShellContext = {
@@ -46,17 +50,20 @@ export type AppShellContext = {
   selectPdfTab: (tabId: string) => void;
   setLeftTab: (leftTab: LeftTab) => void;
   setPdfTabPage: (tabId: string, pageNumber: number) => void;
+  setPdfTabViewMode: (tabId: string, viewMode: PdfViewMode) => void;
   setPdfTabZoom: (tabId: string, zoom: number) => void;
   toggleLibraryCategory: (category: string) => void;
 };
 
 export function AppShell({
   agent,
+  agentHeaderControls,
   enabledBookCount,
   error,
   left,
   loading = false,
   reader,
+  readerHeaderControls,
 }: AppShellProps) {
   const [layout, setLayout] = useState<WorkspaceLayout>(() =>
     loadWorkspaceLayout(),
@@ -100,12 +107,22 @@ export function AppShell({
     setLeftTab: focusLeftTab,
     setPdfTabPage: (tabId, pageNumber) =>
       updateLayout(setPdfTabPage(layout, tabId, pageNumber)),
-    setPdfTabZoom: (tabId, zoom) => updateLayout(setPdfTabZoom(layout, tabId, zoom)),
+    setPdfTabViewMode: (tabId, viewMode) =>
+      updateLayout(setPdfTabViewMode(layout, tabId, viewMode)),
+    setPdfTabZoom: (tabId, zoom) =>
+      updateLayout(setPdfTabZoom(layout, tabId, zoom)),
     toggleLibraryCategory: (category) =>
       updateLayout(toggleLibraryCategory(layout, category)),
   };
+  const readerHeaderTools = readerHeaderControls?.(context);
+  const agentHeaderTools = agentHeaderControls?.(context);
 
-  function panel(panelId: PanelId, title: string, children: ReactNode) {
+  function panel(
+    panelId: PanelId,
+    title: string,
+    children: ReactNode,
+    headerTools?: ReactNode,
+  ) {
     const panelLayout = layout.panels[panelId];
     if (maximizedPanel && maximizedPanel !== panelId) {
       return null;
@@ -121,6 +138,7 @@ export function AppShell({
     return (
       <WorkspacePanel
         collapsed={panelLayout.collapsed}
+        headerTools={headerTools}
         maximized={panelLayout.maximized}
         onCollapse={() => updateLayout(togglePanelCollapsed(layout, panelId))}
         onMaximize={() => updateLayout(maximizePanel(layout, panelId))}
@@ -152,10 +170,10 @@ export function AppShell({
       {loading ? <div className="app-banner">Loading local library...</div> : null}
       {error ? <div className="app-banner app-banner--error">{error}</div> : null}
       <div className="workspace-grid" style={{ gridTemplateColumns }}>
-        {panel("left", "Library / Search", left(context))}
+        {panel("left", "Library", left(context))}
         {maximizedPanel ? null : (
           <PanelDivider
-            label="Resize Library and PDF Reader"
+            label="Resize Library and Grimoire"
             onResize={(delta) =>
               updateLayout(
                 resizePanel(layout, "left", layout.panels.left.size + delta),
@@ -166,10 +184,19 @@ export function AppShell({
             valueNow={layout.panels.left.size}
           />
         )}
-        {panel("reader", "PDF Reader", reader(context))}
+        {panel(
+          "reader",
+          "Grimoire",
+          reader(context),
+          readerHeaderTools ? (
+            <div className="workspace-panel__header-tools--center">
+              {readerHeaderTools}
+            </div>
+          ) : null,
+        )}
         {maximizedPanel ? null : (
           <PanelDivider
-            label="Resize PDF Reader and Agent Chat"
+            label="Resize Grimoire and Familiar"
             onResize={(delta) =>
               updateLayout(
                 resizePanel(layout, "agent", layout.panels.agent.size - delta),
@@ -180,7 +207,12 @@ export function AppShell({
             valueNow={layout.panels.agent.size}
           />
         )}
-        {panel("agent", "Agent Chat", agent(context))}
+        {panel(
+          "agent",
+          "Familiar",
+          agent(context),
+          agentHeaderTools,
+        )}
       </div>
     </main>
   );

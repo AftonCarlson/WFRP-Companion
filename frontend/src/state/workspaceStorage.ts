@@ -67,7 +67,10 @@ function isPdfTab(value: unknown): value is PdfTab {
     typeof candidate.pageNumber === "number" &&
     Number.isFinite(candidate.pageNumber) &&
     typeof candidate.zoom === "number" &&
-    Number.isFinite(candidate.zoom)
+    Number.isFinite(candidate.zoom) &&
+    (candidate.viewMode === undefined ||
+      candidate.viewMode === "single" ||
+      candidate.viewMode === "two-page")
   );
 }
 
@@ -81,10 +84,22 @@ export function loadWorkspaceLayout(
 
   try {
     const parsed = JSON.parse(raw) as unknown;
-    return isWorkspaceLayout(parsed) ? parsed : defaultWorkspaceLayout;
+    return isWorkspaceLayout(parsed)
+      ? normalizeWorkspaceLayout(parsed)
+      : defaultWorkspaceLayout;
   } catch {
     return defaultWorkspaceLayout;
   }
+}
+
+function normalizeWorkspaceLayout(layout: WorkspaceLayout): WorkspaceLayout {
+  return {
+    ...layout,
+    openPdfTabs: layout.openPdfTabs.map((tab) => ({
+      ...tab,
+      viewMode: tab.viewMode ?? "single",
+    })),
+  };
 }
 
 export function saveWorkspaceLayout(

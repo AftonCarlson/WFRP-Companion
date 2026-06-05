@@ -1,3 +1,5 @@
+import { BookOpen } from "lucide-react";
+
 import type { LibraryBookRow } from "../../lib/grouping";
 
 export type BookRowProps = {
@@ -31,11 +33,12 @@ export function BookRow({ book, error, onOpen, onToggle, saving }: BookRowProps)
       </label>
       <button
         aria-label={`Open ${book.title}`}
+        className="book-row__open"
         disabled={!book.reader_ready}
         onClick={() => onOpen(book)}
         type="button"
       >
-        Open
+        <BookOpen aria-hidden="true" size={15} />
       </button>
       {error ? <div className="book-row__error">{error}</div> : null}
     </div>

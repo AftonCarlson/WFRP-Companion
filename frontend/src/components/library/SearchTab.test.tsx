@@ -117,6 +117,69 @@ it("ignores aborted searches", async () => {
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+it("keeps the newest search loading when an older search resolves last", async () => {
+  const user = userEvent.setup();
+  let resolveFirst: Parameters<ConstructorParameters<typeof Promise>[0]>[0];
+  let resolveSecond: Parameters<ConstructorParameters<typeof Promise>[0]>[0];
+  const firstResponse = {
+    query: "critical",
+    scope: {
+      label: "active_source_set",
+      source_set_id: "rules-core",
+      book_ids: ["core-rules"],
+      all_books: false,
+    },
+    hits: [],
+  };
+  const secondResponse = {
+    ...firstResponse,
+    query: "critical hit",
+    hits: [
+      {
+        rank: 1,
+        book_id: "core-rules",
+        title: "Core Rules",
+        category: "Rules",
+        page_id: "core-rules:134",
+        page_number: 134,
+        snippet: "...critical hit...",
+        score: -1,
+      },
+    ],
+  };
+  const fakeClient = client({
+    searchExact: vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      ),
+  });
+
+  renderApp(<SearchTab client={fakeClient} onOpenPdfPage={vi.fn()} />);
+
+  const searchbox = screen.getByRole("searchbox", { name: "Search book text" });
+  const form = searchbox.closest("form")!;
+  await user.type(searchbox, "critical");
+  fireEvent.submit(form);
+  await user.type(searchbox, " hit");
+  fireEvent.submit(form);
+
+  resolveFirst!(firstResponse);
+  await waitFor(() => expect(screen.getByText("Searching...")).toBeInTheDocument());
+
+  resolveSecond!(secondResponse);
+  expect(await screen.findByText("...critical hit...")).toBeInTheDocument();
+});
+
 it("reports full page text fetch errors", async () => {
   const user = userEvent.setup();
   const fakeClient = client({

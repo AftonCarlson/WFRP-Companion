@@ -129,11 +129,21 @@
 .book-row button,
 .search-tab button,
 .search-result-card button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--color-text);
   background: var(--color-panel-strong);
   border: 1px solid var(--color-border);
   border-radius: 4px;
   padding: 5px 7px;
+}
+
+.book-row__open,
+.search-result-card__open {
+  width: 30px;
+  height: 30px;
+  padding: 0;
 }
 
 .book-row button:not(:disabled):hover,

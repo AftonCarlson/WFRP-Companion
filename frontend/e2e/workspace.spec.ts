@@ -162,7 +162,7 @@ test("workspace supports library, search, PDF tabs, and chat shell", async ({
   await expect(page.getByText("Full page text from SQLite")).toBeVisible();
 
   await page.getByRole("button", { name: "Open PDF page" }).click();
-  await expect(page.getByRole("tab", { name: /Core Rules p\. 134/i })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Core Rules" })).toBeVisible();
 
   await page.getByRole("button", { name: "Open chat history" }).click();
   await expect(page.getByText("Chat history")).toBeVisible();

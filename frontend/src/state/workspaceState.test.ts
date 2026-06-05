@@ -10,6 +10,7 @@ import {
   selectPdfTab,
   setLeftTab,
   setPdfTabPage,
+  setPdfTabViewMode,
   setPdfTabZoom,
   toggleLibraryCategory,
   togglePanelCollapsed,
@@ -108,6 +109,18 @@ describe("workspaceState", () => {
     expect(reopened.openPdfTabs).toHaveLength(1);
     expect(reopened.openPdfTabs[0].pageNumber).toBe(134);
     expect(reopened.openPdfTabs[0].title).toBe("Core Rules Revised");
+    expect(reopened.openPdfTabs[0].viewMode).toBe("single");
+  });
+
+  it("updates PDF tab view mode", () => {
+    const opened = openPdfTab(defaultWorkspaceLayout, {
+      bookId: "core-rules",
+      title: "Core Rules",
+    });
+    const spread = setPdfTabViewMode(opened, "core-rules", "two-page");
+
+    expect(spread.openPdfTabs[0].viewMode).toBe("two-page");
+    expect(setPdfTabViewMode(opened, "missing", "two-page")).toEqual(opened);
   });
 
   it("ignores tab mutations for unknown tabs", () => {

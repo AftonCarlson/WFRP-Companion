@@ -1,25 +1,39 @@
 import { Menu, Send } from "lucide-react";
-import { useState } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 
 import "./AgentChatPanel.css";
 
-export function AgentChatPanel() {
-  const [historyOpen, setHistoryOpen] = useState(false);
+export type AgentChatPanelProps = {
+  historyOpen?: boolean;
+};
+
+export type AgentChatHeaderControlsProps = {
+  historyOpen: boolean;
+  setHistoryOpen: Dispatch<SetStateAction<boolean>>;
+};
+
+export function AgentChatHeaderControls({
+  historyOpen,
+  setHistoryOpen,
+}: AgentChatHeaderControlsProps) {
+  return (
+    <button
+      aria-expanded={historyOpen}
+      aria-label={historyOpen ? "Close chat history" : "Open chat history"}
+      className="agent-chat__history-toggle"
+      onClick={() => setHistoryOpen((open) => !open)}
+      type="button"
+    >
+      <Menu aria-hidden="true" size={17} />
+    </button>
+  );
+}
+
+export function AgentChatPanel({ historyOpen = false }: AgentChatPanelProps) {
   const [message, setMessage] = useState("");
 
   return (
     <div className="agent-chat">
-      <div className="agent-chat__header">
-        <button
-          aria-expanded={historyOpen}
-          aria-label={historyOpen ? "Close chat history" : "Open chat history"}
-          onClick={() => setHistoryOpen((open) => !open)}
-          type="button"
-        >
-          <Menu aria-hidden="true" size={17} />
-        </button>
-        <span>Game Master Aid</span>
-      </div>
       {historyOpen ? (
         <div className="agent-chat__history">
           <strong>Chat history</strong>
@@ -30,22 +44,24 @@ export function AgentChatPanel() {
         <article>
           <strong>Agent offline</strong>
           <p>
-            AI Game Master aid is not connected yet. This panel is ready for
-            the chat API, retrieval context, and future voice features.
+            Familiar is not connected yet. This panel is ready for the chat
+            API, retrieval context, and future voice features.
           </p>
         </article>
       </div>
       <form className="agent-chat__composer" aria-label="Agent message composer">
-        <textarea
-          aria-label="Message"
-          onChange={(event) => setMessage(event.target.value)}
-          placeholder="Ask about a rule, source page, NPC, or scene..."
-          rows={4}
-          value={message}
-        />
-        <button aria-label="Send message" disabled type="submit">
-          <Send aria-hidden="true" size={16} />
-        </button>
+        <div className="agent-chat__composer-field">
+          <textarea
+            aria-label="Message"
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder="Ask about a rule, source page, NPC, or scene..."
+            rows={4}
+            value={message}
+          />
+          <button aria-label="Send message" disabled type="submit">
+            <Send aria-hidden="true" size={16} />
+          </button>
+        </div>
       </form>
     </div>
   );

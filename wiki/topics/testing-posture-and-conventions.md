@@ -124,16 +124,16 @@ and API CLI entrypoints.
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
 behavior, Library/Search tabs, grouped book sections, per-book source-set
-toggles, search result full text expansion/error handling, PDF tab/page/zoom
-behavior, guarded PDF.js rendering/retry and cancellation behavior, chat shell
-behavior, and a browser e2e flow for Library/Search/PDF/chat.
+toggles, search result full text expansion/error handling, Grimoire tab, page,
+zoom, and view-mode behavior, two-page spread math, guarded PDF.js
+rendering/retry and cancellation behavior, Familiar shell behavior, and browser
+e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
 The latest full backend verification command on 2026-06-04 reported 181 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
-entrypoints. The latest frontend verification reported 74 Vitest tests passing,
-coverage of 100% statements / 97.53% branches / 100% functions / 100% lines, a
-successful production build, and one Playwright browser e2e test
-passing.
+entrypoints. The latest frontend verification reported 106 Vitest tests
+passing with 100% statements / branches / functions / lines coverage, a
+successful production build, and two Playwright browser e2e tests passing.
 
 ## Manual QA
 
@@ -149,8 +149,10 @@ For the MVP, manual QA should include:
 - Click the citation and verify the reader lands on that page.
 
 Phase 5 browser QA also included a live local API check: load the real library,
-search for `critical hit`, verify grouped results, and open a result into a PDF
-reader tab at page 134.
+search for `critical hit`, verify grouped results, open a result into a
+Grimoire tab at page 134, confirm source tabs omit page-number suffixes, confirm
+two-page view can be toggled, and confirm the Familiar composer remains
+reachable without page-level scrolling.
 
 ## Sources
 

@@ -1,5 +1,6 @@
 export type LeftTab = "library" | "search";
 export type PanelId = "left" | "reader" | "agent";
+export type PdfViewMode = "single" | "two-page";
 
 export type PanelLayout = {
   size: number;
@@ -13,6 +14,7 @@ export type PdfTab = {
   title: string;
   pageNumber: number;
   zoom: number;
+  viewMode: PdfViewMode;
 };
 
 export type PdfTabInput = {
@@ -145,6 +147,7 @@ export function openPdfTab(
     title: input.title,
     pageNumber: input.pageNumber ?? 1,
     zoom: 1,
+    viewMode: "single",
   };
   next.openPdfTabs.push(tab);
   next.activePdfTabId = tab.id;
@@ -187,6 +190,19 @@ export function setPdfTabZoom(
   const tab = next.openPdfTabs.find((item) => item.id === tabId);
   if (tab) {
     tab.zoom = Math.max(0.4, Math.min(3, Number(zoom.toFixed(2))));
+  }
+  return next;
+}
+
+export function setPdfTabViewMode(
+  layout: WorkspaceLayout,
+  tabId: string,
+  viewMode: PdfViewMode,
+): WorkspaceLayout {
+  const next = copy(layout);
+  const tab = next.openPdfTabs.find((item) => item.id === tabId);
+  if (tab) {
+    tab.viewMode = viewMode;
   }
   return next;
 }

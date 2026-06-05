@@ -1,3 +1,4 @@
+import { BookOpen } from "lucide-react";
 import { useState } from "react";
 
 import type { ApiClient } from "../../lib/apiClient";
@@ -48,8 +49,13 @@ export function SearchResultCard({
         <strong>
           {hit.title} p. {hit.page_number}
         </strong>
-        <button onClick={() => onOpenPdfPage(hit)} type="button">
-          Open PDF page
+        <button
+          aria-label="Open PDF page"
+          className="search-result-card__open"
+          onClick={() => onOpenPdfPage(hit)}
+          type="button"
+        >
+          <BookOpen aria-hidden="true" size={15} />
         </button>
       </div>
       <p>{hit.snippet}</p>
