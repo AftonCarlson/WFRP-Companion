@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
+from wfrp_companion.library.page_labels import load_calibrated_printed_page_label
+from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
 from wfrp_companion.library import source_sets
 
 
@@ -947,14 +949,52 @@ def citations_for_model_run(
             page_id=row["page_id"],
             page_number=row["page_number"],
             pdf_page_number=row["page_number"],
-            page_label=row["page_label"],
+            page_label=load_calibrated_printed_page_label(
+                connection,
+                book_id=row["book_id"],
+                page_number=int(row["page_number"]),
+                fallback_label=row["page_label"],
+            ),
             snippet=row["snippet"] or "",
             rank=row["rank"],
             score=row["score"],
-            page_range_label=retrieval_hit_page_range_label(row["metadata_json"]),
+            page_range_label=citation_page_range_label(connection, row),
         )
         for row in rows
     )
+
+
+def citation_page_range_label(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> str | None:
+    page_span = retrieval_hit_page_span(row["metadata_json"])
+    if page_span is not None:
+        return load_calibrated_printed_page_range_label(
+            connection,
+            book_id=row["book_id"],
+            page_start=page_span[0],
+            page_end=page_span[1],
+        )
+    return retrieval_hit_page_range_label(row["metadata_json"])
+
+
+def retrieval_hit_page_span(metadata_json: str | None) -> tuple[int, int] | None:
+    if not metadata_json:
+        return None
+    try:
+        metadata = json.loads(metadata_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    page_start = metadata.get("page_start")
+    page_end = metadata.get("page_end")
+    if not isinstance(page_start, int) or not isinstance(page_end, int):
+        return None
+    if page_start < 1 or page_end < page_start:
+        return None
+    return (page_start, page_end)
 
 
 def retrieval_hit_page_range_label(metadata_json: str | None) -> str | None:

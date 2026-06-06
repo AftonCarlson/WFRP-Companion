@@ -12,8 +12,9 @@ source-object migration/model foundation, Phase 7 PR2 deterministic
 source-object extraction foundation, Phase 7 PR3 Familiar source-map/object
 retrieval, Phase 7 PR4 retrieval-module split, and Phase 7 PR5 durable
 source-map/profile ownership, Phase 7 PR6 source-object search backfill, and
-Phase 7 PR7 retrieval rank fusion/reranker protocol, and Phase 7 PR8 local
-vector retrieval channel, and Phase 7 PR9 structured source-object evidence.
+Phase 7 PR7 retrieval rank fusion/reranker protocol, Phase 7 PR8 local
+vector retrieval channel, Phase 7 PR9 structured source-object evidence, and
+Phase 7 PR10 printed page-label calibration/backfill.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -63,7 +64,7 @@ Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.backfill_page_labels --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
 ```
 
 Current frontend verification commands:
@@ -105,6 +106,7 @@ Current focused test files:
 - `tests/library/test_catalog.py`
 - `tests/library/test_importer.py`
 - `tests/library/test_page_text_importer.py`
+- `tests/library/test_page_labels.py`
 - `tests/library/test_source_sets.py`
 - `tests/search/test_fts.py`
 - `tests/search/test_scope.py`
@@ -119,6 +121,7 @@ Current focused test files:
 - `tests/tools/test_rebuild_embeddings.py`
 - `tests/tools/test_rebuild_source_object_fts.py`
 - `tests/tools/test_rebuild_source_maps.py`
+- `tests/tools/test_backfill_page_labels.py`
 - `tests/tools/test_source_sets_cli.py`
 - `tests/source_objects/test_models.py`
 - `tests/source_objects/test_extractor.py`
@@ -183,7 +186,11 @@ derived source-object links and count updates, table-row citations resolving to
 parent table page ranges, stat-block retrieval resolving to complete profiles,
 index routing to deterministic target sections or page-only target pages,
 glossary evidence retaining definition context without fake disjoint page
-ranges, and link traversal refusing unchecked-book targets.
+ranges, and link traversal refusing unchecked-book targets. Page-label tests
+cover offset-anchor calibration, roman/front-matter preservation, snapshot
+drift anchor reuse, manual-review conflict suppression, exact/search
+source-object/linked-page citation labels, safe count-only CLI failure output,
+and reloaded chat citation labels/ranges.
 
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
@@ -195,7 +202,7 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-05 reported 394 tests
+The latest full backend verification command on 2026-06-06 reported 436 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 127 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful

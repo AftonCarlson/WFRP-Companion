@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-05 Structured source-object evidence
+Last compiled: 2026-06-06 Page-label calibration/backfill
 
 ## Topics
 

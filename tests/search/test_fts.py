@@ -5,6 +5,7 @@ from pathlib import Path
 
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database, open_connection
+from wfrp_companion.library import page_labels
 from wfrp_companion.search import fts
 
 
@@ -78,6 +79,7 @@ def insert_page_text(
     book_id: str,
     page_number: int,
     text: str,
+    page_label: str | None = None,
 ) -> None:
     page_id = f"{book_id}:{page_number}"
     connection.execute(
@@ -86,6 +88,7 @@ def insert_page_text(
           id,
           book_id,
           page_number,
+          page_label,
           extraction_method,
           embedded_text_chars,
           text_chars,
@@ -94,9 +97,9 @@ def insert_page_text(
           ocr_attempted,
           has_text
         )
-        values (?, ?, ?, 'ocr', 0, ?, ?, 1, 1, 1)
+        values (?, ?, ?, ?, 'ocr', 0, ?, ?, 1, 1, 1)
         """,
-        (page_id, book_id, page_number, len(text), len(text.split())),
+        (page_id, book_id, page_number, page_label, len(text), len(text.split())),
     )
     connection.execute(
         """
@@ -205,6 +208,46 @@ def test_rebuild_populates_external_content_fts(tmp_path: Path) -> None:
             """
         ).fetchone()
     assert row["page_id"] == "core-rules:1"
+
+
+def test_search_exact_prefers_calibrated_page_labels(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_book(connection, book_id="core-rules", title="Core Rules")
+        insert_page_text(
+            connection,
+            book_id="core-rules",
+            page_number=9,
+            page_label="9",
+            text="Critical hit rules",
+        )
+        connection.execute(
+            """
+            insert into book_page_label_calibrations (
+              book_id,
+              status,
+              method,
+              calibration_json,
+              page_text_snapshot_sha256,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'calibrated',
+              'offset_anchor',
+              '{"labels_by_page":{"9":"1"}}',
+              ?,
+              '2026-06-05T00:00:00Z'
+            )
+            """,
+            (page_labels.page_label_snapshot_sha256(connection, "core-rules"),),
+        )
+    fts.rebuild_global_fts(config)
+
+    hits = fts.search_exact(config, "critical hit", book_ids=("core-rules",), limit=1)
+
+    assert hits[0].pdf_page_number == 9
+    assert hits[0].page_label == "1"
 
 
 def test_rebuild_rerun_is_idempotent_for_same_snapshot(tmp_path: Path) -> None:

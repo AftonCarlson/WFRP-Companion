@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from wfrp_companion.assistant import chat_store
+from wfrp_companion.assistant.evidence import RetrievedHit
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database, open_connection
+from wfrp_companion.library import page_labels
 from wfrp_companion.library import source_sets
 
 
@@ -411,6 +413,218 @@ def test_retrieval_hit_page_range_label_handles_missing_or_malformed_metadata() 
         chat_store.retrieval_hit_page_range_label('{"page_range_label":"10-11"}')
         == "10-11"
     )
+
+
+def test_retrieval_hit_page_span_handles_missing_or_malformed_metadata() -> None:
+    assert chat_store.retrieval_hit_page_span(None) is None
+    assert chat_store.retrieval_hit_page_span("{bad json") is None
+    assert chat_store.retrieval_hit_page_span("[]") is None
+    assert chat_store.retrieval_hit_page_span('{"page_start":"1","page_end":2}') is None
+    assert chat_store.retrieval_hit_page_span('{"page_start":2,"page_end":1}') is None
+    assert chat_store.retrieval_hit_page_span('{"page_start":1,"page_end":2}') == (
+        1,
+        2,
+    )
+
+
+def test_citation_page_range_label_falls_back_to_legacy_metadata() -> None:
+    with sqlite3.connect(":memory:") as connection:
+        assert (
+            chat_store.citation_page_range_label(
+                connection,
+                {"metadata_json": '{"page_range_label":"10-11"}'},
+            )
+            == "10-11"
+        )
+
+
+def test_citation_page_range_label_does_not_invent_missing_printed_label(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into library_folders (id, parent_id, name, relative_path, sort_order)
+            values ('core', null, 'Core', 'Core', 0)
+            """
+        )
+        connection.execute(
+            """
+            insert into books (
+              id,
+              folder_id,
+              title,
+              category,
+              relative_path,
+              original_source_path,
+              managed_pdf_path,
+              original_sha256,
+              managed_sha256,
+              page_count,
+              copy_status,
+              text_status,
+              search_status,
+              visual_status,
+              discovered_at,
+              updated_at
+            )
+            values ('core-rules', 'core', 'Core Rules', 'Core', 'core.pdf',
+                    '/source/core.pdf', '/managed/core.pdf', 'source-sha',
+                    'managed-sha', 9, 'copied', 'imported', 'indexed',
+                    'not_scanned', '2026-06-05T00:00:00Z',
+                    '2026-06-05T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into pages (
+              id,
+              book_id,
+              page_number,
+              page_label,
+              extraction_method,
+              embedded_text_chars,
+              text_chars,
+              word_count,
+              image_count,
+              ocr_attempted,
+              has_text
+            )
+            values ('core-rules:9', 'core-rules', 9, null, 'ocr', 0, 12, 2, 0, 1, 1)
+            """
+        )
+        connection.execute(
+            """
+            insert into book_page_label_calibrations (
+              book_id,
+              status,
+              method,
+              calibration_json,
+              page_text_snapshot_sha256,
+              last_error,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'needs_review',
+              'imported_labels_partial',
+              '{"labels_by_page":{},"missing_label_pages":[9]}',
+              ?,
+              '1 page label needs manual review.',
+              '2026-06-05T00:00:00Z'
+            )
+            """,
+            (page_labels.page_label_snapshot_sha256(connection, "core-rules"),),
+        )
+        row = {
+            "book_id": "core-rules",
+            "metadata_json": '{"page_start":9,"page_end":9}',
+        }
+        assert chat_store.citation_page_range_label(connection, row) is None
+
+
+def test_result_citations_omit_manual_review_printed_page_label(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    calibration_json = (
+        '{"labels_by_page":{"1":"1"},'
+        '"conflicting_label_pages":[{'
+        '"page_number":1,'
+        '"imported_label":"9",'
+        '"calibrated_label":"1"'
+        "}]} "
+    ).strip()
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into pages (
+              id,
+              book_id,
+              page_number,
+              page_label,
+              extraction_method,
+              embedded_text_chars,
+              text_chars,
+              word_count,
+              image_count,
+              ocr_attempted,
+              has_text
+            )
+            values ('core-rules:1', 'core-rules', 1, '9', 'ocr', 0, 12, 2, 0, 1, 1)
+            """
+        )
+        connection.execute(
+            """
+            insert into book_page_label_calibrations (
+              book_id,
+              status,
+              method,
+              calibration_json,
+              page_text_snapshot_sha256,
+              last_error,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'needs_review',
+              'offset_anchor_needs_review',
+              ?,
+              ?,
+              '1 page label needs manual review.',
+              '2026-06-05T00:00:00Z'
+            )
+            """,
+            (
+                calibration_json,
+                page_labels.page_label_snapshot_sha256(connection, "core-rules"),
+            ),
+        )
+    thread = chat_store.create_thread(config)
+    turn = chat_store.create_provider_unavailable_turn(
+        config,
+        thread.id,
+        content="critical hit",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    retrieval_run_id = chat_store.record_retrieval_run(
+        config,
+        thread_id=thread.id,
+        message_id=turn.user_message.id,
+        source_set_id=thread.active_source_set_id,
+        query="critical hit",
+        hits=(
+            RetrievedHit(
+                book_id="core-rules",
+                title="Core Rules",
+                category="Core Book & GM Essentials",
+                page_id="core-rules:1",
+                page_number=1,
+                pdf_page_number=1,
+                page_label=None,
+                snippet="critical hit",
+                score=0.1,
+                rank=1,
+                context_text="critical hit",
+                page_start=1,
+                page_end=1,
+            ),
+        ),
+        source_book_ids=("core-rules",),
+    )
+
+    result = chat_store.attach_retrieval_run(
+        config,
+        turn.model_run.id,
+        retrieval_run_id=retrieval_run_id,
+    )
+
+    assert result.citations[0].page_label is None
+    assert result.citations[0].page_range_label is None
 
 
 def test_result_loading_rejects_or_skips_orphaned_model_runs(tmp_path: Path) -> None:

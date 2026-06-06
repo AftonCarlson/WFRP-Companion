@@ -14,11 +14,13 @@ PHASE_7_MIGRATION_ID = "0001_phase_7_source_objects"
 SOURCE_MAP_RETRIEVAL_MIGRATION_ID = "0002_source_map_retrieval"
 VECTOR_RETRIEVAL_MIGRATION_ID = "0003_vector_retrieval"
 STRUCTURED_EVIDENCE_MIGRATION_ID = "0004_structured_evidence"
+PAGE_LABEL_CALIBRATION_MIGRATION_ID = "0005_page_label_calibration"
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
     VECTOR_RETRIEVAL_MIGRATION_ID,
     STRUCTURED_EVIDENCE_MIGRATION_ID,
+    PAGE_LABEL_CALIBRATION_MIGRATION_ID,
 )
 
 
@@ -124,6 +126,8 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         migration_function = apply_vector_retrieval
     elif migration_id == STRUCTURED_EVIDENCE_MIGRATION_ID:
         migration_function = apply_structured_evidence
+    elif migration_id == PAGE_LABEL_CALIBRATION_MIGRATION_ID:
+        migration_function = apply_page_label_calibration
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -202,6 +206,20 @@ def apply_structured_evidence(connection: sqlite3.Connection) -> None:
     mark_existing_extractions_stale_for_structured_evidence(connection)
 
 
+def apply_page_label_calibration(connection: sqlite3.Connection) -> None:
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{PAGE_LABEL_CALIBRATION_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+    rebuild_ingest_jobs_if_needed(
+        connection,
+        required_job_type="backfill_page_labels",
+    )
+    backfill_book_retrieval_status(connection)
+
+
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
     for statement in sql.split(";"):
         statement = statement.strip()
@@ -241,6 +259,7 @@ def collect_table_counts(connection: sqlite3.Connection) -> tuple[tuple[str, int
         "source_object_search",
         "source_object_embeddings",
         "book_retrieval_status",
+        "book_page_label_calibrations",
         "book_source_maps",
         "retrieval_run_source_books",
         "retrieval_hits",
@@ -772,7 +791,8 @@ create table ingest_jobs (
     'extract_source_objects',
     'rebuild_source_object_fts',
     'rebuild_source_maps',
-    'rebuild_embeddings'
+    'rebuild_embeddings',
+    'backfill_page_labels'
   )),
   check(status in ('queued', 'running', 'succeeded', 'failed'))
 )

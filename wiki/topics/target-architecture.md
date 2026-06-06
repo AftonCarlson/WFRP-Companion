@@ -281,6 +281,22 @@ part of the retrieval architecture:
 - Link traversal cannot cross unchecked books; the checked `source_book_ids`
   snapshot remains authoritative for candidates, prompt context, and citations.
 
+Phase 7 PR10 adds printed page-label calibration/backfill:
+
+- Migration `0005_page_label_calibration` adds
+  `book_page_label_calibrations` and widens `ingest_jobs` for
+  `backfill_page_labels`.
+- `book_retrieval_status.page_label_status` remains the summary lifecycle
+  state, while `book_page_label_calibrations` owns method, current page-text
+  snapshot, safe failure status, and calibration metadata.
+- `tools/backfill_page_labels.py` is the count-oriented local CLI for building
+  those calibration rows from existing imported page labels plus optional
+  offset anchors.
+- Exact search and Familiar citations prefer current calibrated printed labels
+  but retain `pdf_page_number` for Grimoire/PDF jumps.
+- Manual-review gaps do not produce printed-page labels; the UI can still open
+  the PDF page by number while avoiding false printed citations.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval/source-object metadata. The current populated runtime
@@ -295,7 +311,9 @@ for parent/target relationships. Object search projections are rebuilt during
 extraction or repaired independently with `tools/rebuild_source_object_fts.py`.
 Durable source-map/profile metadata can now be rebuilt from those source
 objects into `book_source_maps` and `book_query_profiles`, with lifecycle
-status in `book_retrieval_status`.
+status in `book_retrieval_status`. Printed-page calibration metadata can now
+be rebuilt into `book_page_label_calibrations`, with summary status also in
+`book_retrieval_status`.
 The local API now surfaces library, source-set, exact-search, page-text,
 managed-PDF reader, and streaming chat operations. The frontend now surfaces
 library selection, exact search, page-text expansion, PDF reading, and the
@@ -372,6 +390,9 @@ Important schema decisions:
 - `book_retrieval_status` owns per-book retrieval-asset lifecycle state for
   source maps, future table indexes, future vectors, and page-label
   calibration.
+- `book_page_label_calibrations` owns per-book printed-page calibration
+  details, including the calibration method, page-text snapshot, offset-anchor
+  metadata, missing/manual-review counts, and safe failure state.
 - `book_source_maps` owns compact per-book retrieval routing metadata:
   summaries, aliases, chapters, best-source-for query types, and future
   index/glossary term lists. It is private local metadata derived from

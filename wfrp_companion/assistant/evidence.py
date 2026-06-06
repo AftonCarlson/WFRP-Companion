@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
+from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
 
 if TYPE_CHECKING:
     from wfrp_companion.assistant.source_map import SourceMapEntry
@@ -116,26 +117,13 @@ def load_page_range_label(
     book_id: str,
     page_start: int,
     page_end: int,
-) -> str:
-    rows = connection.execute(
-        """
-        select page_number, page_label
-        from pages
-        where book_id = ?
-          and page_number in (?, ?)
-        order by page_number
-        """,
-        (book_id, page_start, page_end),
-    ).fetchall()
-    labels_by_number = {
-        int(row["page_number"]): row["page_label"] or str(row["page_number"])
-        for row in rows
-    }
-    start_label = labels_by_number.get(page_start, str(page_start))
-    end_label = labels_by_number.get(page_end, str(page_end))
-    if page_start == page_end or start_label == end_label:
-        return start_label
-    return f"{start_label}-{end_label}"
+) -> str | None:
+    return load_calibrated_printed_page_range_label(
+        connection,
+        book_id=book_id,
+        page_start=page_start,
+        page_end=page_end,
+    )
 
 def parse_heading_path(value: str | None) -> tuple[str, ...]:
     if not value:

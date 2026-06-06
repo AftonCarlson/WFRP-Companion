@@ -293,6 +293,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0002_source_map_retrieval",
         "0003_vector_retrieval",
         "0004_structured_evidence",
+        "0005_page_label_calibration",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -347,6 +348,14 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0005_page_label_calibration",),
+            ).fetchone()
+            is not None
+        )
+        assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
         assert (
             connection.execute(
@@ -441,6 +450,44 @@ def test_phase7_migration_allows_new_job_types_local_provider_and_object_hits(
             values ('source-map-1', 'rebuild_source_maps', 'core-rules',
                     'running', 'rebuild_source_maps:core-rules:sha:v1', 1,
                     '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into ingest_jobs (
+              id,
+              job_type,
+              target_id,
+              status,
+              idempotency_key,
+              attempts,
+              created_at,
+              updated_at
+            )
+            values ('page-labels-1', 'backfill_page_labels', 'core-rules',
+                    'running',
+                    'backfill_page_labels:core-rules:snapshot:page-label-calibration-v1',
+                    1, '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into book_page_label_calibrations (
+              book_id,
+              status,
+              method,
+              calibration_json,
+              page_text_snapshot_sha256,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'calibrated',
+              'imported_labels',
+              '{"labels_by_page":{"1":"i"}}',
+              'snapshot',
+              '2026-06-03T00:00:00Z'
+            )
             """
         )
         connection.execute(
@@ -671,6 +718,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0002_source_map_retrieval",
         "0003_vector_retrieval",
         "0004_structured_evidence",
+        "0005_page_label_calibration",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -678,6 +726,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0002_source_map_retrieval",
         "0003_vector_retrieval",
         "0004_structured_evidence",
+        "0005_page_label_calibration",
     )
 
 
@@ -694,6 +743,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0002_source_map_retrieval",
         "0003_vector_retrieval",
         "0004_structured_evidence",
+        "0005_page_label_calibration",
     )
     with open_connection(db_path) as connection:
         assert (
@@ -721,6 +771,13 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
             connection.execute(
                 "select id from schema_migrations where id = ?",
                 ("0004_structured_evidence",),
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0005_page_label_calibration",),
             ).fetchone()
             is not None
         )

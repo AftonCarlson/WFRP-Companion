@@ -143,8 +143,9 @@ Exact search is implemented in `wfrp_companion/search/fts.py`:
 - `/api/search/exact` accepts `query`, `limit`, `source_set_id`, repeatable
   `book_id`, and `all_books` parameters.
 - `/api/search/exact` returns `pdf_page_number` for reader jumps and
-  `page_label` when available. The frontend should use `pdf_page_number` for
-  Grimoire opens and display `page_label` only as printed-page context.
+  `page_label` when a raw or calibrated printed label is available. The
+  frontend should use `pdf_page_number` for Grimoire opens and display
+  `page_label` only as printed-page context.
 - Source-set membership is owned by `source_set_books.enabled`; readiness is
   still owned by `books` lifecycle state and enforced by `search_exact()`.
 
@@ -203,6 +204,25 @@ Current boundary: source objects can now be populated, but object FTS,
 table/stat/location extraction, and Familiar object-aware ranking remain later
 Phase 7 PRs. Page-level `page_text` plus `page_search_fts` still remain the
 active retrieval surface for Familiar and exact search.
+
+Phase 7 PR10 adds printed page-label calibration/backfill:
+
+- `wfrp_companion/library/page_labels.py` builds page-label calibration
+  metadata from imported `pages.page_label` values plus optional offset
+  anchors.
+- `tools/backfill_page_labels.py` runs the backfill for all eligible copied and
+  imported books or selected `--book-id` values. It supports
+  `--anchor book_id:pdf_page_number:printed_label`, `--force`,
+  `--retry-running`, and `--stale-running-minutes`.
+- The backfill stores only calibration metadata and counts in
+  `book_page_label_calibrations`; it does not export page text.
+- Roman/front-matter labels before an offset anchor are preserved, and stored
+  anchors are reused after page text/label snapshot drift on plain reruns.
+  Pages without a proven label, or pages whose imported/calibrated labels
+  conflict, are marked for manual review instead of being shown as confident
+  printed-page citations.
+- Exact search, Familiar prompt context, and reloaded chat citations prefer
+  current calibrated labels/ranges. The PDF page number remains the jump target.
 
 ## OCR
 

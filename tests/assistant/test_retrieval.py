@@ -12,6 +12,7 @@ from wfrp_companion.assistant import retrieval
 from wfrp_companion.assistant import source_map as retrieval_source_map
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database, open_connection
+from wfrp_companion.library import page_labels
 from wfrp_companion.library import source_sets
 from wfrp_companion.search.fts import rebuild_global_fts
 from wfrp_companion.source_objects.source_map_builder import (
@@ -1570,7 +1571,7 @@ def test_glossary_entry_evidence_keeps_definition_and_linked_target_context(
     assert hit.object_type == "glossary_entry"
     assert hit.page_start == 30
     assert hit.page_end == 30
-    assert hit.page_range_label == "30"
+    assert hit.page_range_label is None
     assert "ceremonial prophecy" in hit.context_text
     assert "sudden drops" in hit.context_text
     assert any(
@@ -2105,6 +2106,284 @@ def test_source_map_and_candidate_helper_edges(
             page_start=1,
             page_end=1,
         ) == "i"
+
+
+def test_source_object_candidate_prefers_calibrated_page_labels(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=9,
+            text="Critical hit rules start here.",
+            page_label="9",
+            page_count=10,
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=10,
+            text="Critical hit rules continue here.",
+            page_label="10",
+            page_count=10,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:9",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Combat", "Critical Hits"),
+            page_start=9,
+            page_end=10,
+            text="Critical hit rules start here.\nCritical hit rules continue here.",
+        )
+        connection.execute(
+            """
+            insert into book_page_label_calibrations (
+              book_id,
+              status,
+              method,
+              calibration_json,
+              page_text_snapshot_sha256,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'calibrated',
+              'offset_anchor',
+              '{"labels_by_page":{"9":"1","10":"2"}}',
+              ?,
+              '2026-06-05T00:00:00Z'
+            )
+            """,
+            (page_labels.page_label_snapshot_sha256(connection, "core-rules"),),
+        )
+        row = connection.execute(
+            """
+            select
+              source_objects.*,
+              books.title as book_title,
+              books.category,
+              pages.page_number as pdf_page_number,
+              pages.page_label
+            from source_objects
+            join books on books.id = source_objects.book_id
+            join pages on pages.id = source_objects.page_id
+            where source_objects.id = 'core-rules:critical-hits'
+            """
+        ).fetchone()
+        candidate = retrieval_candidates.source_object_row_to_candidate(
+            connection,
+            row,
+            base_score=0.1,
+            snippet="Critical Hits",
+            channel="source_object_fts",
+        )
+
+    assert candidate.pdf_page_number == 9
+    assert candidate.page_label == "1"
+    assert candidate.page_range_label == "1-2"
+
+
+def test_source_object_candidate_omits_untrusted_printed_page_range(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=9,
+            text="Critical hit rules start here.",
+            page_label=None,
+            page_count=10,
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=10,
+            text="Critical hit rules continue here.",
+            page_label=None,
+            page_count=10,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:9",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Combat", "Critical Hits"),
+            page_start=9,
+            page_end=10,
+            text="Critical hit rules start here.\nCritical hit rules continue here.",
+        )
+        row = connection.execute(
+            """
+            select
+              source_objects.*,
+              books.title as book_title,
+              books.category,
+              pages.page_number as pdf_page_number,
+              pages.page_label
+            from source_objects
+            join books on books.id = source_objects.book_id
+            join pages on pages.id = source_objects.page_id
+            where source_objects.id = 'core-rules:critical-hits'
+            """
+        ).fetchone()
+        candidate = retrieval_candidates.source_object_row_to_candidate(
+            connection,
+            row,
+            base_score=0.1,
+            snippet="Critical Hits",
+            channel="source_object_fts",
+        )
+
+    assert candidate.pdf_page_number == 9
+    assert candidate.page_label is None
+    assert candidate.page_range_label is None
+
+
+def test_page_fallback_candidate_omits_uncalibrated_missing_printed_label(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=9,
+            text="Critical hit rules start here.",
+            page_label=None,
+        )
+        connection.execute(
+            """
+            update books
+            set search_status = 'indexed'
+            where id = 'core-rules'
+            """
+        )
+        connection.execute(
+            """
+            insert into book_page_label_calibrations (
+              book_id,
+              status,
+              method,
+              calibration_json,
+              page_text_snapshot_sha256,
+              last_error,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'needs_review',
+              'imported_labels_partial',
+              '{"labels_by_page":{},"missing_label_pages":[9]}',
+              ?,
+              '1 page label needs manual review.',
+              '2026-06-05T00:00:00Z'
+            )
+            """,
+            (page_labels.page_label_snapshot_sha256(connection, "core-rules"),),
+        )
+        class PageHit:
+            book_id = "core-rules"
+            title = "Core Rules"
+            category = "Core Book & GM Essentials"
+            page_id = "core-rules:9"
+            page_number = 9
+            pdf_page_number = 9
+            page_label = None
+            snippet = "Critical hit"
+            score = 0.1
+
+        candidate = retrieval_candidates.evidence_candidate_from_page_hit(
+            connection,
+            PageHit(),
+            query_terms=("missing",),
+        )
+
+    assert candidate is not None
+    assert candidate.page_label is None
+    assert candidate.page_range_label is None
+
+
+def test_linked_page_candidate_omits_untrusted_printed_page_label(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=9,
+            text="Critical hit rules start here.",
+            page_label=None,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:index-critical",
+            book_id="core-rules",
+            page_id="core-rules:9",
+            object_type="index_entry",
+            title="Critical Hits",
+            heading_path=("Index",),
+            page_start=9,
+            page_end=9,
+            text="Critical Hits 9",
+        )
+        source_row = connection.execute(
+            """
+            select *
+            from source_objects
+            where id = 'core-rules:index-critical'
+            """
+        ).fetchone()
+        page_row = connection.execute(
+            """
+            select
+              pages.id as page_id,
+              pages.book_id,
+              books.title as book_title,
+              books.category,
+              pages.page_number,
+              pages.page_label,
+              page_text.text
+            from pages
+            join books on books.id = pages.book_id
+            join page_text on page_text.page_id = pages.id
+            where pages.id = 'core-rules:9'
+            """
+        ).fetchone()
+        candidate = retrieval_candidates.linked_page_row_to_candidate(
+            connection,
+            page_row,
+            source_row=source_row,
+            base_score=0.1,
+            snippet="Critical Hits",
+            channel="source_object_fts",
+            link_type="index_entry",
+        )
+
+    assert candidate.page_label is None
+    assert candidate.page_range_label is None
 
 
 def test_semantic_helper_edges(tmp_path: Path) -> None:

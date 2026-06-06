@@ -1,5 +1,36 @@
 # Wiki Compile Log
 
+## 2026-06-06 Printed Page-Label Calibration/Backfill
+
+- Added migration `0005_page_label_calibration` to create
+  `book_page_label_calibrations` and allow
+  `ingest_jobs(job_type='backfill_page_labels')` in existing databases and the
+  fresh schema.
+- Added `wfrp_companion/library/page_labels.py` and
+  `tools/backfill_page_labels.py` for count-only printed page-label
+  calibration/backfill from imported page labels plus optional offset anchors.
+  Anchors preserve roman/front-matter labels before the anchor, and plain
+  reruns reuse stored anchors after page text/label snapshot drift unless
+  `--force` or a new anchor is supplied.
+- Exact search, Familiar source-object/page fallback candidates, prompt
+  context, and stored/reloaded chat citations now use strict printed
+  label/range helpers. Missing labels and conflicting manual-review pages do
+  not become confident `printed page(s)` labels; `pdf_page_number` remains the
+  reader jump coordinate.
+- Independent review found three issues: anchored calibrations could still be
+  overwritten by plain reruns after snapshot drift, source-object/linked-page
+  evidence could invent printed ranges from PDF page numbers, and conflicting
+  manual-review labels could still be returned as confident labels. All were
+  fixed with regressions.
+- Verification run for this pass: focused page-label/retrieval/chat/search/tool
+  tests reported 109 tests passing; full Python tests reported 436 tests
+  passing with one existing Starlette/httpx deprecation warning and 100.00%
+  coverage; `ruff check .` passed; `git diff --check` passed; frontend
+  Vitest reported 127 tests passing; frontend coverage passed above configured
+  thresholds; frontend production build passed with the existing large PDF
+  worker chunk warning; Playwright e2e reported 2 tests passing with the
+  existing `NO_COLOR`/`FORCE_COLOR` warnings.
+
 ## 2026-06-05 Structured Source-Object Evidence
 
 - Added migration `0004_structured_evidence` to widen

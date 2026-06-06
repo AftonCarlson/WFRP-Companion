@@ -56,6 +56,8 @@ The current codebase has working local implementations for steps 1 through 6:
   simple tables/table rows, stat/profile blocks, index entries, glossary
   entries, and cross references, and persists deterministic
   `source_object_links` for parent/target relationships.
+- `tools/backfill_page_labels.py` now rebuilds printed page-label calibration
+  metadata from imported page labels plus optional offset anchors.
 
 ## Rules For New Code
 
@@ -122,6 +124,15 @@ The current codebase has working local implementations for steps 1 through 6:
 - Run `tools/rebuild_embeddings.py` after source-object extraction when local
   vector candidates are explicitly enabled. The command is count-only and must
   not print private source-object text.
+- Run `tools/backfill_page_labels.py` after page-text import when printed
+  labels need to be calibrated or repaired. Use repeatable
+  `--anchor book_id:pdf_page_number:printed_label` values for books whose
+  printed page 1 starts after roman/front-matter pages.
+- Page-label backfill output must stay count-only and must not print page text
+  or raw exception details. Failure summaries should be safe categories.
+- Do not display raw PDF page numbers as confident printed labels. If
+  calibration is missing or a book needs manual review, keep printed label
+  fields absent while retaining `pdf_page_number` for reader jumps.
 - Treat `source_set_books.enabled` as scope membership only. Do not use it as a
   replacement for readiness state.
 - Keep exact-search readiness gating in `search_exact()` and the `books`
@@ -191,6 +202,13 @@ database behavior should preserve these constraints:
 - Keep retrieval-asset lifecycle state explicit in `book_retrieval_status`;
   do not infer source-map/vector/table/page-label readiness from projection row
   presence alone.
+- Keep printed-page calibration details in `book_page_label_calibrations`.
+  `book_retrieval_status.page_label_status` is only the summary lifecycle
+  state.
+- Plain page-label backfill reruns should preserve current anchored
+  calibrations and reuse stored anchors after page text/label snapshot drift.
+  Use `--force` or a new `--anchor` when replacing an anchored calibration
+  intentionally.
 - Treat `book_source_maps` as the owner of compact source-map routing metadata.
   `book_query_profiles` is a derived boost table and should be rebuilt from the
   current source map.

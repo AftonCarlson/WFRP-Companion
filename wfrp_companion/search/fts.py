@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
+from wfrp_companion.library.page_labels import load_calibrated_printed_page_label
 
 
 @dataclass(frozen=True)
@@ -504,19 +505,23 @@ def search_exact(
 
     with initialize_database(config.db_path) as connection:
         rows = connection.execute(sql, parameters).fetchall()
-
-    return tuple(
-        SearchHit(
-            book_id=row["book_id"],
-            title=row["title"],
-            category=row["category"],
-            page_id=row["page_id"],
-            page_number=row["pdf_page_number"],
-            pdf_page_number=row["pdf_page_number"],
-            page_label=row["page_label"],
-            snippet=row["snippet"],
-            rank=rank,
-            score=float(row["score"]),
+        return tuple(
+            SearchHit(
+                book_id=row["book_id"],
+                title=row["title"],
+                category=row["category"],
+                page_id=row["page_id"],
+                page_number=row["pdf_page_number"],
+                pdf_page_number=row["pdf_page_number"],
+                page_label=load_calibrated_printed_page_label(
+                    connection,
+                    book_id=row["book_id"],
+                    page_number=int(row["pdf_page_number"]),
+                    fallback_label=row["page_label"],
+                ),
+                snippet=row["snippet"],
+                rank=rank,
+                score=float(row["score"]),
+            )
+            for rank, row in enumerate(rows, start=1)
         )
-        for rank, row in enumerate(rows, start=1)
-    )

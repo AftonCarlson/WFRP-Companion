@@ -238,6 +238,34 @@ resolution:
 - This phase does not add OCR-layout table reconstruction, hosted reranking,
   or public/private text exports.
 
+Phase 7 PR10 adds printed page-label calibration/backfill:
+
+- Migration `0005_page_label_calibration` adds
+  `book_page_label_calibrations` and
+  `ingest_jobs(job_type='backfill_page_labels')` for existing databases and
+  fresh schemas.
+- `wfrp_companion/library/page_labels.py` owns calibrated printed-label
+  snapshots, offset-anchor metadata, currentness checks, stale-running
+  recovery, and count-only failure state under
+  `book_retrieval_status.page_label_status`.
+- `tools/backfill_page_labels.py` can backfill all eligible copied/imported
+  books or selected `--book-id` values. Optional
+  `--anchor book_id:pdf_page_number:printed_label` values calibrate offsets
+  while preserving roman/front-matter labels before the anchor. Plain reruns
+  preserve current anchored calibrations and reuse stored anchors after page
+  text/label snapshot drift unless `--force` or a new anchor is supplied.
+- Exact search, Familiar prompt evidence, and stored/reloaded chat citations
+  prefer current calibrated printed labels/ranges. The hidden
+  `pdf_page_number` remains the reader jump coordinate.
+- Missing/conflicting/manual-review labels are not promoted to confident
+  printed labels: page-fallback evidence, source-object evidence, linked page
+  evidence, and reloaded citations leave printed label/range metadata absent
+  when calibration cannot prove a printed label.
+- CLI output remains count-oriented and prints safe failure categories rather
+  than raw exception payloads that could contain private extracted text.
+- Label lookup is a display/citation layer after retrieval selection; it does
+  not expand source scope and cannot introduce unchecked-book evidence.
+
 ## Answer Contract
 
 [coverage: high]

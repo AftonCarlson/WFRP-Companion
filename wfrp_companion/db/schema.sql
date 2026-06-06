@@ -271,6 +271,19 @@ create table if not exists book_retrieval_status (
   check(embedding_dimensions is null or embedding_dimensions > 0)
 );
 
+create table if not exists book_page_label_calibrations (
+  book_id text primary key references books(id) on delete cascade,
+  status text not null,
+  method text not null,
+  calibration_json text not null default '{}',
+  page_text_snapshot_sha256 text not null,
+  last_error text,
+  reviewed_at text,
+  updated_at text not null,
+  check(status in ('not_started', 'calibrating', 'calibrated', 'needs_review', 'failed')),
+  check(length(method) > 0)
+);
+
 create table if not exists book_source_maps (
   book_id text primary key references books(id) on delete cascade,
   summary text not null,
@@ -366,7 +379,7 @@ create table if not exists ingest_jobs (
   created_at text not null,
   updated_at text not null,
   completed_at text,
-  check(job_type in ('copy_pdf', 'import_page_text', 'rebuild_fts', 'scan_visual_assets', 'render_page', 'extract_source_objects', 'rebuild_source_object_fts', 'rebuild_source_maps', 'rebuild_embeddings')),
+  check(job_type in ('copy_pdf', 'import_page_text', 'rebuild_fts', 'scan_visual_assets', 'render_page', 'extract_source_objects', 'rebuild_source_object_fts', 'rebuild_source_maps', 'rebuild_embeddings', 'backfill_page_labels')),
   check(status in ('queued', 'running', 'succeeded', 'failed'))
 );
 
@@ -483,6 +496,8 @@ create index if not exists ix_retrieval_run_source_books_book
 on retrieval_run_source_books(book_id, captured_at);
 create index if not exists ix_source_object_search_book_type
 on source_object_search(book_id, object_type);
+create index if not exists ix_book_page_label_calibrations_status
+on book_page_label_calibrations(status, updated_at);
 create index if not exists ix_ingest_jobs_status on ingest_jobs(status, job_type);
 create index if not exists ix_chat_threads_updated_at on chat_threads(updated_at desc);
 create index if not exists ix_chat_thread_source_books_book

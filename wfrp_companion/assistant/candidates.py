@@ -15,6 +15,8 @@ from wfrp_companion.assistant.reranking import reciprocal_rank_fuse
 from wfrp_companion.assistant.reranking import semantic_overlap_count
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
+from wfrp_companion.library.page_labels import load_calibrated_printed_page_label
+from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
 from wfrp_companion.search.fts import build_fts_query, search_exact
 from wfrp_companion.source_objects.embeddings import cosine_similarity
 from wfrp_companion.source_objects.embeddings import local_hash_embeddings_enabled
@@ -102,6 +104,12 @@ def evidence_candidate_from_page_hit(
     page_text = load_page_text_from_connection(connection, page_id)
     if not page_text:
         return None
+    printed_page_label = load_calibrated_printed_page_label(
+        connection,
+        book_id=getattr(hit, "book_id"),
+        page_number=page_number,
+        fallback_label=page_label,
+    )
     return EvidenceCandidate(
         book_id=getattr(hit, "book_id"),
         title=getattr(hit, "title"),
@@ -109,10 +117,10 @@ def evidence_candidate_from_page_hit(
         page_id=page_id,
         page_number=page_number,
         pdf_page_number=pdf_page_number,
-        page_label=page_label,
+        page_label=printed_page_label,
         page_start=page_number,
         page_end=page_number,
-        page_range_label=page_label,
+        page_range_label=printed_page_label,
         snippet=getattr(hit, "snippet", "") or "",
         base_score=float(getattr(hit, "score")),
         context_text=page_text,
@@ -420,6 +428,7 @@ def evidence_candidate_from_source_object_row(
         else:
             assert linked.page_row is not None
             candidate = linked_page_row_to_candidate(
+                connection,
                 linked.page_row,
                 source_row=row,
                 base_score=base_score,
@@ -486,6 +495,12 @@ def source_object_row_to_candidate(
         page_start=int(row["page_start"]),
         page_end=int(row["page_end"]),
     )
+    page_label = load_calibrated_printed_page_label(
+        connection,
+        book_id=row["book_id"],
+        page_number=int(row["page_start"]),
+        fallback_label=row["page_label"],
+    )
     return EvidenceCandidate(
         book_id=row["book_id"],
         title=row["book_title"],
@@ -493,7 +508,7 @@ def source_object_row_to_candidate(
         page_id=row["page_id"],
         page_number=int(row["page_start"]),
         pdf_page_number=int(row["page_start"]),
-        page_label=row["page_label"],
+        page_label=page_label,
         page_start=int(row["page_start"]),
         page_end=int(row["page_end"]),
         page_range_label=page_range_label,
@@ -512,6 +527,7 @@ def source_object_row_to_candidate(
 
 
 def linked_page_row_to_candidate(
+    connection: sqlite3.Connection,
     row: sqlite3.Row,
     *,
     source_row: sqlite3.Row,
@@ -521,7 +537,12 @@ def linked_page_row_to_candidate(
     link_type: str,
 ) -> EvidenceCandidate:
     page_number = int(row["page_number"])
-    page_label = row["page_label"]
+    page_label = load_calibrated_printed_page_label(
+        connection,
+        book_id=row["book_id"],
+        page_number=page_number,
+        fallback_label=row["page_label"],
+    )
     return EvidenceCandidate(
         book_id=row["book_id"],
         title=row["book_title"],
@@ -532,7 +553,12 @@ def linked_page_row_to_candidate(
         page_label=page_label,
         page_start=page_number,
         page_end=page_number,
-        page_range_label=page_label,
+        page_range_label=load_calibrated_printed_page_range_label(
+            connection,
+            book_id=row["book_id"],
+            page_start=page_number,
+            page_end=page_number,
+        ),
         snippet=linked_evidence_snippet(source_row, link_type, snippet),
         base_score=base_score,
         context_text=row["text"],

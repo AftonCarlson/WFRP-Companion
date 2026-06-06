@@ -31,6 +31,7 @@ REQUIRED_TABLES = {
     "source_object_links",
     "book_object_status",
     "book_retrieval_status",
+    "book_page_label_calibrations",
     "book_source_maps",
     "book_query_profiles",
     "source_object_search",
@@ -250,6 +251,74 @@ def test_book_status_constraints_protect_lifecycle_state(tmp_path: Path) -> None
                 copy_status="copied",
                 managed_sha256=None,
             )
+
+
+def test_page_label_calibration_schema_allows_backfill_state(
+    tmp_path: Path,
+) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        insert_folder(connection)
+        insert_book(connection)
+
+        connection.execute(
+            """
+            insert into book_page_label_calibrations (
+              book_id,
+              status,
+              method,
+              calibration_json,
+              page_text_snapshot_sha256,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'calibrated',
+              'offset_anchor',
+              '{"labels_by_page":{"9":"1"}}',
+              'snapshot',
+              '2026-06-05T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into ingest_jobs (
+              id,
+              job_type,
+              target_id,
+              status,
+              idempotency_key,
+              attempts,
+              created_at,
+              updated_at
+            )
+            values (
+              'labels-1',
+              'backfill_page_labels',
+              'core-rules',
+              'succeeded',
+              'backfill_page_labels:core-rules:snapshot:v1',
+              1,
+              '2026-06-05T00:00:00Z',
+              '2026-06-05T00:00:00Z'
+            )
+            """
+        )
+
+        calibration = connection.execute(
+            """
+            select status, method
+            from book_page_label_calibrations
+            where book_id = 'core-rules'
+            """
+        ).fetchone()
+        job = connection.execute(
+            "select job_type from ingest_jobs where id = 'labels-1'"
+        ).fetchone()
+
+    assert calibration["status"] == "calibrated"
+    assert calibration["method"] == "offset_anchor"
+    assert job["job_type"] == "backfill_page_labels"
 
 
 def test_asset_constraints_prevent_duplicate_candidates_and_current_labels(
