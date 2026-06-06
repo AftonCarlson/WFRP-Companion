@@ -328,6 +328,30 @@ create virtual table if not exists source_object_search_fts using fts5(
   content_rowid='rowid'
 );
 
+create table if not exists source_object_embeddings (
+  id text primary key,
+  source_object_id text not null references source_objects(id) on delete cascade,
+  book_id text not null references books(id) on delete cascade,
+  embedding_model text not null,
+  embedding_dimensions integer not null,
+  text_snapshot_sha256 text not null,
+  vector_blob blob not null,
+  created_at text not null,
+  updated_at text not null,
+  check(embedding_dimensions > 0)
+);
+
+create unique index if not exists ux_source_object_embeddings_current
+on source_object_embeddings(
+  source_object_id,
+  embedding_model,
+  embedding_dimensions,
+  text_snapshot_sha256
+);
+
+create index if not exists ix_source_object_embeddings_book_model
+on source_object_embeddings(book_id, embedding_model, embedding_dimensions);
+
 create table if not exists ingest_jobs (
   id text primary key,
   job_type text not null,
@@ -339,7 +363,7 @@ create table if not exists ingest_jobs (
   created_at text not null,
   updated_at text not null,
   completed_at text,
-  check(job_type in ('copy_pdf', 'import_page_text', 'rebuild_fts', 'scan_visual_assets', 'render_page', 'extract_source_objects', 'rebuild_source_object_fts', 'rebuild_source_maps')),
+  check(job_type in ('copy_pdf', 'import_page_text', 'rebuild_fts', 'scan_visual_assets', 'render_page', 'extract_source_objects', 'rebuild_source_object_fts', 'rebuild_source_maps', 'rebuild_embeddings')),
   check(status in ('queued', 'running', 'succeeded', 'failed'))
 );
 

@@ -12,7 +12,8 @@ source-object migration/model foundation, Phase 7 PR2 deterministic
 source-object extraction foundation, Phase 7 PR3 Familiar source-map/object
 retrieval, Phase 7 PR4 retrieval-module split, and Phase 7 PR5 durable
 source-map/profile ownership, Phase 7 PR6 source-object search backfill, and
-Phase 7 PR7 retrieval rank fusion/reranker protocol.
+Phase 7 PR7 retrieval rank fusion/reranker protocol, and Phase 7 PR8 local
+vector retrieval channel.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -62,7 +63,7 @@ Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
 ```
 
 Current frontend verification commands:
@@ -115,12 +116,14 @@ Current focused test files:
 - `tests/tools/test_dev.py`
 - `tests/tools/test_migrate_db.py`
 - `tests/tools/test_extract_source_objects.py`
+- `tests/tools/test_rebuild_embeddings.py`
 - `tests/tools/test_rebuild_source_object_fts.py`
 - `tests/tools/test_rebuild_source_maps.py`
 - `tests/tools/test_source_sets_cli.py`
 - `tests/source_objects/test_models.py`
 - `tests/source_objects/test_extractor.py`
 - `tests/source_objects/test_layout.py`
+- `tests/source_objects/test_embeddings.py`
 - `tests/source_objects/test_object_search_backfill.py`
 - `tests/source_objects/test_source_map_builder.py`
 - `tests/source_objects/test_store.py`
@@ -145,7 +148,11 @@ object-type posting validation, stale status repair,
 lifecycle, book retrieval status backfill,
 durable source-map freshness/fallback behavior, source-map query-profile
 rebuilds, `retrieval_run_source_books` snapshots, the
-`tools/rebuild_source_maps.py` CLI entrypoint, the `tools/init_db.py` CLI
+`tools/rebuild_source_maps.py` CLI entrypoint, local source-object embedding
+rebuilds, vector snapshot invalidation, stale embedding job recovery,
+checked-book vector candidate filtering, malformed embedding-row scope
+protection, `tools/rebuild_embeddings.py` count-only CLI output, the
+`tools/init_db.py` CLI
 entrypoint, managed PDF identity, recursive discovery, SHA/atomic-copy storage
 helpers, idempotent library import, copy-job recovery, collision/failure
 reporting, the `tools/import_pdfs.py` CLI entrypoint,
@@ -165,7 +172,9 @@ Retrieval-specific tests now also cover RRF deterministic ordering,
 same-channel dedupe before fusion-rank assignment, weak lexical-only
 rejection, exact table/object-type query preservation, deterministic reranker
 protocol exports, and persisted rank reasons that include channel
-contribution, fusion score, and reranker judgment.
+contribution, fusion score, and reranker judgment. Vector-channel tests cover
+disabled-by-default behavior, checked-book filtering, current-snapshot gating,
+and exact lexical/object hits staying ahead of vector-only candidates.
 
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
@@ -177,7 +186,7 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-05 reported 350 tests
+The latest full backend verification command on 2026-06-05 reported 372 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 127 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful

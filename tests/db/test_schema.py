@@ -35,6 +35,7 @@ REQUIRED_TABLES = {
     "book_query_profiles",
     "source_object_search",
     "source_object_search_fts",
+    "source_object_embeddings",
     "chat_threads",
     "chat_thread_source_books",
     "chat_messages",
@@ -160,6 +161,9 @@ def test_load_config_uses_local_defaults(tmp_path: Path) -> None:
     assert config.openai_model == "gpt-5.4-mini"
     assert config.openai_timeout_seconds == 60
     assert config.chat_context_hit_limit == 6
+    assert config.embedding_provider == "disabled"
+    assert config.embedding_model == "local-hash-v1"
+    assert config.embedding_dimensions == 64
 
 
 def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
@@ -175,6 +179,9 @@ def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
             "WFRP_CHAT_CONTEXT_HIT_LIMIT": "3",
             "WFRP_CHAT_CONTEXT_CHAR_LIMIT": "1200",
             "WFRP_CHAT_CONTEXT_WINDOW_CHARS": "400",
+            "WFRP_EMBEDDING_PROVIDER": "local-hash",
+            "WFRP_EMBEDDING_MODEL": "local-hash-test",
+            "WFRP_EMBEDDING_DIMENSIONS": "16",
         },
         repo_root=tmp_path / "repo",
     )
@@ -189,6 +196,9 @@ def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
     assert config.chat_context_hit_limit == 3
     assert config.chat_context_char_limit == 1200
     assert config.chat_context_window_chars == 400
+    assert config.embedding_provider == "local-hash"
+    assert config.embedding_model == "local-hash-test"
+    assert config.embedding_dimensions == 16
 
 
 def test_initialize_database_creates_required_schema_and_wal(

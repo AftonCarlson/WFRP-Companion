@@ -1,5 +1,36 @@
 # Wiki Compile Log
 
+## 2026-06-05 Local Vector Retrieval Channel
+
+- Added migration `0003_vector_retrieval` and the
+  `source_object_embeddings` table for SQLite-local source-object vectors.
+- Added disabled-by-default embedding configuration:
+  `WFRP_EMBEDDING_PROVIDER`, `WFRP_EMBEDDING_MODEL`, and
+  `WFRP_EMBEDDING_DIMENSIONS`. The only implemented provider is local
+  deterministic `local-hash`; no hosted vector service is called.
+- Added `wfrp_companion/source_objects/embeddings.py` and
+  `tools/rebuild_embeddings.py` to rebuild local vector blobs from current
+  `source_objects` with `ingest_jobs(job_type='rebuild_embeddings')`,
+  `book_retrieval_status.vector_status`, snapshot invalidation, stale-running
+  recovery, and count-only CLI output.
+- Added vector candidate generation in `wfrp_companion/assistant/candidates.py`
+  as one more candidate channel before RRF and deterministic reranking. Vector
+  candidates are filtered to the checked `book_id` snapshot and only used for
+  books whose embedding snapshot is current.
+- Independent review found three issues: malformed embedding rows could cross
+  scope if `source_object_embeddings.book_id` disagreed with
+  `source_objects.book_id`, existing `0002` databases needed pending
+  migrations before the new job type was used, and vector query-time currentness
+  needed to prove the embedding snapshot. All were fixed with regressions;
+  follow-up review reported no findings, and CodeRabbit reported 0 issues.
+- Verification run for this pass: focused changed-module coverage reported 73
+  tests passing with 100.00% coverage; full Python tests reported 372 tests
+  passing with one existing Starlette/httpx deprecation warning and 100.00%
+  coverage; `ruff check .` passed; `git diff --check` passed; frontend Vitest
+  reported 127 tests passing; frontend coverage passed above configured
+  thresholds; frontend production build passed with the existing large PDF
+  worker chunk warning; Playwright e2e reported 2 tests passing.
+
 ## 2026-06-05 Retrieval Rank Fusion And Reranker Protocol
 
 - Added reciprocal rank fusion to Familiar retrieval candidates before final

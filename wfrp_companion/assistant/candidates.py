@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Collection
+from dataclasses import replace
 
 from wfrp_companion.assistant.evidence import EvidenceCandidate
 from wfrp_companion.assistant.evidence import load_page_range_label
@@ -14,6 +15,11 @@ from wfrp_companion.assistant.reranking import semantic_overlap_count
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.search.fts import build_fts_query, search_exact
+from wfrp_companion.source_objects.embeddings import cosine_similarity
+from wfrp_companion.source_objects.embeddings import local_hash_embeddings_enabled
+from wfrp_companion.source_objects.embeddings import source_object_embeddings_current
+from wfrp_companion.source_objects.embeddings import text_embedding_vector
+from wfrp_companion.source_objects.embeddings import vector_from_blob
 
 
 def collect_evidence_candidates(
@@ -48,6 +54,15 @@ def collect_evidence_candidates(
                 limit=per_candidate_limit,
             ):
                 candidates.append(candidate)
+        vector_query = " ".join((*query_plan.terms, *query_plan.expanded_terms))
+        for candidate in search_vector_candidates(
+            connection,
+            vector_query,
+            book_ids=source_book_ids,
+            limit=per_candidate_limit,
+            config=config,
+        ):
+            candidates.append(candidate)
     return reciprocal_rank_fuse(candidates)
 
 def keep_best_candidate(
@@ -269,6 +284,102 @@ def search_source_object_like_candidates(
         )
         for row in rows
     )
+
+
+def search_vector_candidates(
+    connection: sqlite3.Connection,
+    query_text: str,
+    *,
+    book_ids: Collection[str],
+    limit: int,
+    config: AppConfig,
+) -> tuple[EvidenceCandidate, ...]:
+    selected_book_ids = tuple(book_ids)
+    if not selected_book_ids or not local_hash_embeddings_enabled(config):
+        return ()
+    current_book_ids = tuple(
+        book_id
+        for book_id in selected_book_ids
+        if source_object_embeddings_current(connection, book_id, config=config)
+    )
+    if not current_book_ids:
+        return ()
+    query_vector = text_embedding_vector(
+        query_text,
+        dimensions=config.embedding_dimensions,
+    )
+    if not any(query_vector):
+        return ()
+    placeholders = ",".join("?" for _ in current_book_ids)
+    rows = connection.execute(
+        f"""
+        select
+          source_objects.*,
+          books.title as book_title,
+          books.category,
+          pages.page_number as pdf_page_number,
+          pages.page_label,
+          source_object_embeddings.vector_blob
+        from source_object_embeddings
+        join source_objects
+          on source_objects.id = source_object_embeddings.source_object_id
+         and source_objects.book_id = source_object_embeddings.book_id
+        join book_retrieval_status
+          on book_retrieval_status.book_id = source_objects.book_id
+        join books on books.id = source_objects.book_id
+        join pages on pages.id = source_objects.page_id
+        where source_objects.book_id in ({placeholders})
+          and source_object_embeddings.embedding_model = ?
+          and source_object_embeddings.embedding_dimensions = ?
+          and source_object_embeddings.text_snapshot_sha256 =
+              source_objects.text_snapshot_sha256
+          and book_retrieval_status.vector_status = 'indexed'
+          and book_retrieval_status.embedding_model = ?
+          and book_retrieval_status.embedding_dimensions = ?
+          and books.copy_status = 'copied'
+          and books.text_status = 'imported'
+          and books.search_status = 'indexed'
+        """,
+        (
+            *current_book_ids,
+            config.embedding_model,
+            config.embedding_dimensions,
+            config.embedding_model,
+            config.embedding_dimensions,
+        ),
+    ).fetchall()
+    scored_rows = sorted(
+        (
+            (
+                cosine_similarity(query_vector, vector_from_blob(row["vector_blob"])),
+                row,
+            )
+            for row in rows
+        ),
+        key=lambda item: (-item[0], item[1]["page_start"], item[1]["id"]),
+    )
+    candidates: list[EvidenceCandidate] = []
+    for similarity, row in scored_rows[: max(1, min(limit, 100))]:
+        if similarity <= 0:
+            continue
+        candidate = evidence_candidate_from_source_object_row(
+            connection,
+            row,
+            base_score=-similarity,
+            snippet=row["title"] or "",
+            channel="vector",
+        )
+        candidates.append(
+            replace(
+                candidate,
+                rank_reasons=(
+                    *candidate.rank_reasons,
+                    f"vector_similarity:{similarity:.6f}",
+                ),
+            )
+        )
+    return tuple(candidates)
+
 
 def evidence_candidate_from_source_object_row(
     connection: sqlite3.Connection,

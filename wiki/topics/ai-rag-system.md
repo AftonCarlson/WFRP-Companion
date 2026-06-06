@@ -184,6 +184,28 @@ Phase 7 PR7 adds rank fusion and an explicit reranker protocol:
 - This phase does **not** add vector candidates, embeddings, a provider-backed
   reranker, new extraction heuristics, or any public/private text export.
 
+Phase 7 PR8 adds a local vector candidate channel:
+
+- Migration `0003_vector_retrieval` adds `source_object_embeddings` for
+  SQLite-local source-object vectors.
+- `tools/rebuild_embeddings.py` can rebuild embeddings from current
+  `source_objects` using the deterministic local `local-hash` provider. The
+  default embedding provider is `disabled`, so vectors are opt-in.
+- `book_retrieval_status.vector_status`, `vector_snapshot_sha256`,
+  `embedding_model`, and `embedding_dimensions` own vector readiness and
+  currentness per book.
+- Familiar vector candidates are generated only for the checked `book_id`
+  snapshot, only when the configured provider is `local-hash`, and only when
+  the book's embedding snapshot is current.
+- Vector rows join back to `source_objects` by both `source_object_id` and
+  `book_id`, so malformed embedding rows cannot turn checked-book scope into
+  unchecked-book evidence.
+- Vector results enter the same candidate pool as page/source-object lexical
+  hits, then go through RRF and the deterministic reranker. They do **not**
+  bypass semantic relevance filtering or selected-evidence citation rules.
+- This phase does not add hosted embeddings, a hosted vector database, or a
+  provider-backed/cross-encoder reranker.
+
 ## Answer Contract
 
 [coverage: high]

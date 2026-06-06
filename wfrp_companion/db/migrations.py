@@ -12,9 +12,11 @@ from wfrp_companion.db.connection import open_connection
 MIGRATION_DIR = Path(__file__).with_name("migration_files")
 PHASE_7_MIGRATION_ID = "0001_phase_7_source_objects"
 SOURCE_MAP_RETRIEVAL_MIGRATION_ID = "0002_source_map_retrieval"
+VECTOR_RETRIEVAL_MIGRATION_ID = "0003_vector_retrieval"
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
+    VECTOR_RETRIEVAL_MIGRATION_ID,
 )
 
 
@@ -116,6 +118,8 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         preflight_phase_7_source_objects(connection)
     elif migration_id == SOURCE_MAP_RETRIEVAL_MIGRATION_ID:
         migration_function = apply_source_map_retrieval
+    elif migration_id == VECTOR_RETRIEVAL_MIGRATION_ID:
+        migration_function = apply_vector_retrieval
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -169,6 +173,19 @@ def apply_source_map_retrieval(connection: sqlite3.Connection) -> None:
     backfill_retrieval_run_source_books(connection)
 
 
+def apply_vector_retrieval(connection: sqlite3.Connection) -> None:
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{VECTOR_RETRIEVAL_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+    rebuild_ingest_jobs_if_needed(
+        connection,
+        required_job_type="rebuild_embeddings",
+    )
+
+
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
     for statement in sql.split(";"):
         statement = statement.strip()
@@ -206,6 +223,7 @@ def collect_table_counts(connection: sqlite3.Connection) -> tuple[tuple[str, int
         "source_object_links",
         "book_object_status",
         "source_object_search",
+        "source_object_embeddings",
         "book_retrieval_status",
         "book_source_maps",
         "retrieval_run_source_books",
@@ -491,7 +509,8 @@ create table ingest_jobs (
     'render_page',
     'extract_source_objects',
     'rebuild_source_object_fts',
-    'rebuild_source_maps'
+    'rebuild_source_maps',
+    'rebuild_embeddings'
   )),
   check(status in ('queued', 'running', 'succeeded', 'failed'))
 )

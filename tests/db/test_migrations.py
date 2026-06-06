@@ -291,6 +291,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
     assert summary.applied == (
         "0001_phase_7_source_objects",
         "0002_source_map_retrieval",
+        "0003_vector_retrieval",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -331,6 +332,14 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0003_vector_retrieval",),
+            ).fetchone()
+            is not None
+        )
+        assert migrations.table_exists(connection, "source_object_embeddings")
         assert (
             connection.execute(
                 "select count(*) from book_retrieval_status"
@@ -389,6 +398,23 @@ def test_phase7_migration_allows_new_job_types_local_provider_and_object_hits(
             )
             values ('extract-1', 'extract_source_objects', 'core-rules',
                     'running', 'extract_source_objects:core-rules:sha', 1,
+                    '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into ingest_jobs (
+              id,
+              job_type,
+              target_id,
+              status,
+              idempotency_key,
+              attempts,
+              created_at,
+              updated_at
+            )
+            values ('embeddings-1', 'rebuild_embeddings', 'core-rules',
+                    'running', 'rebuild_embeddings:core-rules:sha', 1,
                     '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
             """
         )
@@ -563,11 +589,13 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
     assert first.applied == (
         "0001_phase_7_source_objects",
         "0002_source_map_retrieval",
+        "0003_vector_retrieval",
     )
     assert second.applied == ()
     assert second.skipped == (
         "0001_phase_7_source_objects",
         "0002_source_map_retrieval",
+        "0003_vector_retrieval",
     )
 
 
@@ -582,6 +610,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
     assert summary.applied == (
         "0001_phase_7_source_objects",
         "0002_source_map_retrieval",
+        "0003_vector_retrieval",
     )
     with open_connection(db_path) as connection:
         assert (
@@ -595,6 +624,13 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
             connection.execute(
                 "select id from schema_migrations where id = ?",
                 ("0002_source_map_retrieval",),
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0003_vector_retrieval",),
             ).fetchone()
             is not None
         )

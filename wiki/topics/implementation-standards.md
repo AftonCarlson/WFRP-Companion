@@ -50,6 +50,8 @@ The current codebase has working local implementations for steps 1 through 6:
 - Familiar retrieval now fuses candidate-channel ranks and applies a
   replaceable reranker protocol. The default reranker is deterministic and
   local; provider-backed reranking is not part of the current codebase.
+- `tools/rebuild_embeddings.py` now rebuilds local source-object vectors when
+  `WFRP_EMBEDDING_PROVIDER=local-hash`; the default provider is disabled.
 
 ## Rules For New Code
 
@@ -77,6 +79,9 @@ The current codebase has working local implementations for steps 1 through 6:
 - Treat lexical/page/object search as candidate generation. A reranker must
   decide whether a candidate is relevant enough to enter Familiar prompt
   context.
+- Treat vector search as another candidate channel. It must be scoped to
+  checked books, validated against current local embedding snapshots, and fed
+  through rank fusion plus reranking before prompt context.
 
 ## PDF/Search Rules
 
@@ -102,6 +107,9 @@ The current codebase has working local implementations for steps 1 through 6:
   without rerunning extraction.
 - Run `tools/rebuild_source_maps.py` after source-object extraction when
   durable Familiar source-map/profile metadata needs to be refreshed.
+- Run `tools/rebuild_embeddings.py` after source-object extraction when local
+  vector candidates are explicitly enabled. The command is count-only and must
+  not print private source-object text.
 - Treat `source_set_books.enabled` as scope membership only. Do not use it as a
   replacement for readiness state.
 - Keep exact-search readiness gating in `search_exact()` and the `books`

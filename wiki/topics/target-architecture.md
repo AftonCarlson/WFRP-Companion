@@ -237,6 +237,28 @@ Phase 7 PR7 adds the rank-fusion/reranker seam for later vector retrieval:
   remain later phases and should attach to this pipeline as additional
   candidate/reranker implementations under the same checked-book scope.
 
+Phase 7 PR8 attaches the first local vector candidate implementation to that
+pipeline:
+
+- Migration `0003_vector_retrieval` adds `source_object_embeddings`, keyed by
+  source object, book, embedding model, embedding dimensions, and text snapshot.
+- `wfrp_companion/source_objects/embeddings.py` owns the deterministic
+  `local-hash` embedding MVP, vector blob encoding, embedding snapshot hashes,
+  guarded rebuild jobs, stale-running recovery, currentness checks, and status
+  writes.
+- `tools/rebuild_embeddings.py` is the count-oriented local CLI. It applies
+  pending migrations before using `ingest_jobs(job_type='rebuild_embeddings')`
+  so existing databases are repaired before vector rebuilds begin.
+- `wfrp_companion/assistant/candidates.py` queries vectors only for checked
+  books whose `book_retrieval_status.vector_status='indexed'` state is current
+  for the configured embedding model/dimensions and current source-object
+  snapshot.
+- Vector candidate rows are scoped through `source_objects.book_id`; embedding
+  rows whose `book_id` disagrees with their source object are rejected instead
+  of becoming evidence.
+- The vector channel feeds RRF and `DeterministicReranker`; exact lexical/object
+  channels remain present and vectors cannot bypass final relevance judgment.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval/source-object metadata. The current populated runtime

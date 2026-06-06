@@ -21,6 +21,9 @@ class AppConfig:
     chat_context_hit_limit: int = 6
     chat_context_char_limit: int = 9000
     chat_context_window_chars: int = 1600
+    embedding_provider: str = "disabled"
+    embedding_model: str = "local-hash-v1"
+    embedding_dimensions: int = 64
 
 
 def project_root() -> Path:
@@ -49,4 +52,7 @@ def load_config(
         chat_context_hit_limit=int(source.get("WFRP_CHAT_CONTEXT_HIT_LIMIT", "6")),
         chat_context_char_limit=int(source.get("WFRP_CHAT_CONTEXT_CHAR_LIMIT", "9000")),
         chat_context_window_chars=int(source.get("WFRP_CHAT_CONTEXT_WINDOW_CHARS", "1600")),
+        embedding_provider=source.get("WFRP_EMBEDDING_PROVIDER", "disabled"),
+        embedding_model=source.get("WFRP_EMBEDDING_MODEL", "local-hash-v1"),
+        embedding_dimensions=int(source.get("WFRP_EMBEDDING_DIMENSIONS", "64")),
     )
