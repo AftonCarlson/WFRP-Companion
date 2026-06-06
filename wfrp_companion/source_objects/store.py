@@ -13,7 +13,7 @@ from wfrp_companion.db.migrations import apply_pending_migrations
 from wfrp_companion.source_objects.models import SourceObject
 
 
-SOURCE_OBJECT_EXTRACTOR_VERSION = "structured-evidence-v1"
+SOURCE_OBJECT_EXTRACTOR_VERSION = "structured-evidence-v4"
 
 
 @dataclass(frozen=True)

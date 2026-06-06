@@ -1,5 +1,33 @@
 # Wiki Compile Log
 
+## 2026-06-06 Stat/Table Retrieval Repair
+
+- Repaired Familiar stat-block/table retrieval after live QA showed missing
+  Gor stats, missing hit-location chart output, and wrong stat-ish Black
+  Knight context.
+- Blocked structural query terms such as `block`, `stat`, `table`, and
+  `chart` from fuzzy source-map expansion, preventing `stat block` queries
+  from drifting into `black` results.
+- Expanded deterministic source-object extraction for WFRP-style OCR layouts:
+  pipe/percent stat profiles with main/secondary rows, range charts such as
+  hit-location tables, OCR-normalized `Hit Location` table titles, and
+  chart-searchable table/table-row text. The extractor version is now
+  `structured-evidence-v4`.
+- Updated deterministic reranking so table/chart and stat/profile requests get
+  typed-evidence boosts after semantic acceptance, and inherited chapter
+  headings/running headers can route candidates but cannot be the only reason
+  multi-term entity evidence enters prompt context.
+- Local maintenance rebuilt source objects for all 26 books with zero failures,
+  refreshed source-object FTS/source maps, and left all 26 books indexed with
+  current source maps. Live retrieval now returns `Old World Bestiary` Gor
+  Statistics first for `give me the stat block for gors`, returns the Core
+  Rules `Hit Location` table first for `can you give me the hit location
+  chart`, and no longer includes the p45/p47 unrelated Black Knight
+  wrong-stat sections.
+- Verification run for this repair: full Python tests reported 461 tests
+  passing with one existing Starlette/httpx deprecation warning and 100.00%
+  coverage; `ruff check .` passed.
+
 ## 2026-06-06 Familiar Conversation Context
 
 - Added bounded app-owned conversation context for Familiar in

@@ -2423,7 +2423,32 @@ def test_semantic_helper_edges(tmp_path: Path) -> None:
         (candidate,),
         retrieval.plan_query("critical hit", ()),
     ) == ()
-    accepted_candidate = retrieval.EvidenceCandidate(
+
+
+def test_structural_query_terms_do_not_fuzzy_match_source_map_aliases() -> None:
+    source_map = (
+        retrieval.SourceMapEntry(
+            book_id="barony",
+            title="Barony",
+            category="Adventures",
+            summary="",
+            aliases=("black",),
+            best_source_for=(),
+            chapters=(),
+        ),
+    )
+
+    plan = retrieval.plan_query("give me the stat block for gors", source_map)
+
+    assert ("block", "black") not in {
+        (expansion.original, expansion.expanded) for expansion in plan.expansions
+    }
+    assert "black" not in plan.expanded_terms
+    assert retrieval.token_matches_source("block", {"black"}) is False
+
+
+def test_keep_best_candidate_replaces_weaker_page_candidate() -> None:
+    weaker_candidate = retrieval.EvidenceCandidate(
         book_id="core-rules",
         title="Core Rules",
         category="Core",
@@ -2435,41 +2460,231 @@ def test_semantic_helper_edges(tmp_path: Path) -> None:
         page_end=1,
         page_range_label=None,
         snippet="critical hit",
-        base_score=0,
+        base_score=4,
         context_text="critical hit",
         channel="page_fts",
-        rank_reasons=("fusion:rrf=not-a-number",),
     )
-    assert retrieval.rerank_candidates(
-        (accepted_candidate,),
-        retrieval.plan_query("critical hit", ()),
+    stronger_candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:1",
+        page_number=1,
+        pdf_page_number=1,
+        page_label=None,
+        page_start=1,
+        page_end=1,
+        page_range_label=None,
+        snippet="critical hit",
+        base_score=-2,
+        context_text="critical hit",
+        channel="page_fts",
     )
     candidates: dict[str, retrieval.EvidenceCandidate] = {}
-    retrieval.keep_best_candidate(candidates, accepted_candidate)
-    retrieval.keep_best_candidate(candidates, candidate)
-    assert candidates[accepted_candidate.dedupe_key] == accepted_candidate
-    better_candidate = retrieval.EvidenceCandidate(
+
+    retrieval.keep_best_candidate(candidates, weaker_candidate)
+    retrieval.keep_best_candidate(candidates, stronger_candidate)
+
+    assert candidates[weaker_candidate.dedupe_key] == stronger_candidate
+
+
+def test_chart_queries_prefer_typed_tables_over_rule_mentions() -> None:
+    table_candidate = retrieval.EvidenceCandidate(
         book_id="core-rules",
         title="Core Rules",
         category="Core",
-        page_id="core-rules:1",
-        page_number=1,
-        pdf_page_number=1,
+        page_id="core-rules:130",
+        page_number=130,
+        pdf_page_number=130,
         page_label=None,
-        page_start=1,
-        page_end=1,
+        page_start=130,
+        page_end=130,
         page_range_label=None,
-        snippet="critical hit",
-        base_score=-1,
-        context_text="critical hit",
-        channel="page_fts",
+        snippet="table chart Hit Location",
+        base_score=-8,
+        context_text="% roll Location\n01-15 Head\n16-35 Right Arm",
+        channel="source_object_fts",
+        source_object_id="hit-location-table",
+        object_type="table",
+        object_title="Hit Location",
+        confidence=0.82,
+        rank_reasons=("fusion:rrf=0.012",),
     )
-    retrieval.keep_best_candidate(candidates, better_candidate)
-    assert candidates[accepted_candidate.dedupe_key] == better_candidate
+    rule_candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:161",
+        page_number=161,
+        pdf_page_number=161,
+        page_label=None,
+        page_start=161,
+        page_end=161,
+        page_range_label=None,
+        snippet="hit location chart",
+        base_score=-12,
+        context_text="The hit location chart is mentioned while explaining another rule.",
+        channel="source_object_fts",
+        source_object_id="hit-location-mention",
+        object_type="rule_section",
+        object_title="Another Rule",
+        confidence=0.68,
+        rank_reasons=("fusion:rrf=0.03",),
+    )
+
+    ranked = retrieval.rerank_candidates(
+        (rule_candidate, table_candidate),
+        retrieval.plan_query("hit location chart", ()),
+    )
+
+    assert ranked[0][0].object_type == "table"
+    assert ranked[0][0].object_title == "Hit Location"
+    plural_ranked = retrieval.rerank_candidates(
+        (rule_candidate, table_candidate),
+        retrieval.plan_query("hit location charts", ()),
+    )
+
+    assert plural_ranked[0][0].object_type == "table"
+
+
+def test_stat_queries_boost_typed_stat_blocks() -> None:
+    stat_candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:12",
+        page_number=12,
+        pdf_page_number=12,
+        page_label=None,
+        page_start=12,
+        page_end=12,
+        page_range_label=None,
+        snippet="Captain Mira stat block",
+        base_score=-4,
+        context_text="Captain Mira stat block WS BS S T",
+        channel="source_object_fts",
+        source_object_id="captain-mira-stats",
+        object_type="stat_block",
+        object_title="Captain Mira Statistics",
+        confidence=0.82,
+        rank_reasons=("fusion:rrf=not-a-number",),
+    )
+    profile_candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:13",
+        page_number=13,
+        pdf_page_number=13,
+        page_label=None,
+        page_start=13,
+        page_end=13,
+        page_range_label=None,
+        snippet="Captain Mira stat block",
+        base_score=-5,
+        context_text="Captain Mira stat block Skills: Command",
+        channel="source_object_fts",
+        source_object_id="captain-mira-profile",
+        object_type="npc_profile",
+        object_title="Captain Mira",
+        confidence=0.78,
+        rank_reasons=(
+            "linked_source_object:stat_block",
+            "fusion:rrf=0.01",
+        ),
+    )
+
+    ranked = retrieval.rerank_candidates(
+        (profile_candidate, stat_candidate),
+        retrieval.plan_query("Captain Mira stat block", ()),
+    )
+
+    assert any("structural_intent_boost:14.0" in reason for reason in ranked[0][2])
+    assert any("structural_intent_boost:12.0" in reason for reason in ranked[1][2])
+    no_fusion_candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:14",
+        page_number=14,
+        pdf_page_number=14,
+        page_label=None,
+        page_start=14,
+        page_end=14,
+        page_range_label=None,
+        snippet="Captain Mira stat block",
+        base_score=-6,
+        context_text="Captain Mira stat block",
+        channel="source_object_fts",
+        source_object_id="captain-mira-no-fusion",
+        object_type="stat_block",
+        object_title="Captain Mira Statistics",
+        confidence=0.82,
+    )
+
     assert retrieval.rerank_candidates(
-        (better_candidate,),
-        retrieval.plan_query("critical hit", ()),
+        (no_fusion_candidate,),
+        retrieval.plan_query("Captain Mira stat block", ()),
     )
+
+
+def test_entity_queries_reject_heading_path_only_matches() -> None:
+    heading_only_candidate = retrieval.EvidenceCandidate(
+        book_id="barony",
+        title="Barony of the Damned",
+        category="Adventures",
+        page_id="barony:45",
+        page_number=45,
+        pdf_page_number=45,
+        page_label=None,
+        page_start=45,
+        page_end=45,
+        page_range_label=None,
+        snippet="",
+        base_score=-10,
+        context_text=(
+            "Chapter Three: Rise of the Black Knight\n\n"
+            "A plague surgeon observes the city."
+        ),
+        channel="source_object_fts",
+        source_object_id="barony:unrelated",
+        object_type="rule_section",
+        object_title="The Thirteenth Claw",
+        heading_path=("Chapter Three: Rise of the Black Knight", "The Thirteenth Claw"),
+        confidence=0.68,
+        rank_reasons=("fusion:rrf=0.03",),
+    )
+    direct_candidate = retrieval.EvidenceCandidate(
+        book_id="barony",
+        title="Barony of the Damned",
+        category="Adventures",
+        page_id="barony:31",
+        page_number=31,
+        pdf_page_number=31,
+        page_label=None,
+        page_start=31,
+        page_end=31,
+        page_range_label=None,
+        snippet="",
+        base_score=-9,
+        context_text="The Black Knight threatens the duchy.",
+        channel="source_object_fts",
+        source_object_id="barony:black-knight",
+        object_type="rule_section",
+        object_title="The Black Knight",
+        heading_path=("Chapter Three: Rise of the Black Knight",),
+        confidence=0.68,
+        rank_reasons=("fusion:rrf=0.02",),
+    )
+
+    ranked = retrieval.rerank_candidates(
+        (heading_only_candidate, direct_candidate),
+        retrieval.plan_query("tell me about the black knight", ()),
+    )
+
+    assert [candidate.object_title for candidate, _score, _reasons in ranked] == [
+        "The Black Knight"
+    ]
 
 
 def test_retrieval_records_ranked_hits(tmp_path: Path) -> None:

@@ -56,6 +56,20 @@ STOP_WORDS = {
     "you",
 }
 
+STRUCTURAL_QUERY_TERMS = {
+    "block",
+    "blocks",
+    "chart",
+    "charts",
+    "profile",
+    "profiles",
+    "stat",
+    "stats",
+    "statistics",
+    "table",
+    "tables",
+}
+
 
 class SourceMapEntryLike(Protocol):
     aliases: tuple[str, ...]
@@ -157,6 +171,8 @@ def terms_are_close(left: str, right: str) -> bool:
         return True
     if term_variants(left).intersection(term_variants(right)):
         return True
+    if left in STRUCTURAL_QUERY_TERMS or right in STRUCTURAL_QUERY_TERMS:
+        return False
     if abs(len(left) - len(right)) > 1:
         return False
     if len(left) < 5 or len(right) < 5:

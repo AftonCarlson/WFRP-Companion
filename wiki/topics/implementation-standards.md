@@ -85,6 +85,12 @@ The current codebase has working local implementations for steps 1 through 6:
 - Treat lexical/page/object search as candidate generation. A reranker must
   decide whether a candidate is relevant enough to enter Familiar prompt
   context.
+- Keep structural retrieval terms (`stat`, `block`, `table`, `chart`,
+  `profile`, and close variants) authoritative as object-intent signals. Do
+  not edit-distance expand them into unrelated source-map aliases.
+- Let inherited chapter headings and OCR running headers help candidate
+  routing, but do not let heading-only matches admit multi-term entity evidence
+  into Familiar prompt context.
 - Treat vector search as another candidate channel. It must be scoped to
   checked books, validated against current local embedding snapshots, and fed
   through rank fusion plus reranking before prompt context.
@@ -109,8 +115,11 @@ The current codebase has working local implementations for steps 1 through 6:
   reranker relevance text, even when private body text does not repeat the type
   label.
 - Keep deterministic table/stat/index/glossary/cross-reference extraction
-  conservative. Prefer missing an ambiguous structure over creating a confident
-  wrong link; richer OCR-layout table reconstruction belongs in a later phase.
+  conservative, but preserve common WFRP OCR table shapes already supported by
+  the extractor: pipe/percent main and secondary profile rows, simple pipe
+  tables, and range charts such as hit-location tables. Prefer missing an
+  ambiguous structure over creating a confident wrong link; richer OCR-layout
+  table reconstruction belongs in a later phase.
 - Rebuild global FTS through `tools/rebuild_fts.py` after page text changes.
 - Run `tools/source_sets.py init` after importing books so built-in source sets
   include all current books.

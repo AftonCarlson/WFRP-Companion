@@ -239,6 +239,101 @@ def test_extract_objects_from_pages_emits_stat_profiles_and_stat_blocks() -> Non
     assert "stat block" in stat_block.search_text
 
 
+def test_extract_objects_from_pages_emits_wfrp_pipe_stat_profiles() -> None:
+    page_text = (
+        "Chapter II: Creatures\n"
+        "River Troll\n"
+        "Main Profile\n"
+        "\n"
+        "WS | BS | S | T | Ag | Int | WP | Fel\n"
+        "45% | 10% | 50% | 44% | 20% | 18% | 35% | 12%\n"
+        "A | W | SB | TB | M | Mag | IP | FP\n"
+        "2 | 20 | 5 | 4 | 6 | 0 | 0 | 0\n"
+        "\n"
+        "Skills: Swim, Perception\n"
+        "Talents: Hardy\n"
+        "Armour Points: Head 1, Arms 1, Body 1, Legs 1\n"
+        "Weapons: Claws\n"
+    )
+
+    objects = extract_objects_from_pages(
+        book_id="rules",
+        text_snapshot_sha256="snapshot",
+        pages=(
+            SourcePage(
+                page_id="rules:10",
+                book_id="rules",
+                page_number=10,
+                extraction_method="ocr",
+                ocr_attempted=True,
+                text_sha256="sha-10",
+                text=page_text,
+            ),
+        ),
+        layout_pages=(),
+    )
+
+    profile = next(
+        source_object for source_object in objects if source_object.object_type == "monster_profile"
+    )
+    stat_block = next(
+        source_object for source_object in objects if source_object.object_type == "stat_block"
+    )
+
+    assert profile.title == "River Troll"
+    assert stat_block.title == "River Troll Statistics"
+    assert stat_block.parent_object_id == profile.id
+    assert "WS | BS | S | T" in stat_block.text
+    assert "A | W | SB | TB" in stat_block.text
+    assert page_text[stat_block.char_start : stat_block.char_end].strip() == stat_block.text
+    assert "Skills: Swim" in profile.text
+
+
+def test_extract_objects_from_pages_emits_plain_range_location_charts() -> None:
+    page_text = (
+        "Making an Attack\n"
+        "Hrr Location\n"
+        "% roll Location\n"
+        "01-15 Head\n"
+        "16-35 Right Arm\n"
+        "36-55 Left Arm\n"
+        "56-80 Body\n"
+        "81-90 Right Leg\n"
+        "91-00 Left Leg\n"
+        "Roll damage after finding the location.\n"
+    )
+
+    objects = extract_objects_from_pages(
+        book_id="rules",
+        text_snapshot_sha256="snapshot",
+        pages=(
+            SourcePage(
+                page_id="rules:11",
+                book_id="rules",
+                page_number=11,
+                extraction_method="ocr",
+                ocr_attempted=True,
+                text_sha256="sha-11",
+                text=page_text,
+            ),
+        ),
+        layout_pages=(),
+    )
+
+    table = next(source_object for source_object in objects if source_object.object_type == "table")
+    table_rows = tuple(
+        source_object
+        for source_object in objects
+        if source_object.object_type == "table_row"
+    )
+
+    assert table.title == "Hit Location"
+    assert "91-00 Left Leg" in table.text
+    assert "chart" in table.search_text
+    assert [row.parent_object_id for row in table_rows] == [table.id] * 6
+    assert all("table row" in row.search_text for row in table_rows)
+
+
 def test_extract_objects_from_pages_emits_index_glossary_and_cross_references() -> None:
     pages = (
         SourcePage(
@@ -305,6 +400,19 @@ def test_structured_extractor_edges_avoid_false_positive_objects() -> None:
                     "Falling ..... 12\n"
                 ),
             ),
+            SourcePage(
+                page_id="rules:10",
+                book_id="rules",
+                page_number=10,
+                extraction_method="embedded",
+                ocr_attempted=False,
+                text_sha256="sha-10",
+                text=(
+                    "False Profile\n"
+                    "Use WS BS S T in order when reading examples.\n"
+                    "1 2 3 4 5 6\n"
+                ),
+            ),
         ),
         layout_pages=(),
     )
@@ -317,14 +425,74 @@ def test_structured_extractor_edges_avoid_false_positive_objects() -> None:
 def test_structured_extractor_helper_edges() -> None:
     lines = extractor.page_line_spans("| A | B |\nM WS BS S T W I A\n\n")
     plain_lines = extractor.page_line_spans("plain lowercase\n")
+    range_lines = extractor.page_line_spans(
+        "% roll Location\n\n01-10 Head\n\n11-20 Arm\n"
+    )
+    short_range_lines = extractor.page_line_spans("% roll Location\n01-10 Head\n")
+    no_value_stat_lines = extractor.page_line_spans("WS BS S T\nnot values\n")
+    bad_secondary_stat_lines = extractor.page_line_spans(
+        "WS BS S T\n1 2 3 4 5 6\nA W SB TB\nnot values\n"
+    )
+    chapter_title_lines = extractor.page_line_spans(
+        "Chapter I: Combat\nWS BS S T\n1 2 3 4 5 6\n"
+    )
+    prose_title_lines = extractor.page_line_spans(
+        "ordinary prose line\nWS BS S T\n1 2 3 4 5 6\n"
+    )
 
     assert extractor.preceding_content_line(lines, len(lines)) is None
     assert extractor.structured_heading_path(plain_lines, 0, fallback="Table 1") == (
         "Table 1",
     )
+    assert extractor.range_table_group(range_lines, 0) is not None
+    assert extractor.range_table_group(short_range_lines, 0) is None
+    assert (
+        extractor.normalized_table_title(
+            "Weather Results",
+            header="% roll Result",
+            extraction_method="range_table_heuristic",
+        )
+        == "Weather Results"
+    )
     assert extractor.is_stat_value_line("1 2 3") is False
+    assert extractor.stat_block_line_span(no_value_stat_lines, 0) is None
+    assert extractor.stat_block_line_span(bad_secondary_stat_lines, 0) == (0, 1, 2)
+    assert extractor.next_profile_stat_header_index(plain_lines, 1) is None
+    assert extractor.profile_title_line(chapter_title_lines, 1) is None
+    assert extractor.profile_title_line(prose_title_lines, 1) is None
+    assert extractor.profile_followup_end_index(extractor.page_line_spans("\n"), 0) == 0
+    assert (
+        extractor.profile_followup_end_index(
+            extractor.page_line_spans("Skills: Swim\nwrapped line\n\n"),
+            0,
+        )
+        == 2
+    )
+    assert (
+        extractor.profile_followup_end_index(
+            extractor.page_line_spans("Skills: Swim\nWS BS S T\n"),
+            0,
+        )
+        == 1
+    )
+    assert (
+        extractor.profile_followup_end_index(
+            extractor.page_line_spans("Skills: Swim\n% roll Location\n"),
+            0,
+        )
+        == 1
+    )
+    assert (
+        extractor.profile_followup_end_index(
+            extractor.page_line_spans("not a followup\n"),
+            0,
+        )
+        == 0
+    )
     assert extractor.classify_profile_type("Ancient Creature") == "monster_profile"
     assert extractor.parse_cross_reference("No reference here.") is None
+    assert extractor.is_profile_title_candidate("x") is False
+    assert extractor.is_profile_title_candidate("— Gor Statistics —") is True
 
 
 def test_build_page_chunks_skips_whitespace_only_uncovered_spans() -> None:

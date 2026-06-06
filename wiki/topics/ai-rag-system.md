@@ -293,6 +293,28 @@ Phase 7 PR11 adds Familiar prompt history and history-aware retrieval planning:
 - The browser history drawer loads saved threads, restores logical turns, and
   disables thread switching while a stream is active.
 
+Follow-up stat/table retrieval repair on 2026-06-06 tightened the current
+structured-evidence path:
+
+- Structural query words such as `stat`, `block`, `table`, and `chart` are no
+  longer edit-distance expanded into unrelated source-map aliases. This keeps
+  `stat block` from matching `black` while preserving ordinary plural/OCR
+  variants for non-structural terms.
+- Source-object extraction now recognizes WFRP-style OCR stat profiles with
+  pipe/percent main and secondary profile rows, plus range charts such as the
+  Core Rules hit-location table. Range charts get chart-searchable table and
+  table-row text, and the hit-location OCR title is normalized for retrieval.
+- The extractor version is `structured-evidence-v4`; existing local databases
+  must rerun `tools/extract_source_objects.py`, then rebuild source-object FTS
+  and source maps, to pick up the repaired table/stat objects.
+- Deterministic reranking now gives accepted typed table/chart and stat/profile
+  evidence a structural-intent boost, so complete source objects outrank prose
+  that merely mentions the requested table or stat block.
+- Inherited chapter headings and repeated running headers can still help route
+  lexical candidates, but they cannot be the only match that admits a
+  multi-term entity result into prompt context. This prevents unrelated
+  subsections in a chapter from supplying wrong stat-like evidence.
+
 ## Answer Contract
 
 [coverage: high]

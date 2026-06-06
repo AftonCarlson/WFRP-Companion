@@ -184,13 +184,17 @@ Structured-evidence tests cover `glossary_entry` and `glossary_definition`
 schema/migration support, table/table-row extraction and parent links,
 stat/profile extraction and links, index/glossary/cross-reference extraction,
 extractor-version invalidation, duplicate same-page table-row ID prevention,
-derived source-object links and count updates, table-row citations resolving to
-parent table page ranges, stat-block retrieval resolving to complete profiles,
-index routing to deterministic target sections or page-only target pages,
-glossary evidence retaining definition context without fake disjoint page
-ranges, link traversal refusing unchecked-book targets, duplicate equivalent
-rule-section ID avoidance, and safe historical retrieval-hit detachment when
-source objects are replaced. Page-label tests cover offset-anchor calibration,
+WFRP-style pipe/percent stat profiles, range-chart table extraction with OCR
+title normalization, derived source-object links and count updates, table-row
+citations resolving to parent table page ranges, stat-block retrieval resolving
+to complete profiles, structural query terms refusing unsafe fuzzy expansion,
+typed chart/table evidence outranking prose mentions, heading/running-header
+only entity matches being rejected, index routing to deterministic target
+sections or page-only target pages, glossary evidence retaining definition
+context without fake disjoint page ranges, link traversal refusing unchecked-book
+targets, duplicate equivalent rule-section ID avoidance, and safe historical
+retrieval-hit detachment when source objects are replaced. Page-label tests
+cover offset-anchor calibration,
 roman/front-matter preservation, snapshot drift anchor reuse, manual-review
 conflict suppression, exact/search source-object/linked-page citation labels,
 safe count-only CLI failure output, and reloaded chat citation labels/ranges.
@@ -212,7 +216,7 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-06 reported 454 tests
+The latest full backend verification command on 2026-06-06 reported 461 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 131 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful

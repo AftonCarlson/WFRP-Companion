@@ -43,10 +43,33 @@ CROSS_REFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 STAT_HEADER_TOKENS = frozenset(
-    ("m", "ws", "bs", "s", "t", "w", "i", "a", "dex", "int", "wp", "fel")
+    (
+        "a",
+        "ag",
+        "bs",
+        "dex",
+        "fel",
+        "fp",
+        "i",
+        "int",
+        "ip",
+        "m",
+        "mag",
+        "s",
+        "sb",
+        "t",
+        "tb",
+        "w",
+        "wp",
+        "ws",
+    )
 )
 PROFILE_FOLLOWUP_PREFIXES = (
+    "armour points:",
+    "armor points:",
     "skills:",
+    "special rules:",
+    "slaughter margin:",
     "talents:",
     "traits:",
     "trappings:",
@@ -54,6 +77,52 @@ PROFILE_FOLLOWUP_PREFIXES = (
     "armour:",
     "armor:",
     "notes:",
+)
+PROFILE_LABELS = frozenset(("main profile", "secondary profile"))
+RANGE_TABLE_ROW_RE = re.compile(r"^(?:\d{1,3}|[oO]\d)\s*[-–]\s*(?:\d{1,3}|[oO]{2})\b")
+INVALID_STAT_HEADER_TOKEN = "__invalid__"
+STAT_TOKEN_ALIASES = {
+    "a": "a",
+    "ag": "ag",
+    "bs": "bs",
+    "dex": "dex",
+    "fel": "fel",
+    "fp": "fp",
+    "i": "i",
+    "int": "int",
+    "ip": "ip",
+    "m": "m",
+    "mag": "mag",
+    "s": "s",
+    "sb": "sb",
+    "sp": "sb",
+    "ss": "s",
+    "t": "t",
+    "tb": "tb",
+    "v": "t",
+    "w": "w",
+    "we": "wp",
+    "wp": "wp",
+    "wr": "wp",
+    "ws": "ws",
+}
+PROFILE_TYPE_MONSTER_MARKERS = (
+    "beast",
+    "beastman",
+    "bestigor",
+    "bray",
+    "centigor",
+    "creature",
+    "daemon",
+    "dragon",
+    "goblin",
+    "gor",
+    "monster",
+    "orc",
+    "skaven",
+    "troll",
+    "undead",
+    "ungor",
 )
 
 
@@ -377,18 +446,31 @@ def extract_tables_from_lines(
     table_row_identity_ordinal = 1
     index = 0
     while index < len(lines):
-        if not is_table_line(lines[index].stripped):
+        if is_table_line(lines[index].stripped):
+            table_group = pipe_table_group(lines, index)
+            if table_group is None:
+                index += 1
+                continue
+            group, data_rows, next_index, extraction_method = table_group
+        elif is_plain_range_table_header(lines[index].stripped):
+            table_group = range_table_group(lines, index)
+            if table_group is None:
+                index += 1
+                continue
+            group, data_rows, next_index, extraction_method = table_group
+        else:
             index += 1
             continue
+
         start_index = index
-        while index < len(lines) and is_table_line(lines[index].stripped):
-            index += 1
-        group = lines[start_index:index]
-        data_rows = tuple(line for line in group[1:] if not is_table_separator(line.stripped))
-        if not data_rows:
-            continue
+        index = next_index
         title_line = preceding_content_line(lines, start_index)
-        title = title_line.stripped if title_line is not None else f"Table {table_ordinal}"
+        raw_title = title_line.stripped if title_line is not None else f"Table {table_ordinal}"
+        title = normalized_table_title(
+            raw_title,
+            header=group[0].stripped,
+            extraction_method=extraction_method,
+        )
         table_start = title_line.start if title_line is not None else group[0].start
         table_end = group[-1].end
         table_text = page.text[table_start:table_end].strip()
@@ -406,8 +488,8 @@ def extract_tables_from_lines(
             char_start=table_start,
             char_end=table_end,
             confidence=0.82,
-            extraction_method="pipe_table_heuristic",
-            search_prefix="table",
+            extraction_method=extraction_method,
+            search_prefix=table_search_prefix(extraction_method),
         )
         objects.append(table)
         row_ordinal = 1
@@ -431,8 +513,8 @@ def extract_tables_from_lines(
                     char_start=row.start,
                     char_end=row.end,
                     confidence=0.76,
-                    extraction_method="pipe_table_heuristic",
-                    search_prefix="table row",
+                    extraction_method=extraction_method,
+                    search_prefix=table_row_search_prefix(extraction_method),
                     parent_object_id=table.id,
                 )
             )
@@ -440,6 +522,71 @@ def extract_tables_from_lines(
             table_row_identity_ordinal += 1
         table_ordinal += 1
     return tuple(objects)
+
+
+def pipe_table_group(
+    lines: tuple[LineSpan, ...],
+    start_index: int,
+) -> tuple[tuple[LineSpan, ...], tuple[LineSpan, ...], int, str] | None:
+    index = start_index
+    while index < len(lines) and is_table_line(lines[index].stripped):
+        index += 1
+    group = lines[start_index:index]
+    data_rows = tuple(line for line in group[1:] if not is_table_separator(line.stripped))
+    if not data_rows:
+        return None
+    return group, data_rows, index, "pipe_table_heuristic"
+
+
+def range_table_group(
+    lines: tuple[LineSpan, ...],
+    start_index: int,
+) -> tuple[tuple[LineSpan, ...], tuple[LineSpan, ...], int, str] | None:
+    row_index = next_nonblank_index(lines, start_index + 1)
+    if row_index is None or not is_range_table_row(lines[row_index].stripped):
+        return None
+    data_rows: list[LineSpan] = []
+    index = row_index
+    while index < len(lines):
+        line = lines[index]
+        if not line.stripped:
+            index += 1
+            continue
+        if not is_range_table_row(line.stripped):
+            break
+        data_rows.append(line)
+        index += 1
+    if len(data_rows) < 2:
+        return None
+    group = (lines[start_index], *data_rows)
+    return group, tuple(data_rows), index, "range_table_heuristic"
+
+
+def normalized_table_title(
+    title: str,
+    *,
+    header: str,
+    extraction_method: str,
+) -> str:
+    if extraction_method != "range_table_heuristic":
+        return title
+    title_tokens = [token.casefold() for token in re.findall(r"(?u)\b\w+\b", title)]
+    header_tokens = [token.casefold() for token in re.findall(r"(?u)\b\w+\b", header)]
+    if "location" in title_tokens and {"roll", "location"}.issubset(header_tokens):
+        return "Hit Location"
+    return title
+
+
+def table_search_prefix(extraction_method: str) -> str:
+    if extraction_method == "range_table_heuristic":
+        return "table chart"
+    return "table"
+
+
+def table_row_search_prefix(extraction_method: str) -> str:
+    if extraction_method == "range_table_heuristic":
+        return "table row chart"
+    return "table row"
 
 
 def extract_stat_profiles_from_lines(
@@ -455,24 +602,22 @@ def extract_stat_profiles_from_lines(
     ordinal = ordinal_start
     index = 0
     while index + 1 < len(lines):
-        if not is_stat_header(lines[index].stripped) or not is_stat_value_line(
-            lines[index + 1].stripped
-        ):
+        stat_span = stat_block_line_span(lines, index)
+        if stat_span is None:
             index += 1
             continue
-        title_line = preceding_content_line(lines, index)
+        stat_start_index, stat_end_index, next_index = stat_span
+        title_line = profile_title_line(lines, stat_start_index)
         if title_line is None:
             index += 1
             continue
-        end_index = index + 2
-        while end_index < len(lines) and is_profile_followup_line(lines[end_index].stripped):
-            end_index += 1
+        end_index = profile_followup_end_index(lines, next_index)
         profile_start = title_line.start
         profile_end = lines[end_index - 1].end
         profile_text = page.text[profile_start:profile_end].strip()
-        stat_text = page.text[lines[index].start : lines[index + 1].end].strip()
-        title = title_line.stripped
-        heading_path = structured_heading_path(lines, index, fallback=title)
+        stat_text = page.text[lines[stat_start_index].start : lines[stat_end_index].end].strip()
+        title = clean_profile_title(title_line.stripped)
+        heading_path = structured_heading_path(lines, stat_start_index, fallback=title)
         profile_type = classify_profile_type(title)
         profile = build_structured_source_object(
             book_id=book_id,
@@ -496,7 +641,7 @@ def extract_stat_profiles_from_lines(
                 book_id=book_id,
                 page=page,
                 object_type="stat_block",
-                title=f"{title} Statistics",
+                title=stat_block_title(title),
                 heading_path=heading_path,
                 text=stat_text,
                 text_snapshot_sha256=text_snapshot_sha256,
@@ -506,8 +651,8 @@ def extract_stat_profiles_from_lines(
                     "parent_title": title,
                 },
                 ordinal=ordinal,
-                char_start=lines[index].start,
-                char_end=lines[index + 1].end,
+                char_start=lines[stat_start_index].start,
+                char_end=lines[stat_end_index].end,
                 confidence=0.82,
                 extraction_method="stat_profile_heuristic",
                 search_prefix="stat block statistics profile",
@@ -517,6 +662,100 @@ def extract_stat_profiles_from_lines(
         ordinal += 1
         index = end_index
     return tuple(objects)
+
+
+def stat_block_line_span(
+    lines: tuple[LineSpan, ...],
+    header_index: int,
+) -> tuple[int, int, int] | None:
+    if not is_stat_header(lines[header_index].stripped):
+        return None
+    value_index = next_nonblank_index(lines, header_index + 1)
+    if value_index is None or not is_stat_value_line(lines[value_index].stripped):
+        return None
+    end_index = value_index
+    next_index = value_index + 1
+    while True:
+        maybe_header = next_profile_stat_header_index(lines, next_index)
+        if maybe_header is None or not is_stat_header(lines[maybe_header].stripped):
+            return header_index, end_index, next_index
+        maybe_value = next_nonblank_index(lines, maybe_header + 1)
+        if maybe_value is None or not is_stat_value_line(lines[maybe_value].stripped):
+            return header_index, end_index, next_index
+        end_index = maybe_value
+        next_index = maybe_value + 1
+
+
+def next_profile_stat_header_index(
+    lines: tuple[LineSpan, ...],
+    start_index: int,
+) -> int | None:
+    index = start_index
+    while index < len(lines):
+        line = lines[index]
+        if not line.stripped or line.stripped.casefold() in PROFILE_LABELS:
+            index += 1
+            continue
+        return index
+    return None
+
+
+def profile_title_line(
+    lines: tuple[LineSpan, ...],
+    before_index: int,
+) -> LineSpan | None:
+    for index in range(before_index - 1, -1, -1):
+        line = lines[index]
+        if not line.stripped:
+            continue
+        lowered = line.stripped.casefold()
+        if lowered in PROFILE_LABELS:
+            continue
+        if HEADING_RE.match(line.stripped):
+            continue
+        if is_stat_header(line.stripped) or is_stat_value_line(line.stripped):
+            continue
+        if is_table_line(line.stripped) or is_range_table_row(line.stripped):
+            continue
+        if not is_profile_title_candidate(line.stripped):
+            continue
+        return line
+    return None
+
+
+def profile_followup_end_index(
+    lines: tuple[LineSpan, ...],
+    start_index: int,
+) -> int:
+    end_index = start_index
+    index = start_index
+    while index < len(lines):
+        line = lines[index]
+        if not line.stripped:
+            next_index = next_nonblank_index(lines, index + 1)
+            if next_index is None or not is_profile_followup_line(lines[next_index].stripped):
+                break
+            end_index = index + 1
+            index += 1
+            continue
+        if is_profile_followup_line(line.stripped):
+            end_index = index + 1
+            index += 1
+            while index < len(lines):
+                continuation = lines[index]
+                if not continuation.stripped:
+                    break
+                if is_profile_followup_line(continuation.stripped):
+                    break
+                if is_stat_header(continuation.stripped) or is_table_line(continuation.stripped):
+                    break
+                if is_plain_range_table_header(continuation.stripped):
+                    break
+                end_index = index + 1
+                index += 1
+            continue
+        break
+    return max(start_index, end_index)
 
 
 def extract_reference_objects_from_lines(
@@ -771,6 +1010,15 @@ def is_table_line(line: str) -> bool:
     return line.startswith("|") and line.endswith("|") and line.count("|") >= 3
 
 
+def is_plain_range_table_header(line: str) -> bool:
+    tokens = [token.casefold() for token in re.findall(r"(?u)\b[\w%'-]+\b", line)]
+    return "roll" in tokens and len(tokens) >= 2
+
+
+def is_range_table_row(line: str) -> bool:
+    return RANGE_TABLE_ROW_RE.match(line.strip()) is not None
+
+
 def is_table_separator(line: str) -> bool:
     cells = [cell.strip() for cell in line.strip("|").split("|")]
     return bool(cells) and all(set(cell) <= {"-", ":", " "} for cell in cells)
@@ -810,16 +1058,16 @@ def structured_heading_path(
 
 
 def is_stat_header(line: str) -> bool:
-    tokens = [token.casefold() for token in line.split()]
+    tokens = stat_header_tokens(line)
     matched = [token for token in tokens if token in STAT_HEADER_TOKENS]
-    return len(matched) >= 6 and matched == tokens[: len(matched)]
+    return len(matched) >= 4 and len(matched) == len(tokens)
 
 
 def is_stat_value_line(line: str) -> bool:
-    tokens = line.split()
+    tokens = re.findall(r"[-+]?\d+%?|[-—]", line)
     if len(tokens) < 6:
         return False
-    numeric_tokens = [token for token in tokens if token.replace("-", "").isdigit()]
+    numeric_tokens = [token for token in tokens if is_stat_value_token(token)]
     return len(numeric_tokens) >= 6
 
 
@@ -829,9 +1077,54 @@ def is_profile_followup_line(line: str) -> bool:
 
 def classify_profile_type(title: str) -> str:
     lowered = title.casefold()
-    if any(marker in lowered for marker in ("creature", "beast", "daemon", "undead")):
+    if any(marker in lowered for marker in PROFILE_TYPE_MONSTER_MARKERS):
         return "monster_profile"
     return "npc_profile"
+
+
+def stat_header_tokens(line: str) -> tuple[str, ...]:
+    tokens = re.findall(r"(?u)\b[\w']+\b", line.casefold())
+    normalized_tokens: list[str] = []
+    for token in tokens:
+        cleaned = token.strip("'[]|.,;:()")
+        if normalized := STAT_TOKEN_ALIASES.get(cleaned):
+            normalized_tokens.append(normalized)
+        elif any(character.isalpha() for character in cleaned):
+            normalized_tokens.append(INVALID_STAT_HEADER_TOKEN)
+    return tuple(normalized_tokens)
+
+
+def is_stat_value_token(token: str) -> bool:
+    cleaned = token.strip().strip("%").replace("—", "-")
+    return cleaned == "-" or cleaned.lstrip("+-").isdigit()
+
+
+def next_nonblank_index(
+    lines: tuple[LineSpan, ...],
+    start_index: int,
+) -> int | None:
+    for index in range(start_index, len(lines)):
+        if lines[index].stripped:
+            return index
+    return None
+
+
+def clean_profile_title(title: str) -> str:
+    cleaned = title.strip().strip("-–— ").strip()
+    return " ".join(cleaned.split())
+
+
+def is_profile_title_candidate(title: str) -> bool:
+    cleaned = clean_profile_title(title)
+    if not 3 <= len(cleaned) <= 80:
+        return False
+    if title.strip().startswith(("—", "-", "–")):
+        return True
+    return is_heading(cleaned)
+
+
+def stat_block_title(title: str) -> str:
+    return title if title.casefold().endswith("statistics") else f"{title} Statistics"
 
 
 def parse_cross_reference(line: str) -> tuple[str, int | None] | None:
