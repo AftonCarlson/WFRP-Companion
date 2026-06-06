@@ -64,6 +64,8 @@ export type SearchHitResponse = {
   category: string;
   page_id: string;
   page_number: number;
+  pdf_page_number: number;
+  page_label: string | null;
   snippet: string;
   score: number;
 };
@@ -81,4 +83,89 @@ export type PageTextResponse = {
   page_label: string | null;
   text: string;
   text_chars: number;
+};
+
+export type ChatThreadResponse = {
+  id: string;
+  title: string | null;
+  active_source_set_id: string | null;
+  source_book_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatThreadsResponse = {
+  threads: ChatThreadResponse[];
+};
+
+export type ChatMessageResponse = {
+  id: string;
+  thread_id: string;
+  role: string;
+  content: string;
+  created_at: string;
+};
+
+export type ModelRunResponse = {
+  id: string;
+  thread_id: string;
+  user_message_id: string | null;
+  assistant_message_id: string | null;
+  retrieval_run_id: string | null;
+  retry_of_model_run_id: string | null;
+  status: string;
+  provider: string;
+  model: string;
+  provider_response_id: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  retryable: boolean;
+};
+
+export type ChatCitationResponse = {
+  book_id: string;
+  title: string;
+  category: string;
+  page_id: string;
+  page_number: number;
+  pdf_page_number: number;
+  page_label: string | null;
+  snippet: string;
+  rank: number;
+  score: number;
+  page_range_label?: string | null;
+};
+
+export type SendChatMessageResponse = {
+  thread: ChatThreadResponse;
+  user_message: ChatMessageResponse;
+  assistant_message: ChatMessageResponse | null;
+  model_run: ModelRunResponse;
+  citations: ChatCitationResponse[];
+};
+
+export type ChatTurnResponse = {
+  user_message: ChatMessageResponse;
+  assistant_message: ChatMessageResponse | null;
+  model_run: ModelRunResponse;
+  citations: ChatCitationResponse[];
+};
+
+export type ChatThreadDetailResponse = {
+  thread: ChatThreadResponse;
+  source_book_ids: string[];
+  turns: ChatTurnResponse[];
+};
+
+export type ChatStreamEvent = {
+  type: "accepted" | "retrieval" | "delta" | "completed" | "failed";
+  thread?: ChatThreadResponse | null;
+  user_message?: ChatMessageResponse | null;
+  assistant_message?: ChatMessageResponse | null;
+  model_run?: ModelRunResponse | null;
+  citations?: ChatCitationResponse[];
+  text_delta?: string | null;
+  error_message?: string | null;
 };

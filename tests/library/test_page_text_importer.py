@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import fitz
+
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database, open_connection
 from wfrp_companion.library import page_text_importer
@@ -30,6 +32,7 @@ def insert_copied_book(
     copy_status: str = "copied",
     text_status: str = "not_imported",
     search_status: str = "not_indexed",
+    managed_pdf_path: str = "/managed/Core Rules.pdf",
 ) -> None:
     with initialize_database(config.db_path) as connection:
         connection.execute(
@@ -62,12 +65,13 @@ def insert_copied_book(
               updated_at
             )
             values (?, 'core', 'Core Rules', 'Core', 'Core/Core Rules.pdf',
-                    '/source/Core Rules.pdf', '/managed/Core Rules.pdf',
+                    '/source/Core Rules.pdf', ?,
                     ?, ?, ?, ?, ?, ?, 'not_scanned',
                     '2026-06-04T00:00:00Z', '2026-06-04T00:00:00Z')
             """,
             (
                 book_id,
+                managed_pdf_path,
                 source_sha,
                 source_sha if copy_status == "copied" else None,
                 page_count,
@@ -193,6 +197,55 @@ def test_import_page_text_creates_pages_text_and_import_job(tmp_path: Path) -> N
     assert job["attempts"] == 1
 
 
+def test_import_page_text_preserves_json_page_labels(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    insert_copied_book(config)
+    document = page_text_document()
+    pages = document["pages"]
+    assert isinstance(pages, list)
+    pages[0]["page_label"] = " 132 "
+    pages[1]["page_label"] = " "
+    write_page_text(config.data_dir / "page_text", document)
+
+    summary = import_page_text_library(config)
+
+    page = fetch_one(config, "select page_label from pages where page_number = 1")
+    empty_label_page = fetch_one(
+        config,
+        "select page_label from pages where page_number = 2",
+    )
+    assert summary.imported == 1
+    assert page["page_label"] == "132"
+    assert empty_label_page["page_label"] is None
+
+
+def test_import_page_text_reads_pdf_page_labels_when_json_has_none(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    pdf_path = tmp_path / "managed.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.new_page()
+    document.set_page_labels(
+        [{"startpage": 0, "style": "D", "firstpagenum": 132}]
+    )
+    document.save(pdf_path)
+    document.close()
+    insert_copied_book(config, managed_pdf_path=str(pdf_path))
+    write_page_text(config.data_dir / "page_text", page_text_document())
+
+    first = import_page_text_library(config)
+    second = import_page_text_library(config)
+
+    page = fetch_one(config, "select page_label from pages where page_number = 1")
+    next_page = fetch_one(config, "select page_label from pages where page_number = 2")
+    assert first.imported == 1
+    assert second.skipped_current == 1
+    assert page["page_label"] == "132"
+    assert next_page["page_label"] == "133"
+
+
 def test_import_page_text_rerun_is_idempotent(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     insert_copied_book(config)
@@ -262,6 +315,27 @@ def test_import_current_detects_unexpected_page_number(tmp_path: Path) -> None:
             """
             update pages
             set page_number = 99
+            where id = 'core-rules:1'
+            """
+        )
+        connection.commit()
+        assert not page_text_importer.imported_text_current(
+            connection,
+            document,
+            json_sha,
+        )
+
+
+def test_import_current_detects_unexpected_page_label(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    insert_copied_book(config)
+    document, json_sha = parsed_document_and_sha(config.data_dir / "page_text")
+    import_page_text_library(config)
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update pages
+            set page_label = 'wrong'
             where id = 'core-rules:1'
             """
         )

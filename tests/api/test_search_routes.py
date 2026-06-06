@@ -150,6 +150,10 @@ def insert_indexed_books(config: AppConfig) -> None:
 def test_exact_search_defaults_to_active_source_set(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     insert_indexed_books(config)
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            "update pages set page_label = '132' where id = 'core-rules:1'"
+        )
     client = TestClient(create_app(config))
 
     response = client.get("/api/search/exact", params={"query": "critical hit"})
@@ -164,6 +168,8 @@ def test_exact_search_defaults_to_active_source_set(tmp_path: Path) -> None:
     }
     assert [hit["book_id"] for hit in response.json()["hits"]] == ["core-rules"]
     assert response.json()["hits"][0]["page_id"] == "core-rules:1"
+    assert response.json()["hits"][0]["pdf_page_number"] == 1
+    assert response.json()["hits"][0]["page_label"] == "132"
     assert "[Critical]" in response.json()["hits"][0]["snippet"]
 
 

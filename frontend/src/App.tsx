@@ -37,7 +37,19 @@ export default function App() {
 
   return (
     <AppShell
-      agent={() => <AgentChatPanel historyOpen={chatHistoryOpen} />}
+      agent={(context) => (
+        <AgentChatPanel
+          historyOpen={chatHistoryOpen}
+          onOpenCitation={(citation) =>
+            context.openPdfTab({
+              bookId: citation.book_id,
+              title: citation.title,
+              pageNumber: citation.pdf_page_number,
+              viewMode: "single",
+            })
+          }
+        />
+      )}
       agentHeaderControls={() => (
         <AgentChatHeaderControls
           historyOpen={chatHistoryOpen}
@@ -52,8 +64,8 @@ export default function App() {
           books={data?.books ?? []}
           collapsedCategories={context.layout.collapsedLibraryCategories}
           leftTab={context.layout.leftTab}
-          onOpenPdfPage={({ bookId, title, pageNumber }) =>
-            context.openPdfTab({ bookId, title, pageNumber })
+          onOpenPdfPage={({ bookId, title, pageNumber, viewMode }) =>
+            context.openPdfTab({ bookId, title, pageNumber, viewMode })
           }
           onSetLeftTab={context.setLeftTab}
           onSourceSetBookUpdated={handleSourceSetBookUpdated}

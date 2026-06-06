@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
+from typing import Protocol
+
+from wfrp_companion.assistant import chat_store, prompts, provider, retrieval
+from wfrp_companion.config import AppConfig
+
+
+DEFAULT_PROVIDER = "openai"
+
+
+class ResponseProvider(Protocol):
+    def stream_response(
+        self,
+        *,
+        messages: Sequence[provider.ProviderMessage],
+        request_id: str,
+    ) -> Iterable[provider.ProviderStreamEvent]:
+        pass  # pragma: no cover - protocol declaration only
+
+
+ProviderFactory = Callable[[AppConfig], ResponseProvider]
+
+
+@dataclass(frozen=True)
+class ChatStreamEvent:
+    type: str
+    thread: chat_store.ChatThread
+    user_message: chat_store.ChatMessage
+    assistant_message: chat_store.ChatMessage | None
+    model_run: chat_store.ModelRun
+    citations: tuple[chat_store.ChatCitation, ...]
+    text_delta: str | None = None
+    error_message: str | None = None
+
+
+def stream_chat_message(
+    config: AppConfig,
+    *,
+    thread_id: str,
+    content: str,
+    idempotency_key: str,
+    provider_factory: ProviderFactory | None = None,
+) -> Iterable[ChatStreamEvent]:
+    result = chat_store.create_queued_turn(
+        config,
+        thread_id,
+        content=content,
+        idempotency_key=idempotency_key,
+        provider=DEFAULT_PROVIDER,
+        model=config.openai_model,
+    )
+    yield from stream_queued_result(
+        config,
+        result=result,
+        content=content,
+        provider_factory=provider_factory,
+    )
+
+
+def stream_retry_model_run(
+    config: AppConfig,
+    *,
+    model_run_id: str,
+    idempotency_key: str,
+    provider_factory: ProviderFactory | None = None,
+) -> Iterable[ChatStreamEvent]:
+    result = chat_store.create_queued_retry(
+        config,
+        model_run_id,
+        idempotency_key=idempotency_key,
+        provider=DEFAULT_PROVIDER,
+        model=config.openai_model,
+    )
+    yield from stream_queued_result(
+        config,
+        result=result,
+        content=result.user_message.content,
+        provider_factory=provider_factory,
+    )
+
+
+def stream_queued_result(
+    config: AppConfig,
+    *,
+    result: chat_store.SendChatResult,
+    content: str,
+    provider_factory: ProviderFactory | None,
+) -> Iterable[ChatStreamEvent]:
+    yield event_from_result("accepted", result)
+
+    if result.model_run.status == "completed":
+        yield event_from_result("completed", result)
+        return
+    if result.model_run.status == "failed":
+        yield event_from_result(
+            "failed",
+            result,
+            error_message=result.model_run.error_message,
+        )
+        return
+    if result.model_run.status != "queued":
+        return
+
+    try:
+        response_provider = (
+            provider_factory(config)
+            if provider_factory is not None
+            else default_provider_factory(config)
+        )
+    except provider.ProviderUnavailableError as error:
+        failed = chat_store.fail_model_run(
+            config,
+            result.model_run.id,
+            error_code="provider_unavailable",
+            error_message=str(error),
+        )
+        yield event_from_result("failed", failed, error_message=str(error))
+        return
+
+    try:
+        chat_store.transition_model_run(
+            config,
+            result.model_run.id,
+            from_statuses=("queued",),
+            to_status="retrieving",
+        )
+        context = retrieval.retrieve_context(
+            config,
+            result.thread.id,
+            content,
+            hit_limit=config.chat_context_hit_limit,
+            total_char_limit=config.chat_context_char_limit,
+            window_chars=config.chat_context_window_chars,
+        )
+        retrieval_run_id = chat_store.record_retrieval_run(
+            config,
+            thread_id=result.thread.id,
+            message_id=result.user_message.id,
+            source_set_id=context.source_set_id,
+            query=content,
+            hits=context.hits,
+            source_book_ids=context.source_book_ids,
+            source_map=context.source_map,
+            candidates=context.candidates,
+        )
+        retrieved = chat_store.attach_retrieval_run(
+            config,
+            result.model_run.id,
+            retrieval_run_id=retrieval_run_id,
+        )
+        citations = citations_from_hits(context.hits)
+        yield event_from_result("retrieval", retrieved, citations=citations)
+
+        chat_store.transition_model_run(
+            config,
+            result.model_run.id,
+            from_statuses=("retrieving",),
+            to_status="calling_model",
+        )
+        prompt_messages = prompts.build_prompt_messages(
+            question=content,
+            hits=context.hits,
+            source_map=context.source_map,
+            recent_messages=(),
+            context_char_limit=config.chat_context_char_limit,
+        )
+        provider_messages = tuple(
+            provider.ProviderMessage(role=message.role, content=message.content)
+            for message in prompt_messages
+        )
+        text_parts: list[str] = []
+        provider_response_id: str | None = None
+        input_tokens: int | None = None
+        output_tokens: int | None = None
+
+        for provider_event in response_provider.stream_response(
+            messages=provider_messages,
+            request_id=result.model_run.id,
+        ):
+            if provider_event.type == "delta":
+                delta = provider_event.text_delta or ""
+                if not delta:
+                    continue
+                text_parts.append(delta)
+                yield event_from_result(
+                    "delta",
+                    retrieved,
+                    citations=citations,
+                    text_delta=delta,
+                )
+            elif provider_event.type == "completed":
+                provider_response_id = provider_event.provider_response_id
+                input_tokens = provider_event.input_tokens
+                output_tokens = provider_event.output_tokens
+
+        completed = chat_store.complete_model_run(
+            config,
+            result.model_run.id,
+            content="".join(text_parts),
+            provider_response_id=provider_response_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+        yield event_from_result("completed", completed)
+    except provider.ProviderUnavailableError as error:
+        failed = chat_store.fail_model_run(
+            config,
+            result.model_run.id,
+            error_code="provider_unavailable",
+            error_message=str(error),
+        )
+        yield event_from_result("failed", failed, error_message=str(error))
+    except Exception as error:
+        failed = chat_store.fail_model_run(
+            config,
+            result.model_run.id,
+            error_code="provider_error",
+            error_message=str(error),
+        )
+        yield event_from_result("failed", failed, error_message=str(error))
+
+
+def default_provider_factory(config: AppConfig) -> ResponseProvider:
+    return provider.OpenAIProvider(
+        api_key=config.openai_api_key,
+        model=config.openai_model,
+        timeout_seconds=config.openai_timeout_seconds,
+    )
+
+
+def event_from_result(
+    event_type: str,
+    result: chat_store.SendChatResult,
+    *,
+    citations: tuple[chat_store.ChatCitation, ...] | None = None,
+    text_delta: str | None = None,
+    error_message: str | None = None,
+) -> ChatStreamEvent:
+    return ChatStreamEvent(
+        type=event_type,
+        thread=result.thread,
+        user_message=result.user_message,
+        assistant_message=result.assistant_message,
+        model_run=result.model_run,
+        citations=result.citations if citations is None else citations,
+        text_delta=text_delta,
+        error_message=error_message,
+    )
+
+
+def citations_from_hits(
+    hits: Sequence[retrieval.RetrievedHit],
+) -> tuple[chat_store.ChatCitation, ...]:
+    return tuple(
+        chat_store.ChatCitation(
+            book_id=hit.book_id,
+            title=hit.title,
+            category=hit.category,
+            page_id=hit.page_id,
+            page_number=hit.page_number,
+            pdf_page_number=hit.pdf_page_number,
+            page_label=hit.page_label,
+            snippet=hit.snippet,
+            rank=hit.rank,
+            score=hit.score,
+            page_range_label=hit.page_range_label,
+        )
+        for hit in hits
+    )

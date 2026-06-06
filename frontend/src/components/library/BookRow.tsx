@@ -11,12 +11,6 @@ export type BookRowProps = {
 };
 
 export function BookRow({ book, error, onOpen, onToggle, saving }: BookRowProps) {
-  const status = book.needs_attention
-    ? "needs attention"
-    : book.search_ready
-      ? "ready"
-      : "not indexed";
-
   return (
     <div className="book-row">
       <label>
@@ -26,10 +20,7 @@ export function BookRow({ book, error, onOpen, onToggle, saving }: BookRowProps)
           onChange={(event) => onToggle(book, event.currentTarget.checked)}
           type="checkbox"
         />
-        <span>
-          {book.title}
-          <small>{status}</small>
-        </span>
+        <span>{book.title}</span>
       </label>
       <button
         aria-label={`Open ${book.title}`}

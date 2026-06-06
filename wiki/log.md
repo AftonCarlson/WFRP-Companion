@@ -1,5 +1,369 @@
 # Wiki Compile Log
 
+## 2026-06-06 Printed Page-Label Calibration/Backfill
+
+- Added migration `0005_page_label_calibration` to create
+  `book_page_label_calibrations` and allow
+  `ingest_jobs(job_type='backfill_page_labels')` in existing databases and the
+  fresh schema.
+- Added `wfrp_companion/library/page_labels.py` and
+  `tools/backfill_page_labels.py` for count-only printed page-label
+  calibration/backfill from imported page labels plus optional offset anchors.
+  Anchors preserve roman/front-matter labels before the anchor, and plain
+  reruns reuse stored anchors after page text/label snapshot drift unless
+  `--force` or a new anchor is supplied.
+- Exact search, Familiar source-object/page fallback candidates, prompt
+  context, and stored/reloaded chat citations now use strict printed
+  label/range helpers. Missing labels and conflicting manual-review pages do
+  not become confident `printed page(s)` labels; `pdf_page_number` remains the
+  reader jump coordinate.
+- Independent review found three issues: anchored calibrations could still be
+  overwritten by plain reruns after snapshot drift, source-object/linked-page
+  evidence could invent printed ranges from PDF page numbers, and conflicting
+  manual-review labels could still be returned as confident labels. All were
+  fixed with regressions.
+- Verification run for this pass: focused page-label/retrieval/chat/search/tool
+  tests reported 109 tests passing; full Python tests reported 436 tests
+  passing with one existing Starlette/httpx deprecation warning and 100.00%
+  coverage; `ruff check .` passed; `git diff --check` passed; frontend
+  Vitest reported 127 tests passing; frontend coverage passed above configured
+  thresholds; frontend production build passed with the existing large PDF
+  worker chunk warning; Playwright e2e reported 2 tests passing with the
+  existing `NO_COLOR`/`FORCE_COLOR` warnings.
+
+## 2026-06-05 Structured Source-Object Evidence
+
+- Added migration `0004_structured_evidence` to widen
+  `source_objects.object_type` with `glossary_entry` and
+  `source_object_links.link_type` with `glossary_definition`.
+- Extended deterministic source-object extraction with conservative
+  plain-text heuristics for pipe tables, table rows, stat/profile blocks,
+  index entries, glossary entries, and cross references. Extractor output
+  remains local/count-oriented and tests use synthetic non-WFRP fixtures.
+- `replace_book_source_objects()` now persists derived
+  `source_object_links` for table rows, stat/profile relationships, and
+  deterministic same-book index/glossary/cross-reference targets, and records
+  table/stat/location counts in `book_object_status`.
+- Familiar evidence resolution now follows checked-scope links from table rows,
+  stat blocks, and index/cross-reference entries to complete parent/target
+  source objects. Glossary entries remain canonical glossary evidence and can
+  include linked target context. Link traversal is constrained to the checked
+  `source_book_ids` snapshot.
+- Rank-fusion dedupe now preserves linked-evidence rank reasons so selected
+  hits remain auditable after parent/target evidence is merged.
+- Independent review found four issues: old extraction status needed a durable
+  extractor-version invalidation path, duplicate same-page table-row text could
+  collide on deterministic IDs, page-only reference links were not followed at
+  runtime, and glossary linked context could create misleading disjoint page
+  ranges. All were fixed with regressions; final follow-up review found no
+  remaining code issues.
+- Verification run for this pass: full Python tests reported 394 tests passing
+  with one existing Starlette/httpx deprecation warning and 100.00% coverage;
+  `ruff check .` passed; `git diff --check` passed; frontend Vitest reported
+  127 tests passing; frontend coverage passed above configured thresholds;
+  frontend production build passed with the existing large PDF worker chunk
+  warning; Playwright e2e reported 2 tests passing.
+
+## 2026-06-05 Local Vector Retrieval Channel
+
+- Added migration `0003_vector_retrieval` and the
+  `source_object_embeddings` table for SQLite-local source-object vectors.
+- Added disabled-by-default embedding configuration:
+  `WFRP_EMBEDDING_PROVIDER`, `WFRP_EMBEDDING_MODEL`, and
+  `WFRP_EMBEDDING_DIMENSIONS`. The only implemented provider is local
+  deterministic `local-hash`; no hosted vector service is called.
+- Added `wfrp_companion/source_objects/embeddings.py` and
+  `tools/rebuild_embeddings.py` to rebuild local vector blobs from current
+  `source_objects` with `ingest_jobs(job_type='rebuild_embeddings')`,
+  `book_retrieval_status.vector_status`, snapshot invalidation, stale-running
+  recovery, and count-only CLI output.
+- Added vector candidate generation in `wfrp_companion/assistant/candidates.py`
+  as one more candidate channel before RRF and deterministic reranking. Vector
+  candidates are filtered to the checked `book_id` snapshot and only used for
+  books whose embedding snapshot is current.
+- Independent review found three issues: malformed embedding rows could cross
+  scope if `source_object_embeddings.book_id` disagreed with
+  `source_objects.book_id`, existing `0002` databases needed pending
+  migrations before the new job type was used, and vector query-time currentness
+  needed to prove the embedding snapshot. All were fixed with regressions;
+  follow-up review reported no findings, and CodeRabbit reported 0 issues.
+- Verification run for this pass: focused changed-module coverage reported 73
+  tests passing with 100.00% coverage; full Python tests reported 372 tests
+  passing with one existing Starlette/httpx deprecation warning and 100.00%
+  coverage; `ruff check .` passed; `git diff --check` passed; frontend Vitest
+  reported 127 tests passing; frontend coverage passed above configured
+  thresholds; frontend production build passed with the existing large PDF
+  worker chunk warning; Playwright e2e reported 2 tests passing.
+
+## 2026-06-05 Retrieval Rank Fusion And Reranker Protocol
+
+- Added reciprocal rank fusion to Familiar retrieval candidates before final
+  reranking. Page FTS, source-object FTS, and fallback object scans remain
+  candidate channels; they do not decide final prompt evidence on their own.
+- Added the `Reranker` protocol and `DeterministicReranker` default in
+  `wfrp_companion/assistant/reranking.py`, keeping provider-backed reranking
+  out of the current phase while making the interface replaceable.
+- Rank reasons for selected hits now include channel-rank contributions
+  (`fusion_channel:*`), total RRF contribution (`fusion:rrf=*`), deterministic
+  reranker acceptance, and deterministic reranker score. These are persisted in
+  `retrieval_hits.rank_reasons_json`.
+- The deterministic reranker now rejects weak lexical-only matches for
+  multi-term queries while preserving exact object/table lookup signals,
+  including cases where the only table/stat/profile cue is the source-object
+  `object_type`.
+- Independent review initially found two ranking issues: object-type table
+  candidates could be rejected by the semantic gate, and same-channel duplicate
+  candidates could inflate RRF rank positions. Both were fixed with regression
+  tests; follow-up review reported no findings.
+- Verification run for this pass: focused retrieval coverage reported 27 tests
+  passing with 100.00% coverage; full Python tests reported 350 tests passing
+  with one existing Starlette/httpx deprecation warning and 100.00% coverage;
+  `ruff check .` passed; `git diff --check` passed; frontend Vitest reported
+  127 tests passing; frontend coverage passed above configured thresholds;
+  frontend production build passed with the existing large PDF worker chunk
+  warning; Playwright e2e reported 2 tests passing.
+
+## 2026-06-05 Source-Object Search Backfill
+
+- Added `rebuild_source_object_search()` in
+  `wfrp_companion/source_objects/store.py` to rebuild
+  `source_object_search` and `source_object_search_fts` from existing
+  `source_objects` without rerunning extraction.
+- Added `tools/rebuild_source_object_fts.py` as a count-only local repair tool
+  for missing or stale source-object search projections.
+- The backfill uses `ingest_jobs(job_type='rebuild_source_object_fts')`,
+  stale-running recovery, claim-conflict failure reporting, and
+  `book_object_status` transitions to keep object-search readiness explicit.
+- Review fixes strengthened idempotent skip behavior so stale FTS indexes and
+  failed/stale `book_object_status` rows are repaired instead of reported as
+  current.
+- Verification run for this pass: focused store/tool coverage reported 27 tests
+  passing with 100.00% coverage; post-review focused coverage reported 29
+  tests passing with 100.00% coverage; final focused coverage reported 31 tests
+  passing with 100.00% coverage after FTS vocabulary/rowid validation was
+  added; object-type posting validation brought final focused coverage to 32
+  tests passing with 100.00% coverage; full Python tests reported 345 tests
+  passing with one existing
+  Starlette/httpx deprecation warning and 100.00% coverage;
+  `ruff check .` passed; frontend Vitest reported 127 tests passing; frontend
+  coverage passed above configured thresholds; frontend production build passed
+  with the existing large PDF worker chunk warning; Playwright e2e reported 2
+  tests passing.
+
+## 2026-06-05 Durable Source-Map Retrieval Ownership
+
+- Added migration `0002_source_map_retrieval` for
+  `book_retrieval_status`, `book_source_maps`, and
+  `retrieval_run_source_books`.
+- Added `wfrp_companion/source_objects/source_map_builder.py` and
+  `tools/rebuild_source_maps.py` so source-map/profile metadata is rebuilt from
+  current source objects with guarded jobs, stale-running recovery, count-only
+  output, and deterministic freshness snapshots.
+- Updated Familiar source-map loading so checked books use current durable
+  `book_source_maps` when available and safely fall back to dynamic checked-book
+  source maps when durable rows are missing, stale, or malformed.
+- Updated retrieval-run persistence to snapshot checked books into
+  `retrieval_run_source_books` as relational proof of Library checkbox scope.
+- Addressed independent review findings around claim-conflict failure
+  accounting, source-map freshness inputs, durable source-map loading, and
+  malformed durable-map fallback.
+- Verification run for this pass: focused changed-module coverage reported 61
+  tests passing with 100.00% coverage; full Python tests reported 325 tests
+  passing with one existing Starlette/httpx deprecation warning and 100.00%
+  coverage; `ruff check .` passed; frontend Vitest reported 127 tests passing;
+  frontend coverage passed above configured thresholds; frontend production
+  build passed with the existing large PDF worker chunk warning; Playwright e2e
+  reported 2 tests passing.
+
+## 2026-06-05 Retrieval Module Split
+
+- Split the Familiar retrieval implementation into focused modules while
+  keeping `wfrp_companion/assistant/retrieval.py` as the public compatibility
+  facade for `retrieve_context()` and existing tests/callers.
+- Added `source_map.py`, `query_planner.py`, `candidates.py`, `evidence.py`,
+  and `reranking.py` under `wfrp_companion/assistant/` so later retrieval
+  phases can add durable source maps, rank fusion, vector candidates, and typed
+  evidence without growing one monolithic module.
+- Added `tests/assistant/test_retrieval_module_contracts.py` to lock facade
+  re-exports to the focused module contracts.
+- Completed independent code review for the split with no blocking findings.
+- Verification run for this pass: focused retrieval/chat tests reported 39
+  tests passing; full Python tests reported 300 tests passing with one
+  existing Starlette/httpx deprecation warning; the backend coverage gate
+  reported 300 tests passing with 100.00% coverage; `ruff check .` passed;
+  frontend Vitest reported 127 tests passing; frontend coverage passed above
+  configured thresholds; frontend production build passed with the existing
+  large PDF worker chunk warning; Playwright e2e reported 2 tests passing.
+
+## 2026-06-05 Source-Map-Aware Familiar Retrieval Slice
+
+- Changed Familiar retrieval so new model runs resolve checked books from the
+  thread's active source set at message time. `chat_thread_source_books` remains
+  a historical thread-creation snapshot; `retrieval_runs.metadata_json` now
+  stores the per-run checked-book snapshot, compact source map, and candidate
+  list.
+- Added source-object search projection population during extraction:
+  `source_object_search`, `source_object_search_fts`, and
+  `book_object_status.status='indexed'` now represent searchable extracted
+  objects.
+- Added broad page/object candidate generation, source-object span resolution,
+  deterministic semantic reranking, rank-reason snapshots, source-map prompt
+  injection, and printed page-range citation labels for Familiar.
+- Verification for this pass: full Python tests reported 290 tests passing;
+  the backend coverage gate reported 298 tests passing with 100.00% coverage;
+  both Python runs had one existing Starlette/httpx deprecation warning;
+  `ruff check .` passed; frontend Vitest reported 127 tests passing; frontend
+  coverage passed above configured thresholds; frontend production build
+  passed with the existing large PDF worker chunk warning; Playwright e2e
+  reported 2 tests passing.
+
+## 2026-06-05 Retrieval Architecture Handoff
+
+- Added
+  `docs/handoffs/2026-06-05-source-map-hybrid-retrieval-handoff.md` as the
+  durable handoff for the next retrieval phase.
+- Captured the target direction as source-map-aware hybrid retrieval with
+  semantic reranking and section-aware evidence, combining exact FTS, future
+  vector search, source-object search, glossary/index routing, query rewriting,
+  rank fusion, and semantic relevance filtering.
+- Preserved the key user-observed requirements: Library checkboxes must gate
+  Familiar prompt/retrieval scope per message, lexical hits must be semantically
+  judged before entering context, topics must resolve to multi-page
+  source-object spans when needed, and UI citations/search results should show
+  printed page labels rather than raw PDF page numbers.
+
+## 2026-06-05 Library Bulk Toggle Refinement
+
+- Removed per-book readiness words from the Library book selector so rows show
+  the book title, source-set checkbox, and compact Grimoire open action without
+  repeated `ready` noise.
+- Added tri-state category-heading checkboxes to select or clear every visible
+  book in a Library category. The bulk control persists changes through the
+  same per-book source-set endpoint as individual checkboxes.
+- Verification run for this pass: focused Library tests reported 9 tests
+  passing, frontend coverage reported 127 Vitest tests passing above configured
+  thresholds, frontend production build passed, and Playwright e2e reported 2
+  tests passing.
+
+## 2026-06-05 Search/Citation Page Drift And Familiar Rendering Fix
+
+- Split search hits and chat citations into explicit PDF jump metadata:
+  `pdf_page_number` plus optional `page_label`, while preserving the existing
+  `page_number` compatibility field.
+- Changed `/api/search/exact`, Familiar retrieval, stored chat citation read
+  models, and frontend API types so Search and Familiar open Grimoire using the
+  PDF page number instead of inferring from display text.
+- Search result opens and Familiar citation opens now force Grimoire back to
+  single-page mode so an existing two-page spread cannot make the reader appear
+  one page behind the clicked citation.
+- Updated search result labels and citation buttons to say `PDF page N`, with
+  `(printed page X)` appended when a distinct `pages.page_label` is available.
+- Added safe Familiar markdown rendering for headings, paragraphs, lists,
+  tables, bold text, and inline code so streamed model output no longer appears
+  as one unreadable text blob.
+- Updated `tools/extract_page_text.py` and
+  `wfrp_companion/library/page_text_importer.py` so page labels from JSON or
+  managed PDFs are preserved in SQLite `pages.page_label`; label-only drift now
+  causes page-text import freshness checks to fail rather than silently
+  skipping stale rows.
+- Verification run for this pass: backend coverage reported 286 tests passing
+  with 100% coverage, `ruff check .` passed, frontend Vitest reported 125 tests
+  passing with coverage above configured thresholds, frontend production build
+  passed, Playwright e2e reported 2 tests passing, `git diff --check` passed,
+  and a live browser smoke check opened an exact-search result into Grimoire at
+  PDF page 134 in single-page mode.
+
+## 2026-06-05 Phase 7 Deterministic Source Object Extraction Foundation
+
+- Added `wfrp_companion/source_objects/layout.py`,
+  `wfrp_companion/source_objects/store.py`,
+  `wfrp_companion/source_objects/extractor.py`, and
+  `tools/extract_source_objects.py`.
+- Implemented deterministic source-object extraction over copied,
+  text-imported, exact-search-indexed books.
+- Added per-book text snapshot hashing, explicit `book_object_status`
+  lifecycle updates, idempotent `extract_source_objects` ingest jobs,
+  stale-running recovery, and failure recording.
+- Added PyMuPDF layout metadata loading with safe fallback when managed PDFs
+  are missing or unreadable.
+- Added heading-derived `rule_section` extraction and lower-confidence
+  `page_chunk` fallback extraction for pages/regions not covered by rule
+  sections.
+- Kept object IDs stable by using page-local title-bucket ordinals plus
+  normalized text hashes, including a regression for unrelated earlier
+  same-page heading insertion.
+- Ran a live private smoke check for one indexed book: 738 source objects were
+  written on the first run and the same book was skipped as current on rerun.
+  No private extracted text was committed or logged in wiki output.
+- Completed independent review, fixed the reported same-page ID churn issue,
+  and reran verification.
+- Verification run for this pass: focused source-object/tool tests reported 30
+  tests passing, backend coverage reported 283 tests passing with 100%
+  coverage, `ruff check .` passed, frontend Vitest reported 122 tests passing
+  with coverage above configured thresholds, frontend production build passed,
+  and Playwright e2e reported 2 tests passing.
+- Important boundary: object FTS, table/stat/location extraction, and Familiar
+  object-aware ranking remain later Phase 7 PRs.
+
+## 2026-06-05 Phase 7 Typed Source Object Schema Foundation
+
+- Added the Phase 7 implementation plan at
+  `docs/plans/2026-06-05-phase-7-typed-source-object-retrieval-implementation-plan.md`.
+- Added `schema_migrations` plus `wfrp_companion/db/migrations.py` and
+  `tools/migrate_db.py` for explicit local SQLite migrations.
+- Added the Phase 7 source-object schema foundation:
+  `source_objects`, `source_object_links`, `book_object_status`,
+  `book_query_profiles`, `source_object_search`, and
+  `source_object_search_fts`.
+- Updated `retrieval_hits` so future retrieval can cite typed source objects
+  while preserving legacy page-level hits as `page_fallback` snapshots.
+- Added `wfrp_companion/source_objects/models.py` with typed source-object
+  contracts and deterministic IDs that hash normalized text rather than raw OCR
+  whitespace.
+- Hardened migration safety after independent review: missing/uninitialized DB
+  paths are refused, duplicate legacy retrieval ranks are preflighted, DDL runs
+  inside a rollbackable transaction, and `schema_migrations` is recorded only
+  after all migration work succeeds.
+- Added migration, rollback, CLI, schema, source-object, chat, retrieval, and
+  frontend regression coverage.
+- Verification run for this pass: backend coverage gate reported 253 tests
+  passing with 100% coverage, `ruff check .` passed, frontend Vitest reported
+  122 tests passing with coverage above configured thresholds, frontend
+  production build passed, and Playwright e2e reported 2 tests passing.
+- Important boundary: Phase 7 PR1 is schema/model/migration foundation only.
+  It does not yet extract source objects or change Familiar retrieval ranking.
+
+## 2026-06-05 Phase 6 Familiar Streaming RAG Chat
+
+- Added the Phase 6 implementation plan at
+  `docs/plans/2026-06-05-phase-6-familiar-rag-chat-implementation-plan.md`.
+- Added `tools/dev.py` as a one-command local runner for FastAPI plus Vite,
+  with readiness probes and cleanup behavior covered by tests.
+- Added `chat_thread_source_books` and `model_runs` to the SQLite schema so
+  chat retrieval scope and model lifecycle state are app-owned and explicit.
+- Added `wfrp_companion/assistant/chat_store.py`,
+  `retrieval.py`, `prompts.py`, `provider.py`, and `chat_service.py` for
+  thread snapshots, exact-search retrieval, bounded prompt construction,
+  OpenAI Responses API streaming, and model-run completion/failure handling.
+- Added `/api/chat/*` routes, including
+  `POST /api/chat/threads/{thread_id}/messages/stream`, which returns
+  newline-delimited JSON events: `accepted`, `retrieval`, `delta`,
+  `completed`, and `failed`.
+- Updated the Familiar frontend panel to create a thread, stream assistant
+  deltas, show failed provider runs, and open cited PDF pages in Grimoire.
+- Added `openai` to `environment.yml`; the API key remains local in
+  `OPENAI_API_KEY` and is never exposed to the browser or stored in the repo.
+- Verification run for this pass: backend pytest reported 205 tests passing,
+  frontend Vitest reported 109 tests passing, `ruff check .` passed,
+  frontend production build passed, and targeted coverage gates reported 100%
+  for `wfrp_companion.assistant.chat_service` and
+  `wfrp_companion.assistant.provider`.
+- Follow-up reconciliation on 2026-06-05 marked the Phase 6 plan checklist
+  against live code. The remaining known Phase 6 gaps are the real Familiar
+  chat-history selector UI and a successful live OpenAI rules-question QA pass;
+  the attempted live rules question exposed the page-level retrieval weakness
+  now being addressed by Phase 7 typed source-object retrieval.
+
 ## 2026-06-04 Phase 5 Browser GUI Refinement
 
 - Refined the first browser GUI around the user-approved workspace language:

@@ -196,7 +196,6 @@ it("filters books and renders attention and disabled reader states", async () =>
     />,
   );
 
-  expect(screen.getByText("needs attention")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Open Attention Book" })).toBeDisabled();
 
   await user.type(screen.getByRole("searchbox", { name: "Filter library books" }), "attention");
@@ -205,21 +204,121 @@ it("filters books and renders attention and disabled reader states", async () =>
   expect(screen.getByText("Attention Book")).toBeInTheDocument();
 });
 
-it("labels books that are readable but not indexed", () => {
+it("does not render per-book readiness labels", () => {
   renderApp(
     <LibraryTab
       activeSourceSetId="rules-core"
-      books={[unindexedBook]}
+      books={[book, attentionBook, unindexedBook]}
       client={client()}
       collapsedCategories={[]}
       onOpenBook={vi.fn()}
       onSourceSetBookUpdated={vi.fn()}
       onToggleCategory={vi.fn()}
-      sourceSetBooks={[unindexedSourceSetBook]}
+      sourceSetBooks={[sourceSetBook, attentionSourceSetBook, unindexedSourceSetBook]}
     />,
   );
 
-  expect(screen.getByText("not indexed")).toBeInTheDocument();
+  expect(screen.queryByText("ready")).not.toBeInTheDocument();
+  expect(screen.queryByText("needs attention")).not.toBeInTheDocument();
+  expect(screen.queryByText("not indexed")).not.toBeInTheDocument();
+});
+
+it("enables every unchecked book in a category from the section checkbox", async () => {
+  const user = userEvent.setup();
+  const fakeClient = client({
+    setSourceSetBook: vi.fn().mockImplementation((sourceSetId, bookId, enabled) =>
+      Promise.resolve({
+        ...sourceSetBook,
+        source_set_id: sourceSetId,
+        book_id: bookId,
+        enabled,
+      }),
+    ),
+  });
+
+  renderApp(
+    <LibraryTab
+      activeSourceSetId="rules-core"
+      books={[book, unindexedBook]}
+      client={fakeClient}
+      collapsedCategories={[]}
+      onOpenBook={vi.fn()}
+      onSourceSetBookUpdated={vi.fn()}
+      onToggleCategory={vi.fn()}
+      sourceSetBooks={[sourceSetBook, unindexedSourceSetBook]}
+    />,
+  );
+
+  const categoryCheckbox = screen.getByRole("checkbox", {
+    name: "Select all books in Rules / Core",
+  }) as HTMLInputElement;
+  expect(categoryCheckbox).not.toBeChecked();
+  expect(categoryCheckbox.indeterminate).toBe(true);
+
+  await user.click(categoryCheckbox);
+
+  await waitFor(() =>
+    expect(fakeClient.setSourceSetBook).toHaveBeenCalledWith(
+      "rules-core",
+      "unindexed-book",
+      true,
+    ),
+  );
+  expect(fakeClient.setSourceSetBook).toHaveBeenCalledTimes(1);
+});
+
+it("disables every checked book in a category from the section checkbox", async () => {
+  const user = userEvent.setup();
+  const fakeClient = client({
+    setSourceSetBook: vi.fn().mockImplementation((sourceSetId, bookId, enabled) =>
+      Promise.resolve({
+        ...sourceSetBook,
+        source_set_id: sourceSetId,
+        book_id: bookId,
+        enabled,
+      }),
+    ),
+  });
+
+  renderApp(
+    <LibraryTab
+      activeSourceSetId="rules-core"
+      books={[book, unindexedBook]}
+      client={fakeClient}
+      collapsedCategories={[]}
+      onOpenBook={vi.fn()}
+      onSourceSetBookUpdated={vi.fn()}
+      onToggleCategory={vi.fn()}
+      sourceSetBooks={[
+        sourceSetBook,
+        {
+          ...unindexedSourceSetBook,
+          enabled: true,
+        },
+      ]}
+    />,
+  );
+
+  const categoryCheckbox = screen.getByRole("checkbox", {
+    name: "Select all books in Rules / Core",
+  });
+  expect(categoryCheckbox).toBeChecked();
+
+  await user.click(categoryCheckbox);
+
+  await waitFor(() =>
+    expect(fakeClient.setSourceSetBook).toHaveBeenCalledWith(
+      "rules-core",
+      "core-rules",
+      false,
+    ),
+  );
+  expect(fakeClient.setSourceSetBook).toHaveBeenCalledWith(
+    "rules-core",
+    "unindexed-book",
+    false,
+  );
+  expect(fakeClient.setSourceSetBook).toHaveBeenCalledTimes(2);
 });
 
 it("honors collapsed library categories", () => {

@@ -26,10 +26,24 @@ REQUIRED_TABLES = {
     "page_assets",
     "asset_labels",
     "ingest_jobs",
+    "schema_migrations",
+    "source_objects",
+    "source_object_links",
+    "book_object_status",
+    "book_retrieval_status",
+    "book_page_label_calibrations",
+    "book_source_maps",
+    "book_query_profiles",
+    "source_object_search",
+    "source_object_search_fts",
+    "source_object_embeddings",
     "chat_threads",
+    "chat_thread_source_books",
     "chat_messages",
     "retrieval_runs",
+    "retrieval_run_source_books",
     "retrieval_hits",
+    "model_runs",
 }
 
 
@@ -144,6 +158,13 @@ def test_load_config_uses_local_defaults(tmp_path: Path) -> None:
     assert config.data_dir == repo_root / "data"
     assert config.db_path == repo_root / "data" / "wfrp_companion.sqlite"
     assert config.asset_dir == repo_root / "data" / "library" / "assets"
+    assert config.openai_api_key is None
+    assert config.openai_model == "gpt-5.4-mini"
+    assert config.openai_timeout_seconds == 60
+    assert config.chat_context_hit_limit == 6
+    assert config.embedding_provider == "disabled"
+    assert config.embedding_model == "local-hash-v1"
+    assert config.embedding_dimensions == 64
 
 
 def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
@@ -153,6 +174,15 @@ def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
             "WFRP_DATA_DIR": str(tmp_path / "private-data"),
             "WFRP_DB_PATH": str(tmp_path / "db" / "custom.sqlite"),
             "WFRP_ASSET_DIR": str(tmp_path / "assets"),
+            "OPENAI_API_KEY": "test-key",
+            "WFRP_OPENAI_MODEL": "gpt-test",
+            "WFRP_OPENAI_TIMEOUT_SECONDS": "12.5",
+            "WFRP_CHAT_CONTEXT_HIT_LIMIT": "3",
+            "WFRP_CHAT_CONTEXT_CHAR_LIMIT": "1200",
+            "WFRP_CHAT_CONTEXT_WINDOW_CHARS": "400",
+            "WFRP_EMBEDDING_PROVIDER": "local-hash",
+            "WFRP_EMBEDDING_MODEL": "local-hash-test",
+            "WFRP_EMBEDDING_DIMENSIONS": "16",
         },
         repo_root=tmp_path / "repo",
     )
@@ -161,6 +191,15 @@ def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
     assert config.data_dir == tmp_path / "private-data"
     assert config.db_path == tmp_path / "db" / "custom.sqlite"
     assert config.asset_dir == tmp_path / "assets"
+    assert config.openai_api_key == "test-key"
+    assert config.openai_model == "gpt-test"
+    assert config.openai_timeout_seconds == 12.5
+    assert config.chat_context_hit_limit == 3
+    assert config.chat_context_char_limit == 1200
+    assert config.chat_context_window_chars == 400
+    assert config.embedding_provider == "local-hash"
+    assert config.embedding_model == "local-hash-test"
+    assert config.embedding_dimensions == 16
 
 
 def test_initialize_database_creates_required_schema_and_wal(
@@ -212,6 +251,74 @@ def test_book_status_constraints_protect_lifecycle_state(tmp_path: Path) -> None
                 copy_status="copied",
                 managed_sha256=None,
             )
+
+
+def test_page_label_calibration_schema_allows_backfill_state(
+    tmp_path: Path,
+) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        insert_folder(connection)
+        insert_book(connection)
+
+        connection.execute(
+            """
+            insert into book_page_label_calibrations (
+              book_id,
+              status,
+              method,
+              calibration_json,
+              page_text_snapshot_sha256,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'calibrated',
+              'offset_anchor',
+              '{"labels_by_page":{"9":"1"}}',
+              'snapshot',
+              '2026-06-05T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into ingest_jobs (
+              id,
+              job_type,
+              target_id,
+              status,
+              idempotency_key,
+              attempts,
+              created_at,
+              updated_at
+            )
+            values (
+              'labels-1',
+              'backfill_page_labels',
+              'core-rules',
+              'succeeded',
+              'backfill_page_labels:core-rules:snapshot:v1',
+              1,
+              '2026-06-05T00:00:00Z',
+              '2026-06-05T00:00:00Z'
+            )
+            """
+        )
+
+        calibration = connection.execute(
+            """
+            select status, method
+            from book_page_label_calibrations
+            where book_id = 'core-rules'
+            """
+        ).fetchone()
+        job = connection.execute(
+            "select job_type from ingest_jobs where id = 'labels-1'"
+        ).fetchone()
+
+    assert calibration["status"] == "calibrated"
+    assert calibration["method"] == "offset_anchor"
+    assert job["job_type"] == "backfill_page_labels"
 
 
 def test_asset_constraints_prevent_duplicate_candidates_and_current_labels(
@@ -331,6 +438,533 @@ def test_boolean_constraints_reject_ambiguous_state_values(tmp_path: Path) -> No
                   created_at
                 )
                 values ('bad-current-label', 'core-rules:1:visual_candidate:phash:abc', 'map_candidate', 'heuristic', 0.8, 2, '2026-06-03T00:00:00Z')
+                """
+            )
+
+
+def test_source_object_schema_allows_glossary_entries_and_definition_links(
+    tmp_path: Path,
+) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        insert_folder(connection)
+        insert_book(connection)
+        insert_page(connection)
+        now = "2026-06-05T00:00:00Z"
+        for object_id, object_type, title, text in (
+            (
+                "core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa",
+                "rule_section",
+                "Falling",
+                "Falling rules text.",
+            ),
+            (
+                "core-rules:p1-p1:glossary_entry:1:bbbbbbbbbbbb",
+                "glossary_entry",
+                "Falling",
+                "Falling: a sudden drop; see Falling.",
+            ),
+        ):
+            connection.execute(
+                """
+                insert into source_objects (
+                  id,
+                  book_id,
+                  page_id,
+                  object_type,
+                  title,
+                  heading_path_json,
+                  page_start,
+                  page_end,
+                  text,
+                  search_text,
+                  confidence,
+                  extraction_method,
+                  text_snapshot_sha256,
+                  created_at,
+                  updated_at
+                )
+                values (?, 'core-rules', 'core-rules:1', ?, ?, '[]', 1, 1,
+                        ?, ?, 0.8, 'test', 'snapshot', ?, ?)
+                """,
+                (object_id, object_type, title, text, text, now, now),
+            )
+
+        connection.execute(
+            """
+            insert into source_object_links (
+              id,
+              from_object_id,
+              to_object_id,
+              to_book_id,
+              to_page_id,
+              link_type,
+              label,
+              confidence,
+              created_at
+            )
+            values (
+              'glossary-link',
+              'core-rules:p1-p1:glossary_entry:1:bbbbbbbbbbbb',
+              'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+              'core-rules',
+              'core-rules:1',
+              'glossary_definition',
+              'Falling',
+              0.8,
+              ?
+            )
+            """,
+            (now,),
+        )
+
+        link = connection.execute(
+            "select link_type from source_object_links where id = 'glossary-link'"
+        ).fetchone()
+        connection.execute(
+            """
+            insert into book_object_status (
+              book_id,
+              status,
+              extractor_version,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'indexed',
+              'structured-evidence-v1',
+              ?
+            )
+            """,
+            (now,),
+        )
+        status = connection.execute(
+            "select extractor_version from book_object_status where book_id = 'core-rules'"
+        ).fetchone()
+
+    assert link["link_type"] == "glossary_definition"
+    assert status["extractor_version"] == "structured-evidence-v1"
+
+
+def test_chat_model_run_constraints_and_retry_guard(tmp_path: Path) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        insert_folder(connection)
+        insert_book(connection)
+        connection.execute(
+            """
+            insert into source_sets (id, name, is_builtin, created_at, updated_at)
+            values ('rules-core', 'Rules/Core', 1, '2026-06-03T00:00:00Z',
+                    '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into chat_threads (
+              id,
+              title,
+              active_source_set_id,
+              created_at,
+              updated_at
+            )
+            values ('thread-1', 'Rules Help', 'rules-core',
+                    '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into chat_thread_source_books (
+              thread_id,
+              book_id,
+              source_set_id,
+              captured_at
+            )
+            values ('thread-1', 'core-rules', 'rules-core',
+                    '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into chat_messages (
+              id,
+              thread_id,
+              role,
+              content,
+              created_at
+            )
+            values ('message-1', 'thread-1', 'user', 'Help',
+                    '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              user_message_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+              updated_at
+            )
+            values ('run-1', 'thread-1', 'message-1', 'fake', 'fake-model',
+                    'failed', 'send-1', '2026-06-03T00:00:00Z',
+                    '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              retry_of_model_run_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+              updated_at
+            )
+            values ('retry-1', 'thread-1', 'run-1', 'fake', 'fake-model',
+                    'queued', 'retry-1', '2026-06-03T00:00:00Z',
+                    '2026-06-03T00:00:00Z')
+            """
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into model_runs (
+                  id,
+                  thread_id,
+                  provider,
+                  model,
+                  status,
+                  idempotency_key,
+                  created_at,
+                  updated_at
+                )
+                values ('bad-provider', 'thread-1', 'banana', 'fake-model',
+                        'queued', 'bad-provider', '2026-06-03T00:00:00Z',
+                        '2026-06-03T00:00:00Z')
+                """
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into model_runs (
+                  id,
+                  thread_id,
+                  provider,
+                  model,
+                  status,
+                  idempotency_key,
+                  created_at,
+                  updated_at
+                )
+                values ('bad-status', 'thread-1', 'fake', 'fake-model',
+                        'thinking', 'bad-status', '2026-06-03T00:00:00Z',
+                        '2026-06-03T00:00:00Z')
+                """
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into model_runs (
+                  id,
+                  thread_id,
+                  user_message_id,
+                  retry_of_model_run_id,
+                  provider,
+                  model,
+                  status,
+                  idempotency_key,
+                  created_at,
+                  updated_at
+                )
+                values ('retry-2', 'thread-1', 'message-1', 'run-1', 'fake',
+                        'fake-model', 'retrieving', 'retry-2',
+                        '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
+                """
+            )
+
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              user_message_id,
+              retry_of_model_run_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+              updated_at
+            )
+            values ('retry-3', 'thread-1', 'message-1', 'run-1', 'fake',
+                    'fake-model', 'completed', 'retry-3', '2026-06-03T00:00:00Z',
+                    '2026-06-03T00:00:00Z')
+            """
+        )
+
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              user_message_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+              updated_at
+            )
+            values ('local-gate', 'thread-1', 'message-1', 'local',
+                    'retrieval-confidence-gate', 'completed', 'local-gate',
+                    '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
+            """
+        )
+
+
+def test_source_object_schema_constraints_and_retrieval_hit_snapshots(
+    tmp_path: Path,
+) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        insert_folder(connection)
+        insert_book(connection)
+        insert_page(connection)
+        connection.execute(
+            """
+            insert into source_objects (
+              id,
+              book_id,
+              page_id,
+              object_type,
+              title,
+              heading_path_json,
+              page_start,
+              page_end,
+              char_start,
+              char_end,
+              text,
+              search_text,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            )
+            values (
+              'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+              'core-rules',
+              'core-rules:1',
+              'rule_section',
+              'Critical Hits',
+              '["Combat"]',
+              1,
+              1,
+              10,
+              80,
+              'Critical hits are dangerous.',
+              'Critical Hits Combat',
+              0.91,
+              'heading_heuristic',
+              'text-snapshot',
+              '2026-06-03T00:00:00Z',
+              '2026-06-03T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into source_objects (
+              id,
+              book_id,
+              page_id,
+              object_type,
+              title,
+              heading_path_json,
+              page_start,
+              page_end,
+              text,
+              search_text,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            )
+            values (
+              'core-rules:p1-p1:table:2:bbbbbbbbbbbb',
+              'core-rules',
+              'core-rules:1',
+              'table',
+              'Critical Hit Table',
+              '["Combat"]',
+              1,
+              1,
+              'Roll Result',
+              'Critical Hit Table Roll Result',
+              0.82,
+              'pymupdf_table',
+              'text-snapshot',
+              '2026-06-03T00:00:00Z',
+              '2026-06-03T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into retrieval_runs (id, query, created_at)
+            values ('retrieval-1', 'critical hit rules', '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into retrieval_hits (
+              id,
+              retrieval_run_id,
+              page_id,
+              source_object_id,
+              score,
+              rank,
+              snippet,
+              object_type_snapshot,
+              title_snapshot,
+              heading_path_snapshot_json,
+              confidence_snapshot,
+              rank_reasons_json,
+              text_snapshot_sha256
+            )
+            values (
+              'hit-1',
+              'retrieval-1',
+              'core-rules:1',
+              'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+              0.1,
+              1,
+              'Critical hits',
+              'rule_section',
+              'Critical Hits',
+              '["Combat"]',
+              0.91,
+              '["object_type_match"]',
+              'text-snapshot'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into retrieval_hits (
+              id,
+              retrieval_run_id,
+              page_id,
+              source_object_id,
+              score,
+              rank,
+              snippet,
+              object_type_snapshot,
+              title_snapshot,
+              heading_path_snapshot_json,
+              confidence_snapshot,
+              rank_reasons_json,
+              text_snapshot_sha256
+            )
+            values (
+              'hit-2',
+              'retrieval-1',
+              'core-rules:1',
+              'core-rules:p1-p1:table:2:bbbbbbbbbbbb',
+              0.2,
+              2,
+              'Critical Hit Table',
+              'table',
+              'Critical Hit Table',
+              '["Combat"]',
+              0.82,
+              '["table_lookup"]',
+              'text-snapshot'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into retrieval_hits (
+              id,
+              retrieval_run_id,
+              page_id,
+              score,
+              rank,
+              snippet,
+              object_type_snapshot
+            )
+            values (
+              'fallback-hit',
+              'retrieval-1',
+              'core-rules:1',
+              0.5,
+              3,
+              'page fallback',
+              'page_fallback'
+            )
+            """
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into source_objects (
+                  id,
+                  book_id,
+                  page_id,
+                  object_type,
+                  heading_path_json,
+                  page_start,
+                  page_end,
+                  text,
+                  search_text,
+                  confidence,
+                  extraction_method,
+                  text_snapshot_sha256,
+                  created_at,
+                  updated_at
+                )
+                values (
+                  'bad-type',
+                  'core-rules',
+                  'core-rules:1',
+                  'rumor',
+                  '[]',
+                  1,
+                  1,
+                  'bad',
+                  'bad',
+                  0.5,
+                  'test',
+                  'text-snapshot',
+                  '2026-06-03T00:00:00Z',
+                  '2026-06-03T00:00:00Z'
+                )
+                """
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into retrieval_hits (
+                  id,
+                  retrieval_run_id,
+                  page_id,
+                  score,
+                  rank,
+                  object_type_snapshot
+                )
+                values ('duplicate-rank', 'retrieval-1', 'core-rules:1', 0.6, 3,
+                        'page_fallback')
                 """
             )
 

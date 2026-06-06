@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+from wfrp_companion.assistant import prompts
+from wfrp_companion.assistant.retrieval import RetrievedHit, SourceMapEntry
+
+
+def test_build_prompt_requires_citations_and_insufficient_context_honesty() -> None:
+    messages = prompts.build_prompt_messages(
+        question="How do critical hits work?",
+        hits=(
+            RetrievedHit(
+                book_id="core-rules",
+                title="Core Rules",
+                category="Core Book & GM Essentials",
+                page_id="core-rules:1",
+                page_number=1,
+                pdf_page_number=1,
+                page_label=None,
+                snippet="[Critical] hit rules",
+                score=-1.2,
+                rank=1,
+                context_text="Critical hit rules explain the table result.",
+            ),
+        ),
+        recent_messages=(),
+    )
+
+    system_text = messages[0].content
+    user_text = messages[-1].content
+
+    assert "Cite book and page" in system_text
+    assert "insufficient" in system_text.lower()
+    assert "Core Rules p. 1" in user_text
+    assert "Critical hit rules explain" in user_text
+
+
+def test_build_prompt_includes_enabled_source_map_and_section_ranges() -> None:
+    messages = prompts.build_prompt_messages(
+        question="How do critical hits continue?",
+        hits=(
+            RetrievedHit(
+                book_id="core-rules",
+                title="Core Rules",
+                category="Core Book & GM Essentials",
+                page_id="core-rules:1",
+                page_number=1,
+                pdf_page_number=1,
+                page_label="10",
+                snippet="Critical hits",
+                score=4.2,
+                rank=1,
+                context_text="Critical hits continue onto the next page.",
+                source_object_id="core-rules:critical-hits",
+                object_type="rule_section",
+                object_title="Critical Hits",
+                heading_path=("Chapter I: Combat", "Critical Hits"),
+                page_start=1,
+                page_end=2,
+                page_range_label="10-11",
+                confidence=0.91,
+                rank_reasons=("source_object:rule_section", "semantic_overlap:critical"),
+                text_snapshot_sha256="sha-critical",
+            ),
+        ),
+        source_map=(
+            SourceMapEntry(
+                book_id="core-rules",
+                title="Core Rules",
+                category="Core Book & GM Essentials",
+                summary="Core WFRP rules and combat references.",
+                aliases=("critical", "combat"),
+                best_source_for=("rules_lookup",),
+                chapters=("Chapter I: Combat",),
+            ),
+        ),
+        recent_messages=(),
+    )
+
+    user_text = messages[-1].content
+
+    assert "Enabled source map:" in user_text
+    assert "Core Rules - Core WFRP rules and combat references." in user_text
+    assert "[1] Core Rules, Critical Hits, printed pages 10-11" in user_text
+    assert "PDF page" not in user_text
+
+
+def test_build_prompt_does_not_include_local_paths_or_unbounded_context() -> None:
+    messages = prompts.build_prompt_messages(
+        question="What is here?",
+        hits=(
+            RetrievedHit(
+                book_id="core-rules",
+                title="Core Rules",
+                category="Core Book & GM Essentials",
+                page_id="core-rules:1",
+                page_number=1,
+                pdf_page_number=1,
+                page_label=None,
+                snippet="snippet",
+                score=0,
+                rank=1,
+                context_text="/Users/aftoncarlson/secret.pdf " + ("x" * 300),
+            ),
+        ),
+        recent_messages=(),
+        context_char_limit=80,
+    )
+
+    combined = "\n".join(message.content for message in messages)
+
+    assert "/Users/" not in combined
+    assert "secret.pdf" not in combined
+    assert len(combined) < 700
+
+
+def test_build_context_block_stops_at_context_limit_and_skips_empty_hits() -> None:
+    block = prompts.build_context_block(
+        (
+            RetrievedHit(
+                book_id="empty",
+                title="Empty",
+                category="Core",
+                page_id="empty:1",
+                page_number=1,
+                pdf_page_number=1,
+                page_label=None,
+                snippet="",
+                score=0,
+                rank=1,
+                context_text="",
+            ),
+            RetrievedHit(
+                book_id="core-rules",
+                title="Core Rules",
+                category="Core Book & GM Essentials",
+                page_id="core-rules:1",
+                page_number=1,
+                pdf_page_number=1,
+                page_label=None,
+                snippet="snippet",
+                score=0,
+                rank=2,
+                context_text="Critical hit rules.",
+            ),
+            RetrievedHit(
+                book_id="barony",
+                title="Barony",
+                category="Adventure",
+                page_id="barony:1",
+                page_number=1,
+                pdf_page_number=1,
+                page_label=None,
+                snippet="snippet",
+                score=0,
+                rank=3,
+                context_text="This should not fit.",
+            ),
+        ),
+        context_char_limit=18,
+    )
+
+    assert "Empty p. 1" not in block
+    assert "Core Rules p. 1" in block
+    assert "Barony" not in block
+
+
+def test_page_labels_use_single_range_or_distinct_printed_label() -> None:
+    single_range = RetrievedHit(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:10",
+        page_number=10,
+        pdf_page_number=10,
+        page_label="9",
+        snippet="snippet",
+        score=1,
+        rank=1,
+        context_text="text",
+        page_start=10,
+        page_end=10,
+        page_range_label="9",
+    )
+    distinct_label = RetrievedHit(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:11",
+        page_number=11,
+        pdf_page_number=11,
+        page_label="10",
+        snippet="snippet",
+        score=1,
+        rank=2,
+        context_text="text",
+    )
+
+    assert prompts.page_label(single_range) == "printed page 9"
+    assert prompts.page_label(distinct_label) == "printed page 10"

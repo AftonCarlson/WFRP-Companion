@@ -14,7 +14,7 @@ should prove the loop:
 5. Return a cited answer.
 6. Jump from citation to PDF page.
 
-The current codebase has working local implementations for steps 1 through 3:
+The current codebase has working local implementations for steps 1 through 6:
 
 - PDF registration/import is owned by `wfrp_companion/library/importer.py` and
   `tools/import_pdfs.py`.
@@ -30,9 +30,34 @@ The current codebase has working local implementations for steps 1 through 3:
   PDF reader, source-set, and exact-search routes over the same SQLite state.
 - `wfrp_companion/search/scope.py` owns shared CLI/API scope resolution for
   active source-set, named source-set, explicit book, and whole-library search.
-
-Steps 4 through 6 remain future work: AI question answering, cited answer
-assembly, and frontend reader citation jumps.
+- `wfrp_companion/assistant/` owns the first Familiar chat loop: thread
+  creation, source-set snapshot retrieval, bounded prompt construction,
+  OpenAI provider streaming, retrieval/model-run persistence, and cited
+  responses.
+- `frontend/src/components/chat/AgentChatPanel.tsx` streams Familiar output and
+  opens citations in Grimoire.
+- `wfrp_companion/db/migrations.py`, `tools/migrate_db.py`, and
+  `wfrp_companion/source_objects/` now provide the Phase 7 source-object
+  foundation: explicit migrations, typed model contracts, deterministic
+  `rule_section` and `page_chunk` extraction, and object extraction lifecycle
+  state for future object-aware retrieval.
+- `tools/rebuild_source_maps.py` now rebuilds durable checked-book
+  source-map/profile metadata after source objects are current. Familiar uses
+  current durable source maps when available and falls back safely when they are
+  stale, missing, or malformed.
+- `tools/rebuild_source_object_fts.py` now repairs source-object search and
+  FTS projections from existing `source_objects` without rerunning extraction.
+- Familiar retrieval now fuses candidate-channel ranks and applies a
+  replaceable reranker protocol. The default reranker is deterministic and
+  local; provider-backed reranking is not part of the current codebase.
+- `tools/rebuild_embeddings.py` now rebuilds local source-object vectors when
+  `WFRP_EMBEDDING_PROVIDER=local-hash`; the default provider is disabled.
+- Source-object extraction now emits structured local evidence objects for
+  simple tables/table rows, stat/profile blocks, index entries, glossary
+  entries, and cross references, and persists deterministic
+  `source_object_links` for parent/target relationships.
+- `tools/backfill_page_labels.py` now rebuilds printed page-label calibration
+  metadata from imported page labels plus optional offset anchors.
 
 ## Rules For New Code
 
@@ -57,6 +82,17 @@ assembly, and frontend reader citation jumps.
 - Fail gracefully when context is missing.
 - Log enough retrieval metadata to debug ranking, not enough to create an
   accidental copy of the books.
+- Treat lexical/page/object search as candidate generation. A reranker must
+  decide whether a candidate is relevant enough to enter Familiar prompt
+  context.
+- Treat vector search as another candidate channel. It must be scoped to
+  checked books, validated against current local embedding snapshots, and fed
+  through rank fusion plus reranking before prompt context.
+- Treat linked source-object traversal as evidence resolution, not scope
+  expansion. Links may resolve row/stat/index/cross-reference candidates to
+  complete parent or target objects only when the target book is in the checked
+  `source_book_ids` snapshot. Glossary entries remain canonical glossary
+  evidence and can include linked target context.
 
 ## PDF/Search Rules
 
@@ -69,9 +105,34 @@ assembly, and frontend reader citation jumps.
 - Keep managed PDF copies versioned by source SHA and store the active absolute
   path in SQLite.
 - Use full-text search for exact matches.
+- Preserve exact object-type lookup signals such as tables and stat blocks in
+  reranker relevance text, even when private body text does not repeat the type
+  label.
+- Keep deterministic table/stat/index/glossary/cross-reference extraction
+  conservative. Prefer missing an ambiguous structure over creating a confident
+  wrong link; richer OCR-layout table reconstruction belongs in a later phase.
 - Rebuild global FTS through `tools/rebuild_fts.py` after page text changes.
 - Run `tools/source_sets.py init` after importing books so built-in source sets
   include all current books.
+- Run `tools/extract_source_objects.py` after page text import and global FTS
+  rebuild when typed source-object rows need to be refreshed.
+- Run `tools/rebuild_source_object_fts.py` when existing `source_objects` need
+  their `source_object_search` / `source_object_search_fts` projection repaired
+  without rerunning extraction.
+- Run `tools/rebuild_source_maps.py` after source-object extraction when
+  durable Familiar source-map/profile metadata needs to be refreshed.
+- Run `tools/rebuild_embeddings.py` after source-object extraction when local
+  vector candidates are explicitly enabled. The command is count-only and must
+  not print private source-object text.
+- Run `tools/backfill_page_labels.py` after page-text import when printed
+  labels need to be calibrated or repaired. Use repeatable
+  `--anchor book_id:pdf_page_number:printed_label` values for books whose
+  printed page 1 starts after roman/front-matter pages.
+- Page-label backfill output must stay count-only and must not print page text
+  or raw exception details. Failure summaries should be safe categories.
+- Do not display raw PDF page numbers as confident printed labels. If
+  calibration is missing or a book needs manual review, keep printed label
+  fields absent while retaining `pdf_page_number` for reader jumps.
 - Treat `source_set_books.enabled` as scope membership only. Do not use it as a
   replacement for readiness state.
 - Keep exact-search readiness gating in `search_exact()` and the `books`
@@ -116,6 +177,47 @@ database behavior should preserve these constraints:
   default search/retrieval scope.
 - Keep source-set membership separate from the `book_readiness` view; readiness
   is derived from lifecycle state, not from user scope selection.
+- Use explicit migrations in `wfrp_companion/db/migrations.py` for existing
+  SQLite databases when a change cannot be handled by replaying
+  `schema.sql`.
+- Migration tools must refuse typo/missing DB paths and uninitialized SQLite
+  files rather than creating partial application state.
+- Keep typed source-object extraction state explicit in
+  `book_object_status`; do not infer readiness from frontend state or incidental
+  FTS projection rows.
+- Keep source-object extraction currentness versioned. When deterministic
+  extraction heuristics change, bump the extractor version or otherwise mark
+  old extracted/indexed rows stale so normal extraction refreshes object/link
+  output.
+- Treat `source_objects` as canonical private local structured evidence and
+  `source_object_search` / `source_object_search_fts` as rebuildable
+  projections.
+- Object-search repair tools must rebuild projections from `source_objects` and
+  report only counts and bounded failure reasons, never extracted private text.
+- Keep source-object extractor output count-oriented. Do not log or commit
+  extracted book text.
+- Keep `source_object_links` local and derived. Parent/child links and
+  index/glossary/cross-reference targets must not bypass Library checkbox
+  scope during retrieval.
+- Keep retrieval-asset lifecycle state explicit in `book_retrieval_status`;
+  do not infer source-map/vector/table/page-label readiness from projection row
+  presence alone.
+- Keep printed-page calibration details in `book_page_label_calibrations`.
+  `book_retrieval_status.page_label_status` is only the summary lifecycle
+  state.
+- Plain page-label backfill reruns should preserve current anchored
+  calibrations and reuse stored anchors after page text/label snapshot drift.
+  Use `--force` or a new `--anchor` when replacing an anchored calibration
+  intentionally.
+- Treat `book_source_maps` as the owner of compact source-map routing metadata.
+  `book_query_profiles` is a derived boost table and should be rebuilt from the
+  current source map.
+- Source-map snapshots must include every input that can affect routing:
+  relevant book metadata plus source-object ids, types, titles, heading paths,
+  page ranges, and text snapshots.
+- Retrieval runs must snapshot checked books into `retrieval_run_source_books`
+  as queryable proof of Library checkbox scope. JSON metadata can remain for
+  compatibility, but should not be the only audit trail.
 
 ## Documentation Rules
 

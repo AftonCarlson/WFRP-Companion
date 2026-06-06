@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from wfrp_companion.api import errors
+from wfrp_companion.assistant import chat_store
 from wfrp_companion.library import catalog
 from wfrp_companion.library import source_sets
 from wfrp_companion.search import scope
@@ -28,3 +29,15 @@ def test_search_scope_error_defensive_fallback() -> None:
 
     assert response.status_code == 500
     assert response.detail == "Unexpected search scope error"
+
+
+def test_chat_store_error_maps_retry_conflict_and_defensive_fallback() -> None:
+    conflict = errors.chat_store_error(
+        chat_store.ModelRunNotRetryableError("not retryable")
+    )
+    fallback = errors.chat_store_error(chat_store.ChatStoreError("unexpected"))
+
+    assert conflict.status_code == 409
+    assert conflict.detail == "not retryable"
+    assert fallback.status_code == 500
+    assert fallback.detail == "Unexpected chat store error"

@@ -24,6 +24,8 @@ function client(overrides: Partial<ApiClient> = {}) {
           category: "Rules",
           page_id: "core-rules:134",
           page_number: 134,
+          pdf_page_number: 134,
+          page_label: null,
           snippet: "...critical hit...",
           score: -1,
         },
@@ -57,10 +59,13 @@ it("searches exact text and opens PDF pages from results", async () => {
   await user.click(screen.getByRole("button", { name: "Search" }));
 
   expect(await screen.findByText("...critical hit...")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Open PDF page" }));
+  await user.click(screen.getByRole("button", { name: "Open Core Rules PDF page 134" }));
 
   expect(onOpenPdfPage).toHaveBeenCalledWith(
-    expect.objectContaining({ book_id: "core-rules", page_number: 134 }),
+    expect.objectContaining({
+      book_id: "core-rules",
+      pdf_page_number: 134,
+    }),
   );
 });
 
@@ -140,10 +145,12 @@ it("keeps the newest search loading when an older search resolves last", async (
         book_id: "core-rules",
         title: "Core Rules",
         category: "Rules",
-        page_id: "core-rules:134",
-        page_number: 134,
-        snippet: "...critical hit...",
-        score: -1,
+      page_id: "core-rules:134",
+      page_number: 134,
+      pdf_page_number: 134,
+      page_label: null,
+      snippet: "...critical hit...",
+      score: -1,
       },
     ],
   };

@@ -37,6 +37,10 @@ and exact search:
   with `--retry-running`.
 - `tools/import_page_text.py` imports private OCR/text JSON from
   `data/page_text/<book_id>.json` into SQLite `pages` and `page_text`.
+- Page-text import preserves optional page labels from JSON and, when JSON has
+  no label, reads labels from the managed PDF with PyMuPDF. Runtime page
+  identity is therefore `pages.page_number` for the PDF jump target plus
+  optional `pages.page_label` for the printed/display page label.
 - `tools/rebuild_fts.py` rebuilds the global exact-search projection in
   `page_search` and `page_search_fts`.
 - `tools/source_sets.py` syncs the built-in `Rules/Core` source set and toggles
@@ -110,7 +114,8 @@ source of truth:
   `import_page_text_file:<relative_json_path>:<json_sha256>` with no
   `target_id`.
 - A current imported book is only skipped when the book status, JSON SHA, page
-  counts, page text hashes, and generated timestamps still match.
+  counts, page text hashes, generated timestamps, and resolved page labels
+  still match.
 - Failed or stale imports are repairable with a normal rerun, `--force`,
   `--retry-running`, or `--stale-running-minutes`.
 
@@ -137,6 +142,10 @@ Exact search is implemented in `wfrp_companion/search/fts.py`:
   book IDs.
 - `/api/search/exact` accepts `query`, `limit`, `source_set_id`, repeatable
   `book_id`, and `all_books` parameters.
+- `/api/search/exact` returns `pdf_page_number` for reader jumps and
+  `page_label` when a raw or calibrated printed label is available. The
+  frontend should use `pdf_page_number` for Grimoire opens and display
+  `page_label` only as printed-page context.
 - Source-set membership is owned by `source_set_books.enabled`; readiness is
   still owned by `books` lifecycle state and enforced by `search_exact()`.
 
@@ -148,6 +157,72 @@ The real local source-set sync on 2026-06-04 created `rules-core`, inserted 26
 book membership rows, set it active, and enabled the `Core Book & GM Essentials`
 and `Rules and Mechanics Toolkits` categories by default. Adventure modules and
 world/faction sourcebooks remain disabled until individually enabled.
+
+Phase 7 PR1 adds the source-object schema foundation for richer extraction:
+
+- `source_objects` will store typed page spans for rules sections, tables,
+  table rows, stat blocks, NPCs, monsters, locations, encounters, boxed text,
+  map references, image references, index entries, cross references, and page
+  fallback chunks.
+- `source_object_links` will store explicit relationships between extracted
+  objects and referenced objects/pages/books.
+- `book_object_status` will own per-book source-object extraction/indexing
+  readiness.
+- `book_query_profiles` will store deterministic per-book evidence for which
+  query types should be boosted.
+- `source_object_search` and `source_object_search_fts` are rebuildable search
+  projections over `source_objects`.
+
+Phase 7 PR2 adds the first deterministic extractor:
+
+- `wfrp_companion/source_objects/layout.py` reads optional PyMuPDF page layout
+  metadata from managed PDFs when available and falls back safely when the PDF
+  is missing or unreadable.
+- `wfrp_companion/source_objects/store.py` owns eligible-book selection,
+  text-snapshot hashing, extraction job claims, stale-running recovery, page
+  loading, source-object replacement, and `book_object_status` updates.
+- `wfrp_companion/source_objects/extractor.py` extracts page-local,
+  deterministic `rule_section` objects from heading patterns and
+  lower-confidence `page_chunk` fallback objects for uncovered text.
+- `tools/extract_source_objects.py` runs extraction for all eligible books or
+  repeatable `--book-id` filters, with `--force`, `--retry-running`, and
+  `--stale-running-minutes` recovery options.
+- OCR-derived pages are detected from `pages.extraction_method` values that
+  start with `ocr`; confidence is capped when word geometry is unavailable.
+- Rule-section IDs use page-local title-bucket ordinals and normalized text so
+  inserting or removing unrelated earlier same-page headings does not churn
+  unchanged later section IDs.
+- CLI output reports counts and truncated failure summaries only. It must not
+  print extracted book text.
+
+The real local source-object smoke run on 2026-06-05 extracted one indexed
+book into 738 source objects, then skipped the same book as current on rerun.
+This proves the extractor, status row, job idempotency, and snapshot-drift
+checks work against the live private database without committing private text.
+
+Current boundary: source objects can now be populated, but object FTS,
+table/stat/location extraction, and Familiar object-aware ranking remain later
+Phase 7 PRs. Page-level `page_text` plus `page_search_fts` still remain the
+active retrieval surface for Familiar and exact search.
+
+Phase 7 PR10 adds printed page-label calibration/backfill:
+
+- `wfrp_companion/library/page_labels.py` builds page-label calibration
+  metadata from imported `pages.page_label` values plus optional offset
+  anchors.
+- `tools/backfill_page_labels.py` runs the backfill for all eligible copied and
+  imported books or selected `--book-id` values. It supports
+  `--anchor book_id:pdf_page_number:printed_label`, `--force`,
+  `--retry-running`, and `--stale-running-minutes`.
+- The backfill stores only calibration metadata and counts in
+  `book_page_label_calibrations`; it does not export page text.
+- Roman/front-matter labels before an offset anchor are preserved, and stored
+  anchors are reused after page text/label snapshot drift on plain reruns.
+  Pages without a proven label, or pages whose imported/calibrated labels
+  conflict, are marked for manual review instead of being shown as confident
+  printed-page citations.
+- Exact search, Familiar prompt context, and reloaded chat citations prefer
+  current calibrated labels/ranges. The PDF page number remains the jump target.
 
 ## OCR
 
@@ -166,6 +241,10 @@ The page-text extraction tool is `tools/extract_page_text.py`. It generated
 local text references for 26 PDFs / 3,736 pages under `data/page_text/` on
 2026-06-03. The run produced 391 embedded-text pages, 3,214 OCR pages, and 131
 empty OCR pages with source references preserved.
+
+As of 2026-06-05, `tools/extract_page_text.py` also writes optional
+`page_label` values from PyMuPDF, and the importer can backfill labels from the
+managed PDF even for older JSON files that do not contain that field.
 
 ## Maps And Images
 

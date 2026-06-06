@@ -15,6 +15,15 @@ class AppConfig:
     data_dir: Path
     db_path: Path
     asset_dir: Path
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5.4-mini"
+    openai_timeout_seconds: float = 60.0
+    chat_context_hit_limit: int = 6
+    chat_context_char_limit: int = 9000
+    chat_context_window_chars: int = 1600
+    embedding_provider: str = "disabled"
+    embedding_model: str = "local-hash-v1"
+    embedding_dimensions: int = 64
 
 
 def project_root() -> Path:
@@ -37,4 +46,13 @@ def load_config(
         asset_dir=Path(
             source.get("WFRP_ASSET_DIR", data_dir / "library" / "assets")
         ),
+        openai_api_key=source.get("OPENAI_API_KEY"),
+        openai_model=source.get("WFRP_OPENAI_MODEL", "gpt-5.4-mini"),
+        openai_timeout_seconds=float(source.get("WFRP_OPENAI_TIMEOUT_SECONDS", "60")),
+        chat_context_hit_limit=int(source.get("WFRP_CHAT_CONTEXT_HIT_LIMIT", "6")),
+        chat_context_char_limit=int(source.get("WFRP_CHAT_CONTEXT_CHAR_LIMIT", "9000")),
+        chat_context_window_chars=int(source.get("WFRP_CHAT_CONTEXT_WINDOW_CHARS", "1600")),
+        embedding_provider=source.get("WFRP_EMBEDDING_PROVIDER", "disabled"),
+        embedding_model=source.get("WFRP_EMBEDDING_MODEL", "local-hash-v1"),
+        embedding_dimensions=int(source.get("WFRP_EMBEDDING_DIMENSIONS", "64")),
     )

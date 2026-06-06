@@ -54,13 +54,21 @@ function client(): ApiClient {
           category: "Rules / Core",
           page_id: "core-rules:134",
           page_number: 134,
+          pdf_page_number: 134,
+          page_label: null,
           snippet: "critical hit",
           score: 1,
         },
       ],
     }),
     getPageText: vi.fn(),
-  } as ApiClient;
+    createChatThread: vi.fn(),
+    listChatThreads: vi.fn(),
+    getChatThread: vi.fn(),
+    sendChatMessage: vi.fn(),
+    retryModelRun: vi.fn(),
+    streamChatMessage: vi.fn(),
+  };
 }
 
 it("maps library book opens to page-one PDF requests", async () => {
@@ -112,12 +120,15 @@ it("maps search result opens to exact page PDF requests", async () => {
 
   await user.type(screen.getByRole("searchbox", { name: "Search book text" }), "critical hit");
   await user.click(screen.getByRole("button", { name: "Search" }));
-  await user.click(await screen.findByRole("button", { name: "Open PDF page" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Open Core Rules PDF page 134" }),
+  );
 
   expect(onOpenPdfPage).toHaveBeenCalledWith({
     bookId: "core-rules",
     title: "Core Rules",
     pageNumber: 134,
+    viewMode: "single",
   });
 });
 
