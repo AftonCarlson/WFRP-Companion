@@ -13,6 +13,9 @@ from wfrp_companion.db.migrations import apply_pending_migrations
 from wfrp_companion.source_objects.models import SourceObject
 
 
+SOURCE_OBJECT_EXTRACTOR_VERSION = "structured-evidence-v1"
+
+
 @dataclass(frozen=True)
 class EligibleBook:
     book_id: str
@@ -474,7 +477,7 @@ def object_status_current(
 ) -> bool:
     row = connection.execute(
         """
-        select status, object_count
+        select status, object_count, extractor_version
         from book_object_status
         where book_id = ?
           and text_snapshot_sha256 = ?
@@ -483,6 +486,8 @@ def object_status_current(
         (book_id, text_snapshot_sha256),
     ).fetchone()
     if row is None:
+        return False
+    if row["extractor_version"] != SOURCE_OBJECT_EXTRACTOR_VERSION:
         return False
     object_count = connection.execute(
         """
@@ -644,6 +649,18 @@ def replace_book_source_objects(
 ) -> None:
     with connection:
         connection.execute("delete from source_object_search where book_id = ?", (book_id,))
+        connection.execute(
+            """
+            delete from source_object_links
+            where from_object_id in (
+              select id from source_objects where book_id = ?
+            )
+               or to_object_id in (
+              select id from source_objects where book_id = ?
+            )
+            """,
+            (book_id, book_id),
+        )
         connection.execute("delete from source_objects where book_id = ?", (book_id,))
         for source_object in source_objects:
             connection.execute(
@@ -724,21 +741,32 @@ def replace_book_source_objects(
                     source_object.search_text,
                 ),
             )
+        write_derived_source_object_links(connection, source_objects, now=now)
         rebuild_source_object_fts_table(connection)
         connection.execute(
             """
             update book_object_status
             set status = 'indexed',
                 object_count = ?,
-                table_count = 0,
-                stat_block_count = 0,
-                location_count = 0,
+                table_count = ?,
+                stat_block_count = ?,
+                location_count = ?,
                 text_snapshot_sha256 = ?,
+                extractor_version = ?,
                 last_error = null,
                 updated_at = ?
             where book_id = ?
             """,
-            (len(source_objects), text_snapshot_sha256, now, book_id),
+            (
+                len(source_objects),
+                count_source_objects(source_objects, "table"),
+                count_source_objects(source_objects, "stat_block"),
+                count_source_objects(source_objects, "location_description"),
+                text_snapshot_sha256,
+                SOURCE_OBJECT_EXTRACTOR_VERSION,
+                now,
+                book_id,
+            ),
         )
         connection.execute(
             """
@@ -751,6 +779,241 @@ def replace_book_source_objects(
             """,
             (now, now, job_id),
         )
+
+
+def write_derived_source_object_links(
+    connection: sqlite3.Connection,
+    source_objects: tuple[SourceObject, ...],
+    *,
+    now: str,
+) -> None:
+    objects_by_id = {source_object.id: source_object for source_object in source_objects}
+    for source_object in source_objects:
+        if source_object.parent_object_id is not None:
+            parent = objects_by_id.get(source_object.parent_object_id)
+            if parent is not None:
+                parent_link_type = parent_link_type_for(source_object, parent)
+                if parent_link_type is not None:
+                    insert_source_object_link(
+                        connection,
+                        from_object_id=source_object.id,
+                        to_object_id=parent.id,
+                        to_book_id=parent.book_id,
+                        to_page_id=parent.page_id,
+                        link_type=parent_link_type,
+                        label=parent.title,
+                        confidence=min(source_object.confidence, parent.confidence),
+                        evidence={
+                            "derived_from": "parent_object_id",
+                            "from_type": source_object.object_type,
+                            "to_type": parent.object_type,
+                        },
+                        now=now,
+                    )
+            continue
+
+        reference_link_type = reference_link_type_for(source_object.object_type)
+        if reference_link_type is None:
+            continue
+        metadata = source_object_metadata(source_object)
+        target_title = metadata.get("target_title")
+        target_page = metadata.get("target_page")
+        if not isinstance(target_title, str):
+            continue
+        target_page_number = target_page if isinstance(target_page, int) else None
+        target = find_reference_target_object(
+            source_objects,
+            source_object=source_object,
+            target_title=target_title,
+            target_page=target_page_number,
+        )
+        target_page_id = (
+            target.page_id
+            if target is not None
+            else target_page_id_for(
+                connection,
+                book_id=source_object.book_id,
+                page_number=target_page_number,
+            )
+        )
+        if target is None and target_page_id is None:
+            continue
+        insert_source_object_link(
+            connection,
+            from_object_id=source_object.id,
+            to_object_id=target.id if target is not None else None,
+            to_book_id=source_object.book_id,
+            to_page_id=target_page_id,
+            link_type=reference_link_type,
+            label=target_title,
+            confidence=source_object.confidence,
+            evidence={
+                "derived_from": "reference_metadata",
+                "target_title": target_title,
+                **(
+                    {"target_page": target_page_number}
+                    if target_page_number is not None
+                    else {}
+                ),
+            },
+            now=now,
+        )
+
+
+def parent_link_type_for(child: SourceObject, parent: SourceObject) -> str | None:
+    if child.object_type == "table_row" and parent.object_type == "table":
+        return "table_row"
+    if child.object_type == "stat_block" and parent.object_type in {
+        "npc_profile",
+        "monster_profile",
+    }:
+        return "stat_profile"
+    return "same_section"
+
+
+def reference_link_type_for(object_type: str) -> str | None:
+    if object_type == "index_entry":
+        return "index_entry"
+    if object_type == "glossary_entry":
+        return "glossary_definition"
+    if object_type == "cross_reference":
+        return "cross_reference"
+    return None
+
+
+def source_object_metadata(source_object: SourceObject) -> dict[str, object]:
+    try:
+        parsed = json.loads(source_object.metadata_json or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def find_reference_target_object(
+    source_objects: tuple[SourceObject, ...],
+    *,
+    source_object: SourceObject,
+    target_title: str,
+    target_page: int | None,
+) -> SourceObject | None:
+    normalized_title = " ".join(target_title.casefold().split())
+    candidates = [
+        candidate
+        for candidate in source_objects
+        if candidate.book_id == source_object.book_id
+        and candidate.id != source_object.id
+        and candidate.title is not None
+        and " ".join(candidate.title.casefold().split()) == normalized_title
+        and (
+            target_page is None
+            or candidate.page_start <= target_page <= candidate.page_end
+        )
+        and candidate.object_type
+        not in {"index_entry", "glossary_entry", "cross_reference", "page_chunk"}
+    ]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda candidate: (
+            candidate.page_start,
+            -candidate.confidence,
+            candidate.id,
+        )
+    )
+    return candidates[0]
+
+
+def target_page_id_for(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    page_number: int | None,
+) -> str | None:
+    if page_number is None:
+        return None
+    row = connection.execute(
+        """
+        select id
+        from pages
+        where book_id = ?
+          and page_number = ?
+        """,
+        (book_id, page_number),
+    ).fetchone()
+    return None if row is None else str(row["id"])
+
+
+def insert_source_object_link(
+    connection: sqlite3.Connection,
+    *,
+    from_object_id: str,
+    to_object_id: str | None,
+    to_book_id: str | None,
+    to_page_id: str | None,
+    link_type: str,
+    label: str | None,
+    confidence: float,
+    evidence: dict[str, object],
+    now: str,
+) -> None:
+    connection.execute(
+        """
+        insert into source_object_links (
+          id,
+          from_object_id,
+          to_object_id,
+          to_book_id,
+          to_page_id,
+          link_type,
+          label,
+          confidence,
+          evidence_json,
+          created_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(id) do nothing
+        """,
+        (
+            source_object_link_id(
+                from_object_id=from_object_id,
+                to_object_id=to_object_id,
+                to_book_id=to_book_id,
+                to_page_id=to_page_id,
+                link_type=link_type,
+            ),
+            from_object_id,
+            to_object_id,
+            to_book_id,
+            to_page_id,
+            link_type,
+            label,
+            confidence,
+            json.dumps(evidence, sort_keys=True),
+            now,
+        ),
+    )
+
+
+def source_object_link_id(
+    *,
+    from_object_id: str,
+    to_object_id: str | None,
+    to_book_id: str | None,
+    to_page_id: str | None,
+    link_type: str,
+) -> str:
+    digest = hashlib.sha256()
+    for value in (from_object_id, to_object_id, to_book_id, to_page_id, link_type):
+        digest.update((value or "").encode("utf-8"))
+        digest.update(b"\0")
+    return f"{from_object_id}:link:{link_type}:{digest.hexdigest()[:12]}"
+
+
+def count_source_objects(
+    source_objects: tuple[SourceObject, ...],
+    object_type: str,
+) -> int:
+    return sum(1 for source_object in source_objects if source_object.object_type == object_type)
 
 
 def rebuild_source_object_search(

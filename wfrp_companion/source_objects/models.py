@@ -18,6 +18,7 @@ SourceObjectType = Literal[
     "map_reference",
     "image_reference",
     "index_entry",
+    "glossary_entry",
     "cross_reference",
     "page_chunk",
 ]
@@ -35,6 +36,7 @@ SOURCE_OBJECT_TYPES: tuple[str, ...] = (
     "map_reference",
     "image_reference",
     "index_entry",
+    "glossary_entry",
     "cross_reference",
     "page_chunk",
 )

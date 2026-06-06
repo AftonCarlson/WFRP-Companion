@@ -52,6 +52,10 @@ The current codebase has working local implementations for steps 1 through 6:
   local; provider-backed reranking is not part of the current codebase.
 - `tools/rebuild_embeddings.py` now rebuilds local source-object vectors when
   `WFRP_EMBEDDING_PROVIDER=local-hash`; the default provider is disabled.
+- Source-object extraction now emits structured local evidence objects for
+  simple tables/table rows, stat/profile blocks, index entries, glossary
+  entries, and cross references, and persists deterministic
+  `source_object_links` for parent/target relationships.
 
 ## Rules For New Code
 
@@ -82,6 +86,11 @@ The current codebase has working local implementations for steps 1 through 6:
 - Treat vector search as another candidate channel. It must be scoped to
   checked books, validated against current local embedding snapshots, and fed
   through rank fusion plus reranking before prompt context.
+- Treat linked source-object traversal as evidence resolution, not scope
+  expansion. Links may resolve row/stat/index/cross-reference candidates to
+  complete parent or target objects only when the target book is in the checked
+  `source_book_ids` snapshot. Glossary entries remain canonical glossary
+  evidence and can include linked target context.
 
 ## PDF/Search Rules
 
@@ -97,6 +106,9 @@ The current codebase has working local implementations for steps 1 through 6:
 - Preserve exact object-type lookup signals such as tables and stat blocks in
   reranker relevance text, even when private body text does not repeat the type
   label.
+- Keep deterministic table/stat/index/glossary/cross-reference extraction
+  conservative. Prefer missing an ambiguous structure over creating a confident
+  wrong link; richer OCR-layout table reconstruction belongs in a later phase.
 - Rebuild global FTS through `tools/rebuild_fts.py` after page text changes.
 - Run `tools/source_sets.py init` after importing books so built-in source sets
   include all current books.
@@ -162,6 +174,10 @@ database behavior should preserve these constraints:
 - Keep typed source-object extraction state explicit in
   `book_object_status`; do not infer readiness from frontend state or incidental
   FTS projection rows.
+- Keep source-object extraction currentness versioned. When deterministic
+  extraction heuristics change, bump the extractor version or otherwise mark
+  old extracted/indexed rows stale so normal extraction refreshes object/link
+  output.
 - Treat `source_objects` as canonical private local structured evidence and
   `source_object_search` / `source_object_search_fts` as rebuildable
   projections.
@@ -169,6 +185,9 @@ database behavior should preserve these constraints:
   report only counts and bounded failure reasons, never extracted private text.
 - Keep source-object extractor output count-oriented. Do not log or commit
   extracted book text.
+- Keep `source_object_links` local and derived. Parent/child links and
+  index/glossary/cross-reference targets must not bypass Library checkbox
+  scope during retrieval.
 - Keep retrieval-asset lifecycle state explicit in `book_retrieval_status`;
   do not infer source-map/vector/table/page-label readiness from projection row
   presence alone.

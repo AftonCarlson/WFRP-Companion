@@ -13,10 +13,12 @@ MIGRATION_DIR = Path(__file__).with_name("migration_files")
 PHASE_7_MIGRATION_ID = "0001_phase_7_source_objects"
 SOURCE_MAP_RETRIEVAL_MIGRATION_ID = "0002_source_map_retrieval"
 VECTOR_RETRIEVAL_MIGRATION_ID = "0003_vector_retrieval"
+STRUCTURED_EVIDENCE_MIGRATION_ID = "0004_structured_evidence"
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
     VECTOR_RETRIEVAL_MIGRATION_ID,
+    STRUCTURED_EVIDENCE_MIGRATION_ID,
 )
 
 
@@ -120,6 +122,8 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         migration_function = apply_source_map_retrieval
     elif migration_id == VECTOR_RETRIEVAL_MIGRATION_ID:
         migration_function = apply_vector_retrieval
+    elif migration_id == STRUCTURED_EVIDENCE_MIGRATION_ID:
+        migration_function = apply_structured_evidence
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -184,6 +188,18 @@ def apply_vector_retrieval(connection: sqlite3.Connection) -> None:
         connection,
         required_job_type="rebuild_embeddings",
     )
+
+
+def apply_structured_evidence(connection: sqlite3.Connection) -> None:
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{STRUCTURED_EVIDENCE_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+    rebuild_structured_evidence_tables_if_needed(connection)
+    add_extractor_version_column_if_needed(connection)
+    mark_existing_extractions_stale_for_structured_evidence(connection)
 
 
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
@@ -487,6 +503,252 @@ def rebuild_retrieval_hits_if_needed(connection: sqlite3.Connection) -> None:
 def create_phase_7_indexes(connection: sqlite3.Connection) -> None:
     for statement in INDEX_SQL:
         connection.execute(statement)
+
+
+def rebuild_structured_evidence_tables_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    if (
+        "glossary_entry" in table_sql(connection, "source_objects")
+        and "glossary_definition" in table_sql(connection, "source_object_links")
+    ):
+        return
+
+    legacy_alter_table = connection.execute("pragma legacy_alter_table").fetchone()[0]
+    connection.execute("pragma legacy_alter_table = on")
+    try:
+        drop_structured_evidence_indexes(connection)
+        connection.execute(
+            "alter table source_object_links rename to source_object_links_before_0004"
+        )
+        connection.execute("alter table source_objects rename to source_objects_before_0004")
+        connection.execute(SOURCE_OBJECTS_TABLE_SQL)
+        connection.execute(
+            """
+            insert into source_objects (
+              id,
+              book_id,
+              page_id,
+              object_type,
+              parent_object_id,
+              title,
+              heading_path_json,
+              page_start,
+              page_end,
+              char_start,
+              char_end,
+              bbox_json,
+              text,
+              search_text,
+              metadata_json,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            )
+            select
+              id,
+              book_id,
+              page_id,
+              object_type,
+              parent_object_id,
+              title,
+              heading_path_json,
+              page_start,
+              page_end,
+              char_start,
+              char_end,
+              bbox_json,
+              text,
+              search_text,
+              metadata_json,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            from source_objects_before_0004
+            """
+        )
+        connection.execute(SOURCE_OBJECT_LINKS_TABLE_SQL)
+        connection.execute(
+            """
+            insert into source_object_links (
+              id,
+              from_object_id,
+              to_object_id,
+              to_book_id,
+              to_page_id,
+              link_type,
+              label,
+              confidence,
+              evidence_json,
+              created_at
+            )
+            select
+              id,
+              from_object_id,
+              to_object_id,
+              to_book_id,
+              to_page_id,
+              link_type,
+              label,
+              confidence,
+              evidence_json,
+              created_at
+            from source_object_links_before_0004
+            """
+        )
+        connection.execute("drop table source_object_links_before_0004")
+        connection.execute("drop table source_objects_before_0004")
+        create_structured_evidence_indexes(connection)
+    finally:
+        connection.execute(f"pragma legacy_alter_table = {int(legacy_alter_table)}")
+
+
+def drop_structured_evidence_indexes(connection: sqlite3.Connection) -> None:
+    for index_name in (
+        "ix_source_objects_book_type",
+        "ix_source_objects_page",
+        "ix_source_objects_parent",
+        "ix_source_object_links_from",
+        "ix_source_object_links_to_object",
+    ):
+        connection.execute(f"drop index if exists {index_name}")
+
+
+def create_structured_evidence_indexes(connection: sqlite3.Connection) -> None:
+    for statement in STRUCTURED_EVIDENCE_INDEX_SQL:
+        connection.execute(statement)
+
+
+def add_extractor_version_column_if_needed(connection: sqlite3.Connection) -> None:
+    if "extractor_version" in column_names(connection, "book_object_status"):
+        return
+    connection.execute("alter table book_object_status add column extractor_version text")
+
+
+def mark_existing_extractions_stale_for_structured_evidence(
+    connection: sqlite3.Connection,
+) -> None:
+    connection.execute(
+        """
+        update book_object_status
+        set status = 'not_started',
+            object_count = 0,
+            table_count = 0,
+            stat_block_count = 0,
+            location_count = 0,
+            text_snapshot_sha256 = null,
+            extractor_version = null,
+            last_error = null,
+            updated_at = ?
+        where status in ('extracted', 'indexed')
+          and coalesce(extractor_version, '') != 'structured-evidence-v1'
+        """,
+        (utc_timestamp(),),
+    )
+
+
+SOURCE_OBJECTS_TABLE_SQL = """
+create table source_objects (
+  id text primary key,
+  book_id text not null references books(id) on delete cascade,
+  page_id text not null references pages(id) on delete cascade,
+  object_type text not null,
+  parent_object_id text references source_objects(id) on delete cascade,
+  title text,
+  heading_path_json text not null default '[]',
+  page_start integer not null,
+  page_end integer not null,
+  char_start integer,
+  char_end integer,
+  bbox_json text,
+  text text not null,
+  search_text text not null,
+  metadata_json text not null default '{}',
+  confidence real not null default 0,
+  extraction_method text not null,
+  text_snapshot_sha256 text not null,
+  created_at text not null,
+  updated_at text not null,
+  foreign key (page_id, book_id, page_start)
+    references pages(id, book_id, page_number) on delete cascade,
+  check(object_type in (
+    'rule_section',
+    'table',
+    'table_row',
+    'stat_block',
+    'npc_profile',
+    'monster_profile',
+    'location_description',
+    'encounter',
+    'boxed_text',
+    'map_reference',
+    'image_reference',
+    'index_entry',
+    'glossary_entry',
+    'cross_reference',
+    'page_chunk'
+  )),
+  check(confidence >= 0 and confidence <= 1),
+  check(page_start >= 1),
+  check(page_end >= page_start)
+)
+"""
+
+
+SOURCE_OBJECT_LINKS_TABLE_SQL = """
+create table source_object_links (
+  id text primary key,
+  from_object_id text not null references source_objects(id) on delete cascade,
+  to_object_id text references source_objects(id) on delete cascade,
+  to_book_id text references books(id) on delete set null,
+  to_page_id text references pages(id) on delete set null,
+  link_type text not null,
+  label text,
+  confidence real not null default 0,
+  evidence_json text not null default '{}',
+  created_at text not null,
+  check(link_type in (
+    'index_entry',
+    'cross_reference',
+    'same_section',
+    'table_row',
+    'stat_profile',
+    'glossary_definition',
+    'map_reference',
+    'image_reference',
+    'entity_mention'
+  )),
+  check(confidence >= 0 and confidence <= 1)
+)
+"""
+
+
+STRUCTURED_EVIDENCE_INDEX_SQL: tuple[str, ...] = (
+    """
+    create index if not exists ix_source_objects_book_type
+    on source_objects(book_id, object_type)
+    """,
+    """
+    create index if not exists ix_source_objects_page
+    on source_objects(page_id)
+    """,
+    """
+    create index if not exists ix_source_objects_parent
+    on source_objects(parent_object_id)
+    """,
+    """
+    create index if not exists ix_source_object_links_from
+    on source_object_links(from_object_id)
+    """,
+    """
+    create index if not exists ix_source_object_links_to_object
+    on source_object_links(to_object_id)
+    """,
+)
 
 
 INGEST_JOBS_TABLE_SQL = """

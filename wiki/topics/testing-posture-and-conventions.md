@@ -13,7 +13,7 @@ source-object extraction foundation, Phase 7 PR3 Familiar source-map/object
 retrieval, Phase 7 PR4 retrieval-module split, and Phase 7 PR5 durable
 source-map/profile ownership, Phase 7 PR6 source-object search backfill, and
 Phase 7 PR7 retrieval rank fusion/reranker protocol, and Phase 7 PR8 local
-vector retrieval channel.
+vector retrieval channel, and Phase 7 PR9 structured source-object evidence.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -175,6 +175,15 @@ protocol exports, and persisted rank reasons that include channel
 contribution, fusion score, and reranker judgment. Vector-channel tests cover
 disabled-by-default behavior, checked-book filtering, current-snapshot gating,
 and exact lexical/object hits staying ahead of vector-only candidates.
+Structured-evidence tests cover `glossary_entry` and `glossary_definition`
+schema/migration support, table/table-row extraction and parent links,
+stat/profile extraction and links, index/glossary/cross-reference extraction,
+extractor-version invalidation, duplicate same-page table-row ID prevention,
+derived source-object links and count updates, table-row citations resolving to
+parent table page ranges, stat-block retrieval resolving to complete profiles,
+index routing to deterministic target sections or page-only target pages,
+glossary evidence retaining definition context without fake disjoint page
+ranges, and link traversal refusing unchecked-book targets.
 
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
@@ -186,7 +195,7 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-05 reported 372 tests
+The latest full backend verification command on 2026-06-05 reported 394 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 127 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Collection
+from dataclasses import dataclass
 from dataclasses import replace
 
 from wfrp_companion.assistant.evidence import EvidenceCandidate
@@ -20,6 +21,13 @@ from wfrp_companion.source_objects.embeddings import local_hash_embeddings_enabl
 from wfrp_companion.source_objects.embeddings import source_object_embeddings_current
 from wfrp_companion.source_objects.embeddings import text_embedding_vector
 from wfrp_companion.source_objects.embeddings import vector_from_blob
+
+
+@dataclass(frozen=True)
+class LinkedEvidenceTarget:
+    link_type: str
+    source_object_row: sqlite3.Row | None = None
+    page_row: sqlite3.Row | None = None
 
 
 def collect_evidence_candidates(
@@ -163,6 +171,7 @@ def resolve_page_hit_to_source_object(
         base_score=float(getattr(hit, "score")),
         snippet=getattr(hit, "snippet", "") or "",
         channel="page_fts_resolved",
+        source_book_ids=(getattr(hit, "book_id"),),
     )
 
 def search_source_object_candidates(
@@ -236,6 +245,7 @@ def search_source_object_fts_candidates(
             base_score=float(row["score"]),
             snippet=row["snippet"] or "",
             channel="source_object_fts",
+            source_book_ids=book_ids,
         )
         for row in rows
     )
@@ -281,6 +291,7 @@ def search_source_object_like_candidates(
             base_score=float(row["score"]),
             snippet=row["title"] or "",
             channel="source_object_scan",
+            source_book_ids=book_ids,
         )
         for row in rows
     )
@@ -368,6 +379,7 @@ def search_vector_candidates(
             base_score=-similarity,
             snippet=row["title"] or "",
             channel="vector",
+            source_book_ids=current_book_ids,
         )
         candidates.append(
             replace(
@@ -382,6 +394,85 @@ def search_vector_candidates(
 
 
 def evidence_candidate_from_source_object_row(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    base_score: float,
+    snippet: str,
+    channel: str,
+    source_book_ids: Collection[str] | None = None,
+) -> EvidenceCandidate:
+    selected_book_ids = tuple(source_book_ids or (row["book_id"],))
+    linked = linked_evidence_target(
+        connection,
+        row,
+        source_book_ids=selected_book_ids,
+    )
+    if linked is not None and row["object_type"] != "glossary_entry":
+        if linked.source_object_row is not None:
+            candidate = source_object_row_to_candidate(
+                connection,
+                linked.source_object_row,
+                base_score=base_score,
+                snippet=linked_evidence_snippet(row, linked.link_type, snippet),
+                channel=channel,
+            )
+        else:
+            assert linked.page_row is not None
+            candidate = linked_page_row_to_candidate(
+                linked.page_row,
+                source_row=row,
+                base_score=base_score,
+                snippet=snippet,
+                channel=channel,
+                link_type=linked.link_type,
+            )
+        return replace(
+            candidate,
+            rank_reasons=(
+                *candidate.rank_reasons,
+                f"linked_evidence:{linked.link_type}:{row['id']}",
+                f"linked_source_object:{row['object_type']}",
+            ),
+        )
+
+    candidate = source_object_row_to_candidate(
+        connection,
+        row,
+        base_score=base_score,
+        snippet=snippet,
+        channel=channel,
+    )
+    if linked is None or row["object_type"] != "glossary_entry":
+        return candidate
+
+    linked_context = (
+        linked.source_object_row["text"]
+        if linked.source_object_row is not None
+        else linked.page_row["text"]
+        if linked.page_row is not None
+        else ""
+    )
+    linked_id = (
+        linked.source_object_row["id"]
+        if linked.source_object_row is not None
+        else linked.page_row["page_id"]
+        if linked.page_row is not None
+        else "unknown"
+    )
+    return replace(
+        candidate,
+        context_text="\n\n".join(
+            part for part in (candidate.context_text, linked_context) if part
+        ),
+        rank_reasons=(
+            *candidate.rank_reasons,
+            f"linked_evidence:{linked.link_type}:{linked_id}",
+        ),
+    )
+
+
+def source_object_row_to_candidate(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
     *,
@@ -418,3 +509,237 @@ def evidence_candidate_from_source_object_row(
         rank_reasons=(f"candidate:{channel}", f"source_object:{row['object_type']}"),
         text_snapshot_sha256=row["text_snapshot_sha256"],
     )
+
+
+def linked_page_row_to_candidate(
+    row: sqlite3.Row,
+    *,
+    source_row: sqlite3.Row,
+    base_score: float,
+    snippet: str,
+    channel: str,
+    link_type: str,
+) -> EvidenceCandidate:
+    page_number = int(row["page_number"])
+    page_label = row["page_label"]
+    return EvidenceCandidate(
+        book_id=row["book_id"],
+        title=row["book_title"],
+        category=row["category"],
+        page_id=row["page_id"],
+        page_number=page_number,
+        pdf_page_number=page_number,
+        page_label=page_label,
+        page_start=page_number,
+        page_end=page_number,
+        page_range_label=page_label,
+        snippet=linked_evidence_snippet(source_row, link_type, snippet),
+        base_score=base_score,
+        context_text=row["text"],
+        channel=channel,
+        object_type="page_fallback",
+        rank_reasons=(f"candidate:{channel}", "source_object:page_fallback"),
+    )
+
+
+def linked_evidence_target(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    source_book_ids: tuple[str, ...],
+) -> LinkedEvidenceTarget | None:
+    link_types = preferred_link_types(row["object_type"])
+    if not link_types or not source_book_ids:
+        return None
+    placeholders = ",".join("?" for _ in source_book_ids)
+    link_placeholders = ",".join("?" for _ in link_types)
+    linked_row = connection.execute(
+        f"""
+        select
+          target.*,
+          books.title as book_title,
+          books.category,
+          pages.page_number as pdf_page_number,
+          pages.page_label,
+          source_object_links.link_type
+        from source_object_links
+        join source_objects target
+          on target.id = source_object_links.to_object_id
+        join books on books.id = target.book_id
+        join pages on pages.id = target.page_id
+        where source_object_links.from_object_id = ?
+          and source_object_links.link_type in ({link_placeholders})
+          and target.book_id in ({placeholders})
+          and (
+            source_object_links.to_book_id is null
+            or source_object_links.to_book_id = target.book_id
+          )
+          and books.copy_status = 'copied'
+          and books.text_status = 'imported'
+          and books.search_status = 'indexed'
+        order by source_object_links.confidence desc, target.page_start, target.id
+        limit 1
+        """,
+        (row["id"], *link_types, *source_book_ids),
+    ).fetchone()
+    if linked_row is not None:
+        return LinkedEvidenceTarget(
+            link_type=str(linked_row["link_type"]),
+            source_object_row=linked_row,
+        )
+
+    linked_page_object = connection.execute(
+        f"""
+        select
+          target.*,
+          books.title as book_title,
+          books.category,
+          pages.page_number as pdf_page_number,
+          pages.page_label,
+          source_object_links.link_type
+        from source_object_links
+        join source_objects target
+          on target.page_id = source_object_links.to_page_id
+         and (
+            source_object_links.to_book_id is null
+            or target.book_id = source_object_links.to_book_id
+         )
+        join books on books.id = target.book_id
+        join pages on pages.id = target.page_id
+        where source_object_links.from_object_id = ?
+          and source_object_links.to_object_id is null
+          and source_object_links.to_page_id is not null
+          and source_object_links.link_type in ({link_placeholders})
+          and target.book_id in ({placeholders})
+          and books.copy_status = 'copied'
+          and books.text_status = 'imported'
+          and books.search_status = 'indexed'
+        order by
+          source_object_links.confidence desc,
+          case
+            when source_object_links.label is not null
+             and target.title is not null
+             and lower(target.title) = lower(source_object_links.label)
+              then 0
+            when source_object_links.label is not null
+             and lower(target.heading_path_json) like
+                 '%' || lower(source_object_links.label) || '%'
+              then 1
+            else 2
+          end,
+          case target.object_type
+            when 'index_entry' then 2
+            when 'glossary_entry' then 2
+            when 'cross_reference' then 2
+            when 'page_chunk' then 1
+            else 0
+          end,
+          target.confidence desc,
+          target.page_start,
+          target.id
+        limit 1
+        """,
+        (row["id"], *link_types, *source_book_ids),
+    ).fetchone()
+    if linked_page_object is not None:
+        return LinkedEvidenceTarget(
+            link_type=str(linked_page_object["link_type"]),
+            source_object_row=linked_page_object,
+        )
+
+    linked_page = connection.execute(
+        f"""
+        select
+          pages.id as page_id,
+          pages.book_id,
+          books.title as book_title,
+          books.category,
+          pages.page_number,
+          pages.page_label,
+          page_text.text,
+          source_object_links.link_type
+        from source_object_links
+        join pages on pages.id = source_object_links.to_page_id
+        join page_text on page_text.page_id = pages.id
+        join books on books.id = pages.book_id
+        where source_object_links.from_object_id = ?
+          and source_object_links.to_object_id is null
+          and source_object_links.to_page_id is not null
+          and source_object_links.link_type in ({link_placeholders})
+          and pages.book_id in ({placeholders})
+          and (
+            source_object_links.to_book_id is null
+            or source_object_links.to_book_id = pages.book_id
+          )
+          and books.copy_status = 'copied'
+          and books.text_status = 'imported'
+          and books.search_status = 'indexed'
+        order by source_object_links.confidence desc, pages.page_number, pages.id
+        limit 1
+        """,
+        (row["id"], *link_types, *source_book_ids),
+    ).fetchone()
+    if linked_page is not None:
+        return LinkedEvidenceTarget(
+            link_type=str(linked_page["link_type"]),
+            page_row=linked_page,
+        )
+
+    if row["parent_object_id"] is None:
+        return None
+    parent_link_types = tuple(
+        link_type for link_type in link_types if link_type in {"table_row", "stat_profile"}
+    )
+    if not parent_link_types:
+        return None
+    linked_parent = connection.execute(
+        f"""
+        select
+          parent.*,
+          books.title as book_title,
+          books.category,
+          pages.page_number as pdf_page_number,
+          pages.page_label
+        from source_objects parent
+        join books on books.id = parent.book_id
+        join pages on pages.id = parent.page_id
+        where parent.id = ?
+          and parent.book_id in ({placeholders})
+          and books.copy_status = 'copied'
+          and books.text_status = 'imported'
+          and books.search_status = 'indexed'
+        limit 1
+        """,
+        (row["parent_object_id"], *source_book_ids),
+    ).fetchone()
+    if linked_parent is None:
+        return None
+    return LinkedEvidenceTarget(
+        link_type=parent_link_types[0],
+        source_object_row=linked_parent,
+    )
+
+
+def preferred_link_types(object_type: str) -> tuple[str, ...]:
+    if object_type == "table_row":
+        return ("table_row",)
+    if object_type == "stat_block":
+        return ("stat_profile",)
+    if object_type == "index_entry":
+        return ("index_entry",)
+    if object_type == "cross_reference":
+        return ("cross_reference",)
+    if object_type == "glossary_entry":
+        return ("glossary_definition",)
+    return ()
+
+
+def linked_evidence_snippet(
+    row: sqlite3.Row,
+    link_type: str,
+    snippet: str,
+) -> str:
+    source_type = str(row["object_type"]).replace("_", " ")
+    source_title = row["title"] or ""
+    source_text = snippet or row["text"] or ""
+    return f"{source_type} {link_type} {source_title} {source_text}".strip()

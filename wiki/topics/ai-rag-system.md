@@ -87,9 +87,10 @@ Familiar:
   final reranked evidence packets. Citation buttons can display printed page
   ranges while retaining `pdf_page_number` as the hidden Grimoire jump target.
 
-Vector retrieval, glossary/index extraction, table/stat-block extraction, and
-LLM/cross-encoder reranking remain later phases. The current reranker is a
-deterministic local relevance filter over lexical/object candidates, not a
+Local vector retrieval and deterministic table/stat/index/glossary extraction
+now exist in later Phase 7 PRs. Hosted embeddings, richer OCR-layout table
+reconstruction, and LLM/cross-encoder reranking remain future work. The current
+reranker is a deterministic local relevance filter over fused candidates, not a
 provider-backed semantic model.
 
 Phase 7 PR4 splits Familiar retrieval into focused modules without changing
@@ -205,6 +206,37 @@ Phase 7 PR8 adds a local vector candidate channel:
   bypass semantic relevance filtering or selected-evidence citation rules.
 - This phase does not add hosted embeddings, a hosted vector database, or a
   provider-backed/cross-encoder reranker.
+
+Phase 7 PR9 adds structured source-object evidence and link-aware evidence
+resolution:
+
+- Migration `0004_structured_evidence` widens typed source-object storage for
+  canonical `glossary_entry` objects and `glossary_definition` links.
+- `wfrp_companion/source_objects/extractor.py` now emits deterministic
+  structured objects from conservative text patterns: `table`, `table_row`,
+  `stat_block`, `npc_profile`, `index_entry`, `glossary_entry`, and
+  `cross_reference`, while keeping existing `rule_section` and `page_chunk`
+  coverage as fallbacks.
+- `wfrp_companion/source_objects/store.py` persists derived
+  `source_object_links` for table rows, stat/profile relationships, and
+  deterministic same-book index/glossary/cross-reference targets when the
+  target page/object can be resolved.
+- Familiar evidence resolution follows selected-scope links so row/stat/index
+  candidates resolve to complete parent or target source objects before prompt
+  assembly. Glossary entries remain the canonical glossary evidence but may
+  include linked target context.
+- Page-only reference links resolve to the best checked target-page source
+  object, preferring link-label/title matches, then fall back to checked target
+  page text if no source object exists. Glossary linked context does not rewrite
+  the canonical glossary citation/page range.
+- Link traversal is constrained to the checked `source_book_ids` snapshot.
+  A link pointing at an unchecked book is not followed and cannot become prompt
+  context or a citation.
+- Rank-fusion dedupe now preserves linked-evidence rank reasons, keeping
+  selected `retrieval_hits.rank_reasons_json` useful for auditing how complete
+  parent/target evidence was selected.
+- This phase does not add OCR-layout table reconstruction, hosted reranking,
+  or public/private text exports.
 
 ## Answer Contract
 

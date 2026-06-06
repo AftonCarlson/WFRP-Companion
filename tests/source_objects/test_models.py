@@ -26,6 +26,7 @@ def test_source_object_validates_type_confidence_and_page_range() -> None:
 
     assert source_object.object_type == "rule_section"
     assert "table" in SOURCE_OBJECT_TYPES
+    assert "glossary_entry" in SOURCE_OBJECT_TYPES
 
     with pytest.raises(ValueError, match="Unsupported source object type"):
         SourceObject(

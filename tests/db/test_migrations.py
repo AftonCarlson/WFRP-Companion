@@ -292,6 +292,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0001_phase_7_source_objects",
         "0002_source_map_retrieval",
         "0003_vector_retrieval",
+        "0004_structured_evidence",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -336,6 +337,13 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             connection.execute(
                 "select id from schema_migrations where id = ?",
                 ("0003_vector_retrieval",),
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0004_structured_evidence",),
             ).fetchone()
             is not None
         )
@@ -579,6 +587,78 @@ def test_phase7_migration_allows_new_job_types_local_provider_and_object_hits(
         ).fetchone()[0]
         assert object_hit_count == 2
 
+        connection.execute(
+            """
+            insert into source_objects (
+              id,
+              book_id,
+              page_id,
+              object_type,
+              heading_path_json,
+              page_start,
+              page_end,
+              text,
+              search_text,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            )
+            values (
+              'core-rules:p1-p1:glossary_entry:3:cccccccccccc',
+              'core-rules',
+              'core-rules:1',
+              'glossary_entry',
+              '[]',
+              1,
+              1,
+              'Falling: see Falling.',
+              'Falling: see Falling.',
+              0.8,
+              'test',
+              'text-snapshot',
+              '2026-06-03T00:00:00Z',
+              '2026-06-03T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into source_object_links (
+              id,
+              from_object_id,
+              to_object_id,
+              to_book_id,
+              to_page_id,
+              link_type,
+              label,
+              confidence,
+              created_at
+            )
+            values (
+              'glossary-definition-link',
+              'core-rules:p1-p1:glossary_entry:3:cccccccccccc',
+              'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+              'core-rules',
+              'core-rules:1',
+              'glossary_definition',
+              'Falling',
+              0.8,
+              '2026-06-03T00:00:00Z'
+            )
+            """
+        )
+
+        glossary_link = connection.execute(
+            """
+            select link_type
+            from source_object_links
+            where id = 'glossary-definition-link'
+            """
+        ).fetchone()
+        assert glossary_link["link_type"] == "glossary_definition"
+
 
 def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy.sqlite"
@@ -590,12 +670,14 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0001_phase_7_source_objects",
         "0002_source_map_retrieval",
         "0003_vector_retrieval",
+        "0004_structured_evidence",
     )
     assert second.applied == ()
     assert second.skipped == (
         "0001_phase_7_source_objects",
         "0002_source_map_retrieval",
         "0003_vector_retrieval",
+        "0004_structured_evidence",
     )
 
 
@@ -611,6 +693,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0001_phase_7_source_objects",
         "0002_source_map_retrieval",
         "0003_vector_retrieval",
+        "0004_structured_evidence",
     )
     with open_connection(db_path) as connection:
         assert (
@@ -634,6 +717,113 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0004_structured_evidence",),
+            ).fetchone()
+            is not None
+        )
+
+
+def test_structured_evidence_migration_marks_old_extractions_stale(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "fresh.sqlite"
+    initialize_database(db_path)
+    with open_connection(db_path) as connection:
+        connection.execute(
+            """
+            insert into library_folders (id, name, relative_path)
+            values ('core', 'Core', 'Core')
+            """
+        )
+        connection.execute(
+            """
+            insert into books (
+              id,
+              folder_id,
+              title,
+              category,
+              relative_path,
+              original_source_path,
+              managed_pdf_path,
+              original_sha256,
+              managed_sha256,
+              page_count,
+              copy_status,
+              text_status,
+              search_status,
+              visual_status,
+              discovered_at,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'core',
+              'Core Rules',
+              'Core',
+              'core.pdf',
+              '/source/core.pdf',
+              '/managed/core.pdf',
+              'source-sha',
+              'managed-sha',
+              1,
+              'copied',
+              'imported',
+              'indexed',
+              'not_scanned',
+              '2026-06-05T00:00:00Z',
+              '2026-06-05T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into book_object_status (
+              book_id,
+              status,
+              object_count,
+              table_count,
+              stat_block_count,
+              text_snapshot_sha256,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'indexed',
+              3,
+              1,
+              1,
+              'old-snapshot',
+              '2026-06-05T00:00:00Z'
+            )
+            """
+        )
+
+    apply_pending_migrations(db_path)
+
+    with open_connection(db_path) as connection:
+        status = connection.execute(
+            """
+            select
+              status,
+              object_count,
+              table_count,
+              stat_block_count,
+              text_snapshot_sha256,
+              extractor_version
+            from book_object_status
+            where book_id = 'core-rules'
+            """
+        ).fetchone()
+
+    assert status["status"] == "not_started"
+    assert status["object_count"] == 0
+    assert status["table_count"] == 0
+    assert status["stat_block_count"] == 0
+    assert status["text_snapshot_sha256"] is None
+    assert status["extractor_version"] is None
 
 
 def test_apply_pending_migrations_refuses_missing_database(tmp_path: Path) -> None:

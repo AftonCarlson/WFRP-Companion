@@ -1,5 +1,38 @@
 # Wiki Compile Log
 
+## 2026-06-05 Structured Source-Object Evidence
+
+- Added migration `0004_structured_evidence` to widen
+  `source_objects.object_type` with `glossary_entry` and
+  `source_object_links.link_type` with `glossary_definition`.
+- Extended deterministic source-object extraction with conservative
+  plain-text heuristics for pipe tables, table rows, stat/profile blocks,
+  index entries, glossary entries, and cross references. Extractor output
+  remains local/count-oriented and tests use synthetic non-WFRP fixtures.
+- `replace_book_source_objects()` now persists derived
+  `source_object_links` for table rows, stat/profile relationships, and
+  deterministic same-book index/glossary/cross-reference targets, and records
+  table/stat/location counts in `book_object_status`.
+- Familiar evidence resolution now follows checked-scope links from table rows,
+  stat blocks, and index/cross-reference entries to complete parent/target
+  source objects. Glossary entries remain canonical glossary evidence and can
+  include linked target context. Link traversal is constrained to the checked
+  `source_book_ids` snapshot.
+- Rank-fusion dedupe now preserves linked-evidence rank reasons so selected
+  hits remain auditable after parent/target evidence is merged.
+- Independent review found four issues: old extraction status needed a durable
+  extractor-version invalidation path, duplicate same-page table-row text could
+  collide on deterministic IDs, page-only reference links were not followed at
+  runtime, and glossary linked context could create misleading disjoint page
+  ranges. All were fixed with regressions; final follow-up review found no
+  remaining code issues.
+- Verification run for this pass: full Python tests reported 394 tests passing
+  with one existing Starlette/httpx deprecation warning and 100.00% coverage;
+  `ruff check .` passed; `git diff --check` passed; frontend Vitest reported
+  127 tests passing; frontend coverage passed above configured thresholds;
+  frontend production build passed with the existing large PDF worker chunk
+  warning; Playwright e2e reported 2 tests passing.
+
 ## 2026-06-05 Local Vector Retrieval Channel
 
 - Added migration `0003_vector_retrieval` and the

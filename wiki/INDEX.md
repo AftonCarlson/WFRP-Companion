@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-05 Local vector retrieval channel
+Last compiled: 2026-06-05 Structured source-object evidence
 
 ## Topics
 

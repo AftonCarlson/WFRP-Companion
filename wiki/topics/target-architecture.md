@@ -259,6 +259,28 @@ pipeline:
 - The vector channel feeds RRF and `DeterministicReranker`; exact lexical/object
   channels remain present and vectors cannot bypass final relevance judgment.
 
+Phase 7 PR9 makes structured source-object evidence and scoped link traversal
+part of the retrieval architecture:
+
+- Migration `0004_structured_evidence` adds `glossary_entry` object support and
+  `glossary_definition` link support for existing databases and fresh schemas.
+- Deterministic extraction now recognizes simple pipe tables/table rows,
+  stat/profile blocks, index entries, glossary entries, and cross-reference
+  lines from imported page text. These are conservative heuristics before
+  richer layout/OCR table reconstruction exists.
+- `source_object_links` is now populated during source-object replacement for
+  parent table/profile relationships and deterministic same-book
+  index/glossary/cross-reference targets.
+- `book_object_status.extractor_version` invalidates old extracted/indexed
+  rows when extraction heuristics change, so normal extraction runs refresh
+  structured evidence instead of silently skipping legacy object sets.
+- Familiar resolves table-row, stat-block, index, and cross-reference
+  candidates to complete parent/target source objects under the current checked
+  Library scope. Glossary entries remain canonical evidence and can carry
+  linked target context.
+- Link traversal cannot cross unchecked books; the checked `source_book_ids`
+  snapshot remains authoritative for candidates, prompt context, and citations.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval/source-object metadata. The current populated runtime
@@ -267,11 +289,13 @@ search, FTS, ingest jobs, source sets, chat threads, retrieval runs, model
 runs, and the `book_readiness` view. Source-set state is now populated in
 `source_sets`, `source_set_books`, and `app_settings.active_source_set_id`.
 Typed source-object tables can now be populated with deterministic
-`rule_section` and `page_chunk` rows, and their object search projections are
-rebuilt during extraction or repaired independently with
-`tools/rebuild_source_object_fts.py`. Durable source-map/profile metadata can
-now be rebuilt from those source objects into `book_source_maps` and
-`book_query_profiles`, with lifecycle status in `book_retrieval_status`.
+`rule_section`, `page_chunk`, table, table-row, stat/profile,
+index/glossary, and cross-reference rows, with derived `source_object_links`
+for parent/target relationships. Object search projections are rebuilt during
+extraction or repaired independently with `tools/rebuild_source_object_fts.py`.
+Durable source-map/profile metadata can now be rebuilt from those source
+objects into `book_source_maps` and `book_query_profiles`, with lifecycle
+status in `book_retrieval_status`.
 The local API now surfaces library, source-set, exact-search, page-text,
 managed-PDF reader, and streaming chat operations. The frontend now surfaces
 library selection, exact search, page-text expansion, PDF reading, and the

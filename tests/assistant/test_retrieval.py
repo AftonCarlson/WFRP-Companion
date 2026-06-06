@@ -131,6 +131,8 @@ def insert_source_object(
     page_start: int,
     page_end: int,
     text: str,
+    parent_object_id: str | None = None,
+    metadata_json: str = "{}",
 ) -> None:
     connection.execute(
         """
@@ -139,6 +141,7 @@ def insert_source_object(
           book_id,
           page_id,
           object_type,
+          parent_object_id,
           title,
           heading_path_json,
           page_start,
@@ -148,16 +151,18 @@ def insert_source_object(
           confidence,
           extraction_method,
           text_snapshot_sha256,
+          metadata_json,
           created_at,
           updated_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.91, 'test', ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.91, 'test', ?, ?, ?, ?)
         """,
         (
             object_id,
             book_id,
             page_id,
             object_type,
+            parent_object_id,
             title,
             json.dumps(list(heading_path)),
             page_start,
@@ -165,8 +170,49 @@ def insert_source_object(
             text,
             " ".join((*heading_path, text)),
             f"sha-{object_id}",
+            metadata_json,
             "2026-06-05T00:00:00Z",
             "2026-06-05T00:00:00Z",
+        ),
+    )
+
+
+def insert_source_object_link(
+    connection: sqlite3.Connection,
+    *,
+    link_id: str,
+    from_object_id: str,
+    link_type: str,
+    to_object_id: str | None = None,
+    to_book_id: str | None = None,
+    to_page_id: str | None = None,
+    label: str | None = None,
+    confidence: float = 0.91,
+) -> None:
+    connection.execute(
+        """
+        insert into source_object_links (
+          id,
+          from_object_id,
+          to_object_id,
+          to_book_id,
+          to_page_id,
+          link_type,
+          label,
+          confidence,
+          created_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, '2026-06-05T00:00:00Z')
+        """,
+        (
+            link_id,
+            from_object_id,
+            to_object_id,
+            to_book_id,
+            to_page_id,
+            link_type,
+            label,
+            confidence,
         ),
     )
 
@@ -961,6 +1007,844 @@ def test_retrieval_resolves_hits_to_complete_source_object_spans(
     assert "first page" in hit.context_text
     assert "second page" in hit.context_text
     assert "source_object:rule_section" in hit.rank_reasons
+
+
+def test_table_row_retrieval_resolves_to_complete_parent_table(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    table_text = (
+        "Weather Results\n"
+        "| Roll | Result |\n"
+        "| 1 | Clear skies |\n"
+        "| 2 | Storms force a travel test |\n"
+    )
+    row_text = "| 2 | Storms force a travel test |"
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=10,
+            page_label="100",
+            page_count=11,
+            text="Weather Results table row two has storms that force a travel test.",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=11,
+            page_label="101",
+            page_count=11,
+            text="The weather table continues with journey guidance.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:weather-table",
+            book_id="core-rules",
+            page_id="core-rules:10",
+            object_type="table",
+            title="Weather Results",
+            heading_path=("Travel", "Weather Results"),
+            page_start=10,
+            page_end=11,
+            text=table_text + "Use the result for the next journey.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:weather-row-2",
+            book_id="core-rules",
+            page_id="core-rules:10",
+            object_type="table_row",
+            title="Weather Results row 2",
+            heading_path=("Travel", "Weather Results"),
+            page_start=10,
+            page_end=10,
+            text=row_text,
+            parent_object_id="core-rules:weather-table",
+        )
+        insert_source_object_link(
+            connection,
+            link_id="weather-row-2-parent",
+            from_object_id="core-rules:weather-row-2",
+            to_object_id="core-rules:weather-table",
+            to_book_id="core-rules",
+            to_page_id="core-rules:10",
+            link_type="table_row",
+            label="Weather Results",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "storm table row weather",
+        hit_limit=1,
+        total_char_limit=700,
+        window_chars=120,
+    )
+
+    assert len(context.hits) == 1
+    hit = context.hits[0]
+    assert hit.source_object_id == "core-rules:weather-table"
+    assert hit.object_type == "table"
+    assert hit.object_title == "Weather Results"
+    assert hit.page_start == 10
+    assert hit.page_end == 11
+    assert hit.page_range_label == "100-101"
+    assert "Clear skies" in hit.context_text
+    assert "Storms force a travel test" in hit.context_text
+    assert any("linked_evidence:table_row" in reason for reason in hit.rank_reasons)
+
+
+def test_stat_block_retrieval_resolves_to_complete_profile(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    profile_text = (
+        "Captain Mira\n"
+        "M WS BS S T W I A Dex Int WP Fel\n"
+        "4 41 32 3 3 12 38 1 34 35 36 37\n"
+        "Skills: Command, Perception\n"
+        "Talents: Coolheaded\n"
+    )
+    stat_text = (
+        "M WS BS S T W I A Dex Int WP Fel\n"
+        "4 41 32 3 3 12 38 1 34 35 36 37"
+    )
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=12,
+            text="Captain Mira has WS 41 and the Command skill.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:captain-mira",
+            book_id="core-rules",
+            page_id="core-rules:12",
+            object_type="npc_profile",
+            title="Captain Mira",
+            heading_path=("People", "Captain Mira"),
+            page_start=12,
+            page_end=12,
+            text=profile_text,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:captain-mira-stats",
+            book_id="core-rules",
+            page_id="core-rules:12",
+            object_type="stat_block",
+            title="Captain Mira Statistics",
+            heading_path=("People", "Captain Mira"),
+            page_start=12,
+            page_end=12,
+            text=stat_text,
+            parent_object_id="core-rules:captain-mira",
+        )
+        insert_source_object_link(
+            connection,
+            link_id="captain-mira-stat-profile",
+            from_object_id="core-rules:captain-mira-stats",
+            to_object_id="core-rules:captain-mira",
+            to_book_id="core-rules",
+            to_page_id="core-rules:12",
+            link_type="stat_profile",
+            label="Captain Mira",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Captain Mira WS Command",
+        hit_limit=1,
+        total_char_limit=700,
+        window_chars=120,
+    )
+
+    assert len(context.hits) == 1
+    hit = context.hits[0]
+    assert hit.source_object_id == "core-rules:captain-mira"
+    assert hit.object_type == "npc_profile"
+    assert "WS BS" in hit.context_text
+    assert "Skills: Command" in hit.context_text
+    assert any("linked_evidence:stat_profile" in reason for reason in hit.rank_reasons)
+
+
+def test_index_entry_retrieval_routes_to_deterministic_target_section(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=2,
+            text="Falling rules explain how sudden drops are resolved.",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=20,
+            text="Index\nFalling ..... 2",
+            page_count=20,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:falling",
+            book_id="core-rules",
+            page_id="core-rules:2",
+            object_type="rule_section",
+            title="Falling",
+            heading_path=("Hazards", "Falling"),
+            page_start=2,
+            page_end=2,
+            text="Falling rules explain how sudden drops are resolved.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:index-falling",
+            book_id="core-rules",
+            page_id="core-rules:20",
+            object_type="index_entry",
+            title="Falling",
+            heading_path=("Index",),
+            page_start=20,
+            page_end=20,
+            text="Falling ..... 2",
+        )
+        insert_source_object_link(
+            connection,
+            link_id="index-falling-target",
+            from_object_id="core-rules:index-falling",
+            to_object_id="core-rules:falling",
+            to_book_id="core-rules",
+            to_page_id="core-rules:2",
+            link_type="index_entry",
+            label="Falling",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Falling index",
+        hit_limit=1,
+        total_char_limit=500,
+        window_chars=120,
+    )
+
+    assert len(context.hits) == 1
+    hit = context.hits[0]
+    assert hit.source_object_id == "core-rules:falling"
+    assert hit.object_type == "rule_section"
+    assert hit.page_start == 2
+    assert "sudden drops" in hit.context_text
+    assert any("linked_evidence:index_entry" in reason for reason in hit.rank_reasons)
+
+
+def test_index_entry_page_only_link_routes_to_target_page_object(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=2,
+            text="Falling rules explain how sudden drops are resolved.",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=20,
+            text="Index\nFalling ..... 2",
+            page_count=20,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:falling",
+            book_id="core-rules",
+            page_id="core-rules:2",
+            object_type="rule_section",
+            title="Falling",
+            heading_path=("Hazards", "Falling"),
+            page_start=2,
+            page_end=2,
+            text="Falling rules explain how sudden drops are resolved.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:index-falling",
+            book_id="core-rules",
+            page_id="core-rules:20",
+            object_type="index_entry",
+            title="Falling",
+            heading_path=("Index",),
+            page_start=20,
+            page_end=20,
+            text="Falling ..... 2",
+        )
+        insert_source_object_link(
+            connection,
+            link_id="index-falling-page-target",
+            from_object_id="core-rules:index-falling",
+            to_object_id=None,
+            to_book_id="core-rules",
+            to_page_id="core-rules:2",
+            link_type="index_entry",
+            label="Falling",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Falling index",
+        hit_limit=1,
+        total_char_limit=500,
+        window_chars=120,
+    )
+
+    assert len(context.hits) == 1
+    hit = context.hits[0]
+    assert hit.source_object_id == "core-rules:falling"
+    assert hit.object_type == "rule_section"
+    assert hit.page_start == 2
+    assert "sudden drops" in hit.context_text
+    assert any("linked_evidence:index_entry" in reason for reason in hit.rank_reasons)
+
+
+def test_page_only_link_prefers_target_title_on_crowded_page(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=2,
+            text=(
+                "Armour rules discuss protection. "
+                "Falling rules explain how sudden drops are resolved."
+            ),
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=20,
+            text="Index\nFalling ..... 2",
+            page_count=20,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:aaa-armour",
+            book_id="core-rules",
+            page_id="core-rules:2",
+            object_type="rule_section",
+            title="Armour",
+            heading_path=("Equipment", "Armour"),
+            page_start=2,
+            page_end=2,
+            text="Armour rules discuss protection.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:falling",
+            book_id="core-rules",
+            page_id="core-rules:2",
+            object_type="rule_section",
+            title="Falling",
+            heading_path=("Hazards", "Falling"),
+            page_start=2,
+            page_end=2,
+            text="Falling rules explain how sudden drops are resolved.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:index-falling",
+            book_id="core-rules",
+            page_id="core-rules:20",
+            object_type="index_entry",
+            title="Falling",
+            heading_path=("Index",),
+            page_start=20,
+            page_end=20,
+            text="Falling ..... 2",
+        )
+        insert_source_object_link(
+            connection,
+            link_id="index-falling-page-target",
+            from_object_id="core-rules:index-falling",
+            to_object_id=None,
+            to_book_id="core-rules",
+            to_page_id="core-rules:2",
+            link_type="index_entry",
+            label="Falling",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Falling index",
+        hit_limit=1,
+        total_char_limit=500,
+        window_chars=120,
+    )
+
+    assert len(context.hits) == 1
+    assert context.hits[0].source_object_id == "core-rules:falling"
+    assert "sudden drops" in context.hits[0].context_text
+    assert "Armour rules" not in context.hits[0].context_text
+
+
+def test_index_entry_page_only_link_falls_back_to_target_page_text(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=2,
+            text="Falling rules explain how sudden drops are resolved.",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=20,
+            text="Index\nFalling ..... 2",
+            page_count=20,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:index-falling",
+            book_id="core-rules",
+            page_id="core-rules:20",
+            object_type="index_entry",
+            title="Falling",
+            heading_path=("Index",),
+            page_start=20,
+            page_end=20,
+            text="Falling ..... 2",
+        )
+        insert_source_object_link(
+            connection,
+            link_id="index-falling-page-fallback",
+            from_object_id="core-rules:index-falling",
+            to_object_id=None,
+            to_book_id="core-rules",
+            to_page_id="core-rules:2",
+            link_type="index_entry",
+            label="Falling",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Falling index",
+        hit_limit=1,
+        total_char_limit=500,
+        window_chars=120,
+    )
+
+    assert len(context.hits) == 1
+    hit = context.hits[0]
+    assert hit.source_object_id is None
+    assert hit.object_type == "page_fallback"
+    assert hit.page_start == 2
+    assert "sudden drops" in hit.context_text
+    assert any("linked_evidence:index_entry" in reason for reason in hit.rank_reasons)
+
+
+def test_glossary_entry_evidence_keeps_definition_and_linked_target_context(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=2,
+            text="Falling rules explain how sudden drops are resolved.",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=30,
+            text="Glossary\nDooming: a ceremonial prophecy. See Falling.",
+            page_count=30,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:falling",
+            book_id="core-rules",
+            page_id="core-rules:2",
+            object_type="rule_section",
+            title="Falling",
+            heading_path=("Hazards", "Falling"),
+            page_start=2,
+            page_end=2,
+            text="Falling rules explain how sudden drops are resolved.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:glossary-dooming",
+            book_id="core-rules",
+            page_id="core-rules:30",
+            object_type="glossary_entry",
+            title="Dooming",
+            heading_path=("Glossary",),
+            page_start=30,
+            page_end=30,
+            text="Dooming: a ceremonial prophecy. See Falling.",
+        )
+        insert_source_object_link(
+            connection,
+            link_id="glossary-dooming-target",
+            from_object_id="core-rules:glossary-dooming",
+            to_object_id="core-rules:falling",
+            to_book_id="core-rules",
+            to_page_id="core-rules:2",
+            link_type="glossary_definition",
+            label="Falling",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Dooming glossary Falling",
+        hit_limit=1,
+        total_char_limit=700,
+        window_chars=120,
+    )
+
+    assert len(context.hits) == 1
+    hit = context.hits[0]
+    assert hit.source_object_id == "core-rules:glossary-dooming"
+    assert hit.object_type == "glossary_entry"
+    assert hit.page_start == 30
+    assert hit.page_end == 30
+    assert hit.page_range_label == "30"
+    assert "ceremonial prophecy" in hit.context_text
+    assert "sudden drops" in hit.context_text
+    assert any(
+        "linked_evidence:glossary_definition" in reason
+        for reason in hit.rank_reasons
+    )
+
+
+def test_link_traversal_does_not_cross_unchecked_book_scope(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="checked-book",
+            title="Checked Book",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Index\nForbidden Topic ..... 7",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="unchecked-book",
+            title="Unchecked Book",
+            category="Adventure Modules and Campaigns",
+            page_number=7,
+            text="Forbidden Topic text from an unchecked book.",
+        )
+        insert_source_object(
+            connection,
+            object_id="checked-book:index-forbidden",
+            book_id="checked-book",
+            page_id="checked-book:1",
+            object_type="index_entry",
+            title="Forbidden Topic",
+            heading_path=("Index",),
+            page_start=1,
+            page_end=1,
+            text="Forbidden Topic ..... 7",
+        )
+        insert_source_object(
+            connection,
+            object_id="unchecked-book:forbidden",
+            book_id="unchecked-book",
+            page_id="unchecked-book:7",
+            object_type="rule_section",
+            title="Forbidden Topic",
+            heading_path=("Secrets", "Forbidden Topic"),
+            page_start=7,
+            page_end=7,
+            text="Forbidden Topic text from an unchecked book.",
+        )
+        insert_source_object_link(
+            connection,
+            link_id="cross-book-forbidden-link",
+            from_object_id="checked-book:index-forbidden",
+            to_object_id="unchecked-book:forbidden",
+            to_book_id="unchecked-book",
+            to_page_id="unchecked-book:7",
+            link_type="index_entry",
+            label="Forbidden Topic",
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    source_sets.set_book_enabled(config, "rules-core", "checked-book", True)
+    source_sets.set_book_enabled(config, "rules-core", "unchecked-book", False)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Forbidden Topic index",
+        hit_limit=2,
+        total_char_limit=700,
+        window_chars=120,
+    )
+
+    assert context.source_book_ids == ("checked-book",)
+    assert context.hits
+    assert all(hit.book_id == "checked-book" for hit in context.hits)
+    assert all(hit.source_object_id != "unchecked-book:forbidden" for hit in context.hits)
+    assert "unchecked book" not in " ".join(hit.context_text for hit in context.hits)
+
+
+def test_source_object_parent_fallback_resolves_without_link_row(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=4,
+            text="Weather table row two has storms.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:weather-table",
+            book_id="core-rules",
+            page_id="core-rules:4",
+            object_type="table",
+            title="Weather Results",
+            heading_path=("Travel", "Weather Results"),
+            page_start=4,
+            page_end=4,
+            text="Weather Results\n| Roll | Result |\n| 2 | Storms |",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:weather-row-2",
+            book_id="core-rules",
+            page_id="core-rules:4",
+            object_type="table_row",
+            title="Weather Results row 2",
+            heading_path=("Travel", "Weather Results"),
+            page_start=4,
+            page_end=4,
+            text="| 2 | Storms |",
+            parent_object_id="core-rules:weather-table",
+        )
+        connection.execute(
+            "update books set search_status = 'indexed' where id = 'core-rules'"
+        )
+        row = connection.execute(
+            """
+            select
+              source_objects.*,
+              books.title as book_title,
+              books.category,
+              pages.page_number as pdf_page_number,
+              pages.page_label
+            from source_objects
+            join books on books.id = source_objects.book_id
+            join pages on pages.id = source_objects.page_id
+            where source_objects.id = 'core-rules:weather-row-2'
+            """
+        ).fetchone()
+        assert row is not None
+
+        candidate = retrieval_candidates.evidence_candidate_from_source_object_row(
+            connection,
+            row,
+            base_score=0.0,
+            snippet="Weather Results row 2",
+            channel="source_object_scan",
+            source_book_ids=("core-rules",),
+        )
+
+    assert retrieval_candidates.preferred_link_types("cross_reference") == (
+        "cross_reference",
+    )
+    assert retrieval_candidates.preferred_link_types("rule_section") == ()
+    assert candidate.source_object_id == "core-rules:weather-table"
+    assert candidate.object_type == "table"
+    assert any("linked_evidence:table_row" in reason for reason in candidate.rank_reasons)
+
+
+def test_source_object_parent_fallback_ignores_unsupported_or_missing_parents(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=4,
+            text="Weather reference and row text.",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="unchecked-book",
+            title="Unchecked Book",
+            category="Adventure Modules and Campaigns",
+            page_number=4,
+            text="Unchecked parent table.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:weather-table",
+            book_id="core-rules",
+            page_id="core-rules:4",
+            object_type="table",
+            title="Weather Results",
+            heading_path=("Travel", "Weather Results"),
+            page_start=4,
+            page_end=4,
+            text="Weather Results table.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:unsupported-cross-reference",
+            book_id="core-rules",
+            page_id="core-rules:4",
+            object_type="cross_reference",
+            title="Weather Results",
+            heading_path=("Travel",),
+            page_start=4,
+            page_end=4,
+            text="See also Weather Results.",
+            parent_object_id="core-rules:weather-table",
+        )
+        insert_source_object(
+            connection,
+            object_id="unchecked-book:weather-table",
+            book_id="unchecked-book",
+            page_id="unchecked-book:4",
+            object_type="table",
+            title="Weather Results",
+            heading_path=("Travel", "Weather Results"),
+            page_start=4,
+            page_end=4,
+            text="Unchecked Weather Results table.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:missing-parent-row",
+            book_id="core-rules",
+            page_id="core-rules:4",
+            object_type="table_row",
+            title="Weather Results row 3",
+            heading_path=("Travel", "Weather Results"),
+            page_start=4,
+            page_end=4,
+            text="| 3 | Missing parent |",
+            parent_object_id="unchecked-book:weather-table",
+        )
+        connection.execute(
+            "update books set search_status = 'indexed' where id = 'core-rules'"
+        )
+        rows = {
+            row["id"]: row
+            for row in connection.execute(
+                """
+                select
+                  source_objects.*,
+                  books.title as book_title,
+                  books.category,
+                  pages.page_number as pdf_page_number,
+                  pages.page_label
+                from source_objects
+                join books on books.id = source_objects.book_id
+                join pages on pages.id = source_objects.page_id
+                where source_objects.id in (
+                  'core-rules:unsupported-cross-reference',
+                  'core-rules:missing-parent-row'
+                )
+                """
+            ).fetchall()
+        }
+
+        unsupported = retrieval_candidates.evidence_candidate_from_source_object_row(
+            connection,
+            rows["core-rules:unsupported-cross-reference"],
+            base_score=0.0,
+            snippet="Weather Results",
+            channel="source_object_scan",
+            source_book_ids=("core-rules",),
+        )
+        missing_parent = retrieval_candidates.evidence_candidate_from_source_object_row(
+            connection,
+            rows["core-rules:missing-parent-row"],
+            base_score=0.0,
+            snippet="Weather Results row 3",
+            channel="source_object_scan",
+            source_book_ids=("core-rules",),
+        )
+
+    assert unsupported.source_object_id == "core-rules:unsupported-cross-reference"
+    assert missing_parent.source_object_id == "core-rules:missing-parent-row"
 
 
 def test_retrieval_falls_back_to_active_source_set_for_legacy_threads(

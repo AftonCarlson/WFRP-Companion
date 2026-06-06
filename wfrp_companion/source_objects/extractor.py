@@ -30,6 +30,31 @@ from wfrp_companion.source_objects.store import (
 
 
 HEADING_RE = re.compile(r"^(chapter|part|section|appendix)\b", re.IGNORECASE)
+INDEX_ENTRY_RE = re.compile(
+    r"^(?P<title>[A-Za-z][A-Za-z0-9'’() /-]{1,80})\s*(?:\.{2,}|,)\s*"
+    r"(?P<page>\d{1,4})$"
+)
+GLOSSARY_ENTRY_RE = re.compile(
+    r"^(?P<title>[A-Za-z][A-Za-z0-9'’() /-]{1,80}):\s*(?P<body>.+)$"
+)
+CROSS_REFERENCE_RE = re.compile(
+    r"\bsee(?: also)? (?P<title>[A-Za-z][A-Za-z0-9'’() /-]{1,80}?)"
+    r"(?: on page (?P<page>\d{1,4}))?\.",
+    re.IGNORECASE,
+)
+STAT_HEADER_TOKENS = frozenset(
+    ("m", "ws", "bs", "s", "t", "w", "i", "a", "dex", "int", "wp", "fel")
+)
+PROFILE_FOLLOWUP_PREFIXES = (
+    "skills:",
+    "talents:",
+    "traits:",
+    "trappings:",
+    "weapons:",
+    "armour:",
+    "armor:",
+    "notes:",
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +87,14 @@ class PendingSection:
     title: str
     heading_path: tuple[str, ...]
     page: SourcePage
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class LineSpan:
+    text: str
+    stripped: str
     start: int
     end: int
 
@@ -192,11 +225,19 @@ def extract_objects_from_pages(
             text_snapshot_sha256=text_snapshot_sha256,
             metadata=metadata,
         )
+        structured_objects = extract_structured_objects_from_page(
+            page=page,
+            book_id=book_id,
+            text_snapshot_sha256=text_snapshot_sha256,
+            metadata=metadata,
+        )
         if sections:
             source_objects.extend(sections)
+        if structured_objects:
+            source_objects.extend(structured_objects)
         covered_spans = tuple(
             (section.char_start or 0, section.char_end or 0)
-            for section in sections
+            for section in (*sections, *structured_objects)
         )
         source_objects.extend(
             build_page_chunks(
@@ -278,6 +319,396 @@ def extract_rule_sections_from_page(
     return tuple(sections)
 
 
+def extract_structured_objects_from_page(
+    *,
+    page: SourcePage,
+    book_id: str,
+    text_snapshot_sha256: str,
+    metadata: dict[str, object],
+) -> tuple[SourceObject, ...]:
+    lines = page_line_spans(page.text)
+    objects: list[SourceObject] = []
+    objects.extend(
+        extract_tables_from_lines(
+            page=page,
+            book_id=book_id,
+            text_snapshot_sha256=text_snapshot_sha256,
+            metadata=metadata,
+            lines=lines,
+            ordinal_start=1,
+        )
+    )
+    objects.extend(
+        extract_stat_profiles_from_lines(
+            page=page,
+            book_id=book_id,
+            text_snapshot_sha256=text_snapshot_sha256,
+            metadata=metadata,
+            lines=lines,
+            ordinal_start=len(objects) + 1,
+        )
+    )
+    objects.extend(
+        extract_reference_objects_from_lines(
+            page=page,
+            book_id=book_id,
+            text_snapshot_sha256=text_snapshot_sha256,
+            metadata=metadata,
+            lines=lines,
+            ordinal_start=len(objects) + 1,
+        )
+    )
+    return tuple(objects)
+
+
+def extract_tables_from_lines(
+    *,
+    page: SourcePage,
+    book_id: str,
+    text_snapshot_sha256: str,
+    metadata: dict[str, object],
+    lines: tuple[LineSpan, ...],
+    ordinal_start: int,
+) -> tuple[SourceObject, ...]:
+    objects: list[SourceObject] = []
+    table_ordinal = ordinal_start
+    table_row_identity_ordinal = 1
+    index = 0
+    while index < len(lines):
+        if not is_table_line(lines[index].stripped):
+            index += 1
+            continue
+        start_index = index
+        while index < len(lines) and is_table_line(lines[index].stripped):
+            index += 1
+        group = lines[start_index:index]
+        data_rows = tuple(line for line in group[1:] if not is_table_separator(line.stripped))
+        if not data_rows:
+            continue
+        title_line = preceding_content_line(lines, start_index)
+        title = title_line.stripped if title_line is not None else f"Table {table_ordinal}"
+        table_start = title_line.start if title_line is not None else group[0].start
+        table_end = group[-1].end
+        table_text = page.text[table_start:table_end].strip()
+        heading_path = structured_heading_path(lines, start_index, fallback=title)
+        table = build_structured_source_object(
+            book_id=book_id,
+            page=page,
+            object_type="table",
+            title=title,
+            heading_path=heading_path,
+            text=table_text,
+            text_snapshot_sha256=text_snapshot_sha256,
+            metadata={**metadata, "structured_type": "table"},
+            ordinal=table_ordinal,
+            char_start=table_start,
+            char_end=table_end,
+            confidence=0.82,
+            extraction_method="pipe_table_heuristic",
+            search_prefix="table",
+        )
+        objects.append(table)
+        row_ordinal = 1
+        for row in data_rows:
+            objects.append(
+                build_structured_source_object(
+                    book_id=book_id,
+                    page=page,
+                    object_type="table_row",
+                    title=f"{title} row {row_ordinal}",
+                    heading_path=heading_path,
+                    text=row.stripped,
+                    text_snapshot_sha256=text_snapshot_sha256,
+                    metadata={
+                        **metadata,
+                        "structured_type": "table_row",
+                        "parent_title": title,
+                        "row_number": row_ordinal,
+                    },
+                    ordinal=table_row_identity_ordinal,
+                    char_start=row.start,
+                    char_end=row.end,
+                    confidence=0.76,
+                    extraction_method="pipe_table_heuristic",
+                    search_prefix="table row",
+                    parent_object_id=table.id,
+                )
+            )
+            row_ordinal += 1
+            table_row_identity_ordinal += 1
+        table_ordinal += 1
+    return tuple(objects)
+
+
+def extract_stat_profiles_from_lines(
+    *,
+    page: SourcePage,
+    book_id: str,
+    text_snapshot_sha256: str,
+    metadata: dict[str, object],
+    lines: tuple[LineSpan, ...],
+    ordinal_start: int,
+) -> tuple[SourceObject, ...]:
+    objects: list[SourceObject] = []
+    ordinal = ordinal_start
+    index = 0
+    while index + 1 < len(lines):
+        if not is_stat_header(lines[index].stripped) or not is_stat_value_line(
+            lines[index + 1].stripped
+        ):
+            index += 1
+            continue
+        title_line = preceding_content_line(lines, index)
+        if title_line is None:
+            index += 1
+            continue
+        end_index = index + 2
+        while end_index < len(lines) and is_profile_followup_line(lines[end_index].stripped):
+            end_index += 1
+        profile_start = title_line.start
+        profile_end = lines[end_index - 1].end
+        profile_text = page.text[profile_start:profile_end].strip()
+        stat_text = page.text[lines[index].start : lines[index + 1].end].strip()
+        title = title_line.stripped
+        heading_path = structured_heading_path(lines, index, fallback=title)
+        profile_type = classify_profile_type(title)
+        profile = build_structured_source_object(
+            book_id=book_id,
+            page=page,
+            object_type=profile_type,
+            title=title,
+            heading_path=heading_path,
+            text=profile_text,
+            text_snapshot_sha256=text_snapshot_sha256,
+            metadata={**metadata, "structured_type": profile_type},
+            ordinal=ordinal,
+            char_start=profile_start,
+            char_end=profile_end,
+            confidence=0.78,
+            extraction_method="stat_profile_heuristic",
+            search_prefix=profile_type.replace("_", " "),
+        )
+        objects.append(profile)
+        objects.append(
+            build_structured_source_object(
+                book_id=book_id,
+                page=page,
+                object_type="stat_block",
+                title=f"{title} Statistics",
+                heading_path=heading_path,
+                text=stat_text,
+                text_snapshot_sha256=text_snapshot_sha256,
+                metadata={
+                    **metadata,
+                    "structured_type": "stat_block",
+                    "parent_title": title,
+                },
+                ordinal=ordinal,
+                char_start=lines[index].start,
+                char_end=lines[index + 1].end,
+                confidence=0.82,
+                extraction_method="stat_profile_heuristic",
+                search_prefix="stat block statistics profile",
+                parent_object_id=profile.id,
+            )
+        )
+        ordinal += 1
+        index = end_index
+    return tuple(objects)
+
+
+def extract_reference_objects_from_lines(
+    *,
+    page: SourcePage,
+    book_id: str,
+    text_snapshot_sha256: str,
+    metadata: dict[str, object],
+    lines: tuple[LineSpan, ...],
+    ordinal_start: int,
+) -> tuple[SourceObject, ...]:
+    objects: list[SourceObject] = []
+    ordinal = ordinal_start
+    context: str | None = None
+    for line in lines:
+        if not line.stripped:
+            continue
+        if context == "index" and (match := INDEX_ENTRY_RE.match(line.stripped)):
+            title = match.group("title").strip()
+            target_page = int(match.group("page"))
+            objects.append(
+                build_reference_source_object(
+                    page=page,
+                    book_id=book_id,
+                    object_type="index_entry",
+                    title=title,
+                    heading_path=("Index",),
+                    text=line.stripped,
+                    text_snapshot_sha256=text_snapshot_sha256,
+                    metadata={
+                        **metadata,
+                        "target_title": title,
+                        "target_page": target_page,
+                    },
+                    ordinal=ordinal,
+                    char_start=line.start,
+                    char_end=line.end,
+                    search_prefix="index entry",
+                )
+            )
+            ordinal += 1
+            continue
+
+        if context == "glossary" and (match := GLOSSARY_ENTRY_RE.match(line.stripped)):
+            title = match.group("title").strip()
+            reference = parse_cross_reference(line.stripped)
+            reference_metadata = (
+                {
+                    "target_title": reference[0],
+                    **({"target_page": reference[1]} if reference[1] is not None else {}),
+                }
+                if reference is not None
+                else {}
+            )
+            objects.append(
+                build_reference_source_object(
+                    page=page,
+                    book_id=book_id,
+                    object_type="glossary_entry",
+                    title=title,
+                    heading_path=("Glossary",),
+                    text=line.stripped,
+                    text_snapshot_sha256=text_snapshot_sha256,
+                    metadata={**metadata, **reference_metadata},
+                    ordinal=ordinal,
+                    char_start=line.start,
+                    char_end=line.end,
+                    search_prefix="glossary entry",
+                )
+            )
+            ordinal += 1
+            continue
+
+        if is_heading(line.stripped):
+            normalized_heading = line.stripped.casefold()
+            if normalized_heading == "index":
+                context = "index"
+                continue
+            if normalized_heading == "glossary":
+                context = "glossary"
+                continue
+            context = None
+
+        reference = parse_cross_reference(line.stripped)
+        if reference is None:
+            continue
+        title, target_page = reference
+        objects.append(
+            build_reference_source_object(
+                page=page,
+                book_id=book_id,
+                object_type="cross_reference",
+                title=title,
+                heading_path=("Cross References",),
+                text=line.stripped,
+                text_snapshot_sha256=text_snapshot_sha256,
+                metadata={
+                    **metadata,
+                    "target_title": title,
+                    **({"target_page": target_page} if target_page is not None else {}),
+                },
+                ordinal=ordinal,
+                char_start=line.start,
+                char_end=line.end,
+                search_prefix="cross reference",
+            )
+        )
+        ordinal += 1
+    return tuple(objects)
+
+
+def build_reference_source_object(
+    *,
+    page: SourcePage,
+    book_id: str,
+    object_type: str,
+    title: str,
+    heading_path: tuple[str, ...],
+    text: str,
+    text_snapshot_sha256: str,
+    metadata: dict[str, object],
+    ordinal: int,
+    char_start: int,
+    char_end: int,
+    search_prefix: str,
+) -> SourceObject:
+    return build_structured_source_object(
+        page=page,
+        book_id=book_id,
+        object_type=object_type,
+        title=title,
+        heading_path=heading_path,
+        text=text,
+        text_snapshot_sha256=text_snapshot_sha256,
+        metadata={**metadata, "structured_type": object_type},
+        ordinal=ordinal,
+        char_start=char_start,
+        char_end=char_end,
+        confidence=0.72,
+        extraction_method=f"{object_type}_heuristic",
+        search_prefix=search_prefix,
+    )
+
+
+def build_structured_source_object(
+    *,
+    page: SourcePage,
+    book_id: str,
+    object_type: str,
+    title: str,
+    heading_path: tuple[str, ...],
+    text: str,
+    text_snapshot_sha256: str,
+    metadata: dict[str, object],
+    ordinal: int,
+    char_start: int,
+    char_end: int,
+    confidence: float,
+    extraction_method: str,
+    search_prefix: str,
+    parent_object_id: str | None = None,
+) -> SourceObject:
+    return SourceObject(
+        id=deterministic_source_object_id(
+            book_id=book_id,
+            page_start=page.page_number,
+            page_end=page.page_number,
+            object_type=object_type,
+            ordinal=ordinal,
+            text=text,
+        ),
+        book_id=book_id,
+        page_id=page.page_id,
+        object_type=object_type,
+        parent_object_id=parent_object_id,
+        title=title,
+        heading_path=heading_path,
+        page_start=page.page_number,
+        page_end=page.page_number,
+        char_start=char_start,
+        char_end=char_end,
+        text=text,
+        search_text=search_text(
+            title,
+            heading_path,
+            f"{search_prefix} {text}",
+        ),
+        metadata_json=json.dumps(metadata, sort_keys=True),
+        confidence=confidence,
+        extraction_method=extraction_method,
+        text_snapshot_sha256=text_snapshot_sha256,
+    )
+
+
 def heading_lines(text: str) -> tuple[tuple[int, int, str], ...]:
     positions: list[tuple[int, int, str]] = []
     offset = 0
@@ -320,6 +751,94 @@ def section_has_body(text: str) -> bool:
 
 def identity_bucket(value: str) -> str:
     return " ".join(value.casefold().split())
+
+
+def page_line_spans(text: str) -> tuple[LineSpan, ...]:
+    lines: list[LineSpan] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        start = offset + line.find(stripped) if stripped else offset
+        end = start + len(stripped)
+        lines.append(LineSpan(text=line, stripped=stripped, start=start, end=end))
+        offset += len(line)
+    return tuple(lines)
+
+
+def is_table_line(line: str) -> bool:
+    return line.startswith("|") and line.endswith("|") and line.count("|") >= 3
+
+
+def is_table_separator(line: str) -> bool:
+    cells = [cell.strip() for cell in line.strip("|").split("|")]
+    return bool(cells) and all(set(cell) <= {"-", ":", " "} for cell in cells)
+
+
+def preceding_content_line(
+    lines: tuple[LineSpan, ...],
+    before_index: int,
+) -> LineSpan | None:
+    for index in range(before_index - 1, -1, -1):
+        line = lines[index]
+        if not line.stripped:
+            continue
+        if is_table_line(line.stripped):
+            continue
+        if is_stat_header(line.stripped):
+            continue
+        return line
+    return None
+
+
+def structured_heading_path(
+    lines: tuple[LineSpan, ...],
+    before_index: int,
+    *,
+    fallback: str,
+) -> tuple[str, ...]:
+    headings: list[str] = []
+    for line in lines[: before_index + 1]:
+        if is_heading(line.stripped):
+            headings.append(line.stripped)
+    if not headings:
+        return (fallback,)
+    if headings[-1] != fallback and fallback:
+        return (*tuple(headings[-2:]), fallback)
+    return tuple(headings[-2:])
+
+
+def is_stat_header(line: str) -> bool:
+    tokens = [token.casefold() for token in line.split()]
+    matched = [token for token in tokens if token in STAT_HEADER_TOKENS]
+    return len(matched) >= 6 and matched == tokens[: len(matched)]
+
+
+def is_stat_value_line(line: str) -> bool:
+    tokens = line.split()
+    if len(tokens) < 6:
+        return False
+    numeric_tokens = [token for token in tokens if token.replace("-", "").isdigit()]
+    return len(numeric_tokens) >= 6
+
+
+def is_profile_followup_line(line: str) -> bool:
+    return line.casefold().startswith(PROFILE_FOLLOWUP_PREFIXES)
+
+
+def classify_profile_type(title: str) -> str:
+    lowered = title.casefold()
+    if any(marker in lowered for marker in ("creature", "beast", "daemon", "undead")):
+        return "monster_profile"
+    return "npc_profile"
+
+
+def parse_cross_reference(line: str) -> tuple[str, int | None] | None:
+    match = CROSS_REFERENCE_RE.search(line)
+    if match is None:
+        return None
+    title = match.group("title").strip()
+    target_page = match.group("page")
+    return title, int(target_page) if target_page is not None else None
 
 
 def build_rule_section(

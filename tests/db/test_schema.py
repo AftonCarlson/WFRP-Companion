@@ -373,6 +373,109 @@ def test_boolean_constraints_reject_ambiguous_state_values(tmp_path: Path) -> No
             )
 
 
+def test_source_object_schema_allows_glossary_entries_and_definition_links(
+    tmp_path: Path,
+) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        insert_folder(connection)
+        insert_book(connection)
+        insert_page(connection)
+        now = "2026-06-05T00:00:00Z"
+        for object_id, object_type, title, text in (
+            (
+                "core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa",
+                "rule_section",
+                "Falling",
+                "Falling rules text.",
+            ),
+            (
+                "core-rules:p1-p1:glossary_entry:1:bbbbbbbbbbbb",
+                "glossary_entry",
+                "Falling",
+                "Falling: a sudden drop; see Falling.",
+            ),
+        ):
+            connection.execute(
+                """
+                insert into source_objects (
+                  id,
+                  book_id,
+                  page_id,
+                  object_type,
+                  title,
+                  heading_path_json,
+                  page_start,
+                  page_end,
+                  text,
+                  search_text,
+                  confidence,
+                  extraction_method,
+                  text_snapshot_sha256,
+                  created_at,
+                  updated_at
+                )
+                values (?, 'core-rules', 'core-rules:1', ?, ?, '[]', 1, 1,
+                        ?, ?, 0.8, 'test', 'snapshot', ?, ?)
+                """,
+                (object_id, object_type, title, text, text, now, now),
+            )
+
+        connection.execute(
+            """
+            insert into source_object_links (
+              id,
+              from_object_id,
+              to_object_id,
+              to_book_id,
+              to_page_id,
+              link_type,
+              label,
+              confidence,
+              created_at
+            )
+            values (
+              'glossary-link',
+              'core-rules:p1-p1:glossary_entry:1:bbbbbbbbbbbb',
+              'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+              'core-rules',
+              'core-rules:1',
+              'glossary_definition',
+              'Falling',
+              0.8,
+              ?
+            )
+            """,
+            (now,),
+        )
+
+        link = connection.execute(
+            "select link_type from source_object_links where id = 'glossary-link'"
+        ).fetchone()
+        connection.execute(
+            """
+            insert into book_object_status (
+              book_id,
+              status,
+              extractor_version,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'indexed',
+              'structured-evidence-v1',
+              ?
+            )
+            """,
+            (now,),
+        )
+        status = connection.execute(
+            "select extractor_version from book_object_status where book_id = 'core-rules'"
+        ).fetchone()
+
+    assert link["link_type"] == "glossary_definition"
+    assert status["extractor_version"] == "structured-evidence-v1"
+
+
 def test_chat_model_run_constraints_and_retry_guard(tmp_path: Path) -> None:
     with initialize_database(tmp_path / "wfrp.sqlite") as connection:
         insert_folder(connection)

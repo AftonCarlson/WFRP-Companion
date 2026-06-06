@@ -194,6 +194,7 @@ create table if not exists source_objects (
     'map_reference',
     'image_reference',
     'index_entry',
+    'glossary_entry',
     'cross_reference',
     'page_chunk'
   )),
@@ -219,6 +220,7 @@ create table if not exists source_object_links (
     'same_section',
     'table_row',
     'stat_profile',
+    'glossary_definition',
     'map_reference',
     'image_reference',
     'entity_mention'
@@ -234,6 +236,7 @@ create table if not exists book_object_status (
   stat_block_count integer not null default 0,
   location_count integer not null default 0,
   text_snapshot_sha256 text,
+  extractor_version text,
   last_error text,
   updated_at text not null,
   check(status in ('not_started', 'extracting', 'extracted', 'indexing', 'indexed', 'failed')),

@@ -7,9 +7,12 @@ from pathlib import Path
 from tests.db.test_migrations import create_legacy_phase6_database
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database, open_connection
+from wfrp_companion.source_objects import store
 from wfrp_companion.source_objects import extractor
 from wfrp_companion.source_objects.extractor import extract_source_object_library
+from wfrp_companion.source_objects.models import SourceObject
 from wfrp_companion.source_objects.store import (
+    SOURCE_OBJECT_EXTRACTOR_VERSION,
     book_text_snapshot_sha256,
     claim_extraction_job,
     eligible_books,
@@ -162,6 +165,35 @@ def fetch_one(config: AppConfig, sql: str) -> sqlite3.Row:
     return row
 
 
+def make_source_object(
+    *,
+    object_id: str,
+    object_type: str,
+    title: str | None = None,
+    page_number: int = 1,
+    text: str = "Reference text.",
+    metadata_json: str = "{}",
+    parent_object_id: str | None = None,
+) -> SourceObject:
+    return SourceObject(
+        id=object_id,
+        book_id="rules",
+        page_id=f"rules:{page_number}",
+        object_type=object_type,
+        parent_object_id=parent_object_id,
+        title=title,
+        heading_path=(title,) if title is not None else (),
+        page_start=page_number,
+        page_end=page_number,
+        text=text,
+        search_text=text,
+        confidence=0.8,
+        extraction_method="test",
+        text_snapshot_sha256="snapshot",
+        metadata_json=metadata_json,
+    )
+
+
 def test_book_text_snapshot_hashes_page_text_in_page_order(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     insert_indexed_book(config)
@@ -218,6 +250,7 @@ def test_extract_source_object_library_persists_objects_status_and_job(
     )
     assert status["status"] == "indexed"
     assert status["object_count"] == 2
+    assert status["extractor_version"] == SOURCE_OBJECT_EXTRACTOR_VERSION
     assert status["text_snapshot_sha256"] == summary.book_summaries[0].text_snapshot_sha256
     assert job["status"] == "succeeded"
     assert job["idempotency_key"] == extraction_job_id(
@@ -236,6 +269,218 @@ def test_extract_source_object_library_persists_objects_status_and_job(
             """
         ).fetchone()
     assert row["source_object_id"] == rule["id"]
+
+
+def test_extract_source_object_library_reruns_stale_extractor_version(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_indexed_book(config)
+    first = extract_source_object_library(config)
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update book_object_status
+            set extractor_version = 'legacy-heading-v1'
+            where book_id = 'rules'
+            """
+        )
+
+    second = extract_source_object_library(config)
+
+    assert first.extracted == 1
+    assert second.extracted == 1
+    assert second.skipped_current == 0
+    status = fetch_one(config, "select * from book_object_status")
+    assert status["extractor_version"] == SOURCE_OBJECT_EXTRACTOR_VERSION
+
+
+def test_extract_source_object_library_persists_structured_links_and_counts(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_indexed_book(config)
+    structured_text = (
+        "Chapter I: Weather\n"
+        "Weather Results\n"
+        "| Roll | Result |\n"
+        "| 1 | Clear skies |\n"
+        "| 2 | Storms force a travel test |\n"
+        "Captain Mira\n"
+        "M WS BS S T W I A Dex Int WP Fel\n"
+        "4 41 32 3 3 12 38 1 34 35 36 37\n"
+        "Skills: Command, Perception\n"
+    )
+    text_sha = hashlib.sha256(structured_text.encode("utf-8")).hexdigest()
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update page_text
+            set text = ?,
+                text_sha256 = ?
+            where page_id = 'rules:1'
+            """,
+            (structured_text, text_sha),
+        )
+        connection.execute(
+            """
+            update pages
+            set text_chars = ?,
+                word_count = ?
+            where id = 'rules:1'
+            """,
+            (len(structured_text), len(structured_text.split())),
+        )
+
+    summary = extract_source_object_library(config, force=True)
+
+    assert summary.extracted == 1
+    status = fetch_one(config, "select * from book_object_status")
+    assert status["table_count"] == 1
+    assert status["stat_block_count"] == 1
+    assert count_rows(config, "source_object_links") == 3
+    with open_connection(config.db_path) as connection:
+        links = {
+            row["link_type"]
+            for row in connection.execute(
+                "select link_type from source_object_links order by link_type"
+            ).fetchall()
+        }
+        table_row_targets = connection.execute(
+            """
+            select count(*)
+            from source_object_links
+            join source_objects child
+              on child.id = source_object_links.from_object_id
+            join source_objects parent
+              on parent.id = source_object_links.to_object_id
+            where source_object_links.link_type = 'table_row'
+              and child.object_type = 'table_row'
+              and parent.object_type = 'table'
+            """
+        ).fetchone()[0]
+
+    assert links == {"stat_profile", "table_row"}
+    assert table_row_targets == 2
+
+
+def test_replace_book_source_objects_writes_page_only_reference_links(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_indexed_book(config)
+    source_objects = (
+        make_source_object(
+            object_id="rules:page-only-cross-reference",
+            object_type="cross_reference",
+            title="Known Topic",
+            metadata_json='{"target_title": "Known Topic", "target_page": 2}',
+        ),
+        make_source_object(
+            object_id="rules:missing-cross-reference",
+            object_type="cross_reference",
+            title="Missing Topic",
+            metadata_json='{"target_title": "Missing Topic", "target_page": 99}',
+        ),
+        make_source_object(
+            object_id="rules:untitled-cross-reference",
+            object_type="cross_reference",
+            title="Untitled Topic",
+            metadata_json='{"target_page": 2}',
+        ),
+    )
+
+    with open_connection(config.db_path) as connection:
+        store.replace_book_source_objects(
+            connection,
+            book_id="rules",
+            text_snapshot_sha256="snapshot",
+            source_objects=source_objects,
+            job_id="extract_source_objects:rules:snapshot",
+            now="2026-06-05T00:00:00Z",
+        )
+        links = connection.execute(
+            """
+            select from_object_id, to_object_id, to_page_id, link_type
+            from source_object_links
+            order by from_object_id
+            """
+        ).fetchall()
+        assert store.target_page_id_for(
+            connection,
+            book_id="rules",
+            page_number=None,
+        ) is None
+
+    assert len(links) == 1
+    assert links[0]["from_object_id"] == "rules:page-only-cross-reference"
+    assert links[0]["to_object_id"] is None
+    assert links[0]["to_page_id"] == "rules:2"
+    assert links[0]["link_type"] == "cross_reference"
+
+
+def test_source_object_link_helper_edges() -> None:
+    child = make_source_object(
+        object_id="rules:child",
+        object_type="page_chunk",
+        parent_object_id="rules:parent",
+    )
+    parent = make_source_object(
+        object_id="rules:parent",
+        object_type="rule_section",
+        title="Parent",
+    )
+    malformed = make_source_object(
+        object_id="rules:bad-metadata",
+        object_type="cross_reference",
+        metadata_json="{",
+    )
+    list_metadata = make_source_object(
+        object_id="rules:list-metadata",
+        object_type="cross_reference",
+        metadata_json="[]",
+    )
+    earlier_target = make_source_object(
+        object_id="rules:target-earlier",
+        object_type="rule_section",
+        title="Shared Topic",
+        page_number=1,
+    )
+    later_target = make_source_object(
+        object_id="rules:target-later",
+        object_type="rule_section",
+        title="Shared Topic",
+        page_number=2,
+    )
+    reference = make_source_object(
+        object_id="rules:reference",
+        object_type="index_entry",
+        title="Shared Topic",
+        page_number=3,
+    )
+
+    assert store.parent_link_type_for(child, parent) == "same_section"
+    assert store.reference_link_type_for("index_entry") == "index_entry"
+    assert store.reference_link_type_for("glossary_entry") == "glossary_definition"
+    assert store.reference_link_type_for("cross_reference") == "cross_reference"
+    assert store.reference_link_type_for("rule_section") is None
+    assert store.source_object_metadata(malformed) == {}
+    assert store.source_object_metadata(list_metadata) == {}
+    assert store.find_reference_target_object(
+        (later_target, earlier_target, reference),
+        source_object=reference,
+        target_title="Shared Topic",
+        target_page=None,
+    ) == earlier_target
+    assert (
+        store.find_reference_target_object(
+            (earlier_target,),
+            source_object=reference,
+            target_title="Other Topic",
+            target_page=None,
+        )
+        is None
+    )
 
 
 def test_extract_source_object_library_initializes_missing_database(

@@ -15,12 +15,14 @@ from wfrp_companion.assistant.query_planner import terms_are_close
 PREFERRED_OBJECT_BOOSTS = {
     "rule_section": 7.0,
     "table": 7.0,
+    "table_row": 5.0,
     "stat_block": 7.0,
     "npc_profile": 7.0,
     "monster_profile": 7.0,
     "location_description": 6.0,
     "encounter": 5.0,
     "index_entry": 4.0,
+    "glossary_entry": 5.0,
     "cross_reference": 2.0,
     "page_chunk": 1.0,
 }
@@ -137,8 +139,20 @@ def reciprocal_rank_fuse(
                     reasons=(reason,),
                 )
                 continue
+            preferred = preferred_candidate(bucket.candidate, candidate)
             buckets[candidate.dedupe_key] = _FusionBucket(
-                candidate=preferred_candidate(bucket.candidate, candidate),
+                candidate=replace(
+                    preferred,
+                    rank_reasons=tuple(
+                        dict.fromkeys(
+                            (
+                                *preferred.rank_reasons,
+                                *bucket.candidate.rank_reasons,
+                                *candidate.rank_reasons,
+                            )
+                        )
+                    ),
+                ),
                 score=bucket.score + contribution,
                 reasons=(*bucket.reasons, reason),
             )
@@ -197,7 +211,19 @@ def unique_ranked_channel_candidates(
         if current is None:
             unique_candidates[candidate.dedupe_key] = candidate
             continue
-        unique_candidates[candidate.dedupe_key] = preferred_candidate(current, candidate)
+        preferred = preferred_candidate(current, candidate)
+        unique_candidates[candidate.dedupe_key] = replace(
+            preferred,
+            rank_reasons=tuple(
+                dict.fromkeys(
+                    (
+                        *preferred.rank_reasons,
+                        *current.rank_reasons,
+                        *candidate.rank_reasons,
+                    )
+                )
+            ),
+        )
     return tuple(
         sorted(
             unique_candidates.values(),
