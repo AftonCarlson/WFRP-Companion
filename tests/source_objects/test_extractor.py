@@ -481,6 +481,38 @@ def test_extract_objects_from_pages_keeps_same_page_section_ids_stable() -> None
     assert inserted_critical_id == baseline_critical_id
 
 
+def test_overlapping_equivalent_rule_sections_get_unique_ids() -> None:
+    objects = extract_objects_from_pages(
+        book_id="rules",
+        text_snapshot_sha256="snapshot",
+        pages=(
+            SourcePage(
+                page_id="rules:7",
+                book_id="rules",
+                page_number=7,
+                extraction_method="embedded",
+                ocr_attempted=False,
+                text_sha256="sha-7",
+                text=(
+                    "Chapter I: A Brief History of the\n"
+                    "Cults of the Empire\n"
+                    "Chapter I:\n"
+                    "A Brief History of the Cults\n"
+                    "of the Empire\n"
+                ),
+            ),
+        ),
+        layout_pages=(),
+    )
+
+    rule_sections = [
+        source_object for source_object in objects if source_object.object_type == "rule_section"
+    ]
+    rule_ids = [source_object.id for source_object in rule_sections]
+    assert len(rule_sections) == 2
+    assert len(set(rule_ids)) == len(rule_ids)
+
+
 def test_page_metadata_treats_embedded_text_as_not_ocr_derived() -> None:
     objects = extract_objects_from_pages(
         book_id="rules",

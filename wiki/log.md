@@ -22,7 +22,15 @@
   history metadata, stale failed-run retryability after completed retries,
   frontend stream targeting, and over-broad follow-up detection. All were fixed
   with focused regressions before final verification.
-- Verification run for this pass: full Python tests reported 452 tests passing
+- Follow-up live-data fix: source-object replacement now detaches and dedupes
+  historical retrieval hits before old source objects are deleted, preventing
+  same-run/page fallback uniqueness collisions during re-extraction. The
+  extractor also gives overlapping equivalent rule sections unique stable IDs,
+  fixing the Tome of Salvation duplicate-ID failure.
+- Local maintenance after the fix extracted/indexed all 26 books, rebuilt
+  source maps for all 26 books, and restored Children of the Horned Rat as the
+  top source for live `skaven` retrieval.
+- Verification run for this pass: full Python tests reported 454 tests passing
   with one existing Starlette/httpx deprecation warning and 100.00% coverage;
   `ruff check .` passed; frontend coverage reported 131 Vitest tests passing
   above configured thresholds; frontend production build passed with the

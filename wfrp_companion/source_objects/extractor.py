@@ -299,6 +299,7 @@ def extract_rule_sections_from_page(
         previous_level = level
 
     sections: list[SourceObject] = []
+    used_ids: set[str] = set()
     title_ordinals: dict[str, int] = {}
     for candidate in candidates:
         text = page.text[candidate.start : candidate.end].strip()
@@ -306,16 +307,17 @@ def extract_rule_sections_from_page(
             continue
         title_bucket = identity_bucket(candidate.title)
         title_ordinals[title_bucket] = title_ordinals.get(title_bucket, 0) + 1
-        sections.append(
-            build_rule_section(
-                candidate=candidate,
-                book_id=book_id,
-                text=text,
-                text_snapshot_sha256=text_snapshot_sha256,
-                metadata=metadata,
-                ordinal=title_ordinals[title_bucket],
-            )
+        section = build_unique_rule_section(
+            candidate=candidate,
+            book_id=book_id,
+            text=text,
+            text_snapshot_sha256=text_snapshot_sha256,
+            metadata=metadata,
+            ordinal=title_ordinals[title_bucket],
+            used_ids=used_ids,
         )
+        used_ids.add(section.id)
+        sections.append(section)
     return tuple(sections)
 
 
@@ -876,6 +878,30 @@ def build_rule_section(
         extraction_method="heading_heuristic",
         text_snapshot_sha256=text_snapshot_sha256,
     )
+
+
+def build_unique_rule_section(
+    *,
+    candidate: PendingSection,
+    book_id: str,
+    text: str,
+    text_snapshot_sha256: str,
+    metadata: dict[str, object],
+    ordinal: int,
+    used_ids: set[str],
+) -> SourceObject:
+    while True:
+        section = build_rule_section(
+            candidate=candidate,
+            book_id=book_id,
+            text=text,
+            text_snapshot_sha256=text_snapshot_sha256,
+            metadata=metadata,
+            ordinal=ordinal,
+        )
+        if section.id not in used_ids:
+            return section
+        ordinal += 1
 
 
 def build_page_chunks(

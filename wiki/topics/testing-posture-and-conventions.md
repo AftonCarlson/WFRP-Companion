@@ -188,11 +188,13 @@ derived source-object links and count updates, table-row citations resolving to
 parent table page ranges, stat-block retrieval resolving to complete profiles,
 index routing to deterministic target sections or page-only target pages,
 glossary evidence retaining definition context without fake disjoint page
-ranges, and link traversal refusing unchecked-book targets. Page-label tests
-cover offset-anchor calibration, roman/front-matter preservation, snapshot
-drift anchor reuse, manual-review conflict suppression, exact/search
-source-object/linked-page citation labels, safe count-only CLI failure output,
-and reloaded chat citation labels/ranges. Conversation-context tests cover
+ranges, link traversal refusing unchecked-book targets, duplicate equivalent
+rule-section ID avoidance, and safe historical retrieval-hit detachment when
+source objects are replaced. Page-label tests cover offset-anchor calibration,
+roman/front-matter preservation, snapshot drift anchor reuse, manual-review
+conflict suppression, exact/search source-object/linked-page citation labels,
+safe count-only CLI failure output, and reloaded chat citation labels/ranges.
+Conversation-context tests cover
 bounded prior completed-turn selection, failed/active/current-message
 exclusion, retry anchoring before the original user message, prompt-history
 budgeting, self-contained retrieval queries staying unchanged, follow-up
@@ -210,7 +212,7 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-06 reported 452 tests
+The latest full backend verification command on 2026-06-06 reported 454 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 131 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful

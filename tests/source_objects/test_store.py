@@ -419,6 +419,92 @@ def test_replace_book_source_objects_writes_page_only_reference_links(
     assert links[0]["link_type"] == "cross_reference"
 
 
+def test_replace_book_source_objects_dedupes_historical_hit_fallbacks(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_indexed_book(config)
+    old_objects = (
+        make_source_object(
+            object_id="rules:old-a",
+            object_type="rule_section",
+            title="Old A",
+            text="Old A text.",
+        ),
+        make_source_object(
+            object_id="rules:old-b",
+            object_type="rule_section",
+            title="Old B",
+            text="Old B text.",
+        ),
+    )
+    new_objects = (
+        make_source_object(
+            object_id="rules:new",
+            object_type="rule_section",
+            title="New",
+            text="New text.",
+        ),
+    )
+
+    with open_connection(config.db_path) as connection:
+        store.replace_book_source_objects(
+            connection,
+            book_id="rules",
+            text_snapshot_sha256="snapshot",
+            source_objects=old_objects,
+            job_id="extract_source_objects:rules:snapshot",
+            now="2026-06-05T00:00:00Z",
+        )
+        connection.execute(
+            """
+            insert into retrieval_runs (id, query, created_at)
+            values ('retrieval-old', 'old query', '2026-06-05T00:00:00Z')
+            """
+        )
+        connection.executemany(
+            """
+            insert into retrieval_hits (
+              id,
+              retrieval_run_id,
+              page_id,
+              source_object_id,
+              score,
+              rank,
+              snippet
+            )
+            values (?, 'retrieval-old', 'rules:1', ?, 1, ?, ?)
+            """,
+            (
+                ("hit-old-a", "rules:old-a", 1, "Old A"),
+                ("hit-old-b", "rules:old-b", 2, "Old B"),
+            ),
+        )
+
+        store.replace_book_source_objects(
+            connection,
+            book_id="rules",
+            text_snapshot_sha256="snapshot-2",
+            source_objects=new_objects,
+            job_id="extract_source_objects:rules:snapshot-2",
+            now="2026-06-05T00:00:01Z",
+        )
+
+        hits = connection.execute(
+            """
+            select id, source_object_id
+            from retrieval_hits
+            where retrieval_run_id = 'retrieval-old'
+              and page_id = 'rules:1'
+            order by rank
+            """
+        ).fetchall()
+
+    assert len(hits) == 1
+    assert hits[0]["id"] == "hit-old-a"
+    assert hits[0]["source_object_id"] is None
+
+
 def test_source_object_link_helper_edges() -> None:
     child = make_source_object(
         object_id="rules:child",
