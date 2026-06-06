@@ -510,6 +510,75 @@ def test_history_aware_retrieval_query_contextualizes_followups_and_caps_length(
     assert len(context.retrieval_query) <= 150
 
 
+def test_followup_retrieval_query_uses_compact_user_history_without_assistant_noise(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path, retrieval_query_char_limit=500)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    completed = complete_turn(
+        config,
+        thread.id,
+        content="Give me the stat block for the Black Knight.",
+        answer=(
+            "I cannot verify that. I found Black Orc Statistics in Old World "
+            "Bestiary and several knight careers in Career Compendium."
+        ),
+        idempotency_key="send-1",
+    )
+    current = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="Aucassin is his name.",
+        idempotency_key="current",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    set_turn_times(
+        config,
+        completed,
+        user_time="2026-06-06T00:00:01Z",
+        assistant_time="2026-06-06T00:00:02Z",
+        run_time="2026-06-06T00:00:02Z",
+    )
+    set_turn_times(config, current, user_time="2026-06-06T00:00:03Z")
+
+    context = conversation_context.build_conversation_context(
+        config,
+        thread_id=thread.id,
+        current_user_message_id=current.user_message.id,
+        current_user_content=current.user_message.content,
+    )
+
+    assert context.history_strategy == "followup_contextualized"
+    assert context.retrieval_query.startswith("Aucassin is his name.")
+    assert "stat block" in context.retrieval_query.lower()
+    assert "black knight" in context.retrieval_query.lower()
+    assert "Black Orc" not in context.retrieval_query
+    assert "Old World Bestiary" not in context.retrieval_query
+    assert "Career Compendium" not in context.retrieval_query
+    assert len(context.retrieval_query) < 180
+
+
+def test_compact_retrieval_history_terms_caps_unique_terms() -> None:
+    message = conversation_context.ConversationHistoryMessage(
+        id="message-1",
+        role="user",
+        content=" ".join(f"Signal{i}" for i in range(40)),
+        created_at="2026-06-06T00:00:00Z",
+    )
+
+    terms = conversation_context.compact_retrieval_history_terms((message,))
+
+    assert len(terms) == conversation_context.MAX_RETRIEVAL_HISTORY_TERMS
+    assert terms[0] == "Signal0"
+    assert terms[-1] == "Signal23"
+
+
+def test_limit_text_truncates_over_budget_text() -> None:
+    assert conversation_context.limit_text("abcdef", 3) == "abc"
+
+
 def test_conversation_context_zero_limits_disable_prompt_and_retrieval_history(
     tmp_path: Path,
 ) -> None:

@@ -2628,6 +2628,148 @@ def test_stat_queries_boost_typed_stat_blocks() -> None:
     )
 
 
+def test_structural_stat_queries_require_named_entity_match() -> None:
+    black_orc_candidate = retrieval.EvidenceCandidate(
+        book_id="bestiary",
+        title="Old World Bestiary",
+        category="Rules",
+        page_id="bestiary:104",
+        page_number=104,
+        pdf_page_number=104,
+        page_label=None,
+        page_start=104,
+        page_end=104,
+        page_range_label=None,
+        snippet="Black Orc stat block",
+        base_score=-14,
+        context_text="Black Orc stat block WS BS S T Ag Int WP Fel.",
+        channel="source_object_fts",
+        source_object_id="black-orc-stat-block",
+        object_type="monster_profile",
+        object_title="Black Orc Statistics",
+        confidence=0.82,
+        rank_reasons=("linked_source_object:stat_block", "fusion:rrf=0.04"),
+    )
+    black_knight_candidate = retrieval.EvidenceCandidate(
+        book_id="barony",
+        title="Barony of the Damned",
+        category="Adventures",
+        page_id="barony:38",
+        page_number=38,
+        pdf_page_number=38,
+        page_label=None,
+        page_start=38,
+        page_end=38,
+        page_range_label=None,
+        snippet="Black Knight Main Profile",
+        base_score=-10,
+        context_text="The Black Knight Main Profile WS BS S T Ag Int WP Fel.",
+        channel="source_object_fts",
+        source_object_id="black-knight-stat-block",
+        object_type="npc_profile",
+        object_title="Race: Human",
+        heading_path=("Chapter Three: Rise of the Black Knight",),
+        confidence=0.78,
+        rank_reasons=("linked_source_object:stat_block", "fusion:rrf=0.02"),
+    )
+
+    ranked = retrieval.rerank_candidates(
+        (black_orc_candidate, black_knight_candidate),
+        retrieval.plan_query("give me the stat block for the black knight", ()),
+    )
+
+    assert [candidate.source_object_id for candidate, _score, _reasons in ranked] == [
+        "black-knight-stat-block"
+    ]
+
+
+def test_stat_queries_prefer_named_profile_over_phrase_only_section() -> None:
+    phrase_section = retrieval.EvidenceCandidate(
+        book_id="barony",
+        title="Barony of the Damned",
+        category="Adventures",
+        page_id="barony:3",
+        page_number=3,
+        pdf_page_number=3,
+        page_label=None,
+        page_start=3,
+        page_end=3,
+        page_range_label=None,
+        snippet="Rise of the Black Knight",
+        base_score=-15,
+        context_text="Rise of the Black Knight chapter listing.",
+        channel="source_object_fts",
+        source_object_id="black-knight-toc",
+        object_type="rule_section",
+        object_title="Rise of the Black Knight",
+        confidence=0.68,
+        rank_reasons=("fusion:rrf=0.05",),
+    )
+    stat_profile = retrieval.EvidenceCandidate(
+        book_id="barony",
+        title="Barony of the Damned",
+        category="Adventures",
+        page_id="barony:38",
+        page_number=38,
+        pdf_page_number=38,
+        page_label=None,
+        page_start=38,
+        page_end=38,
+        page_range_label=None,
+        snippet="Black Knight Main Profile",
+        base_score=-7,
+        context_text="The Black Knight Main Profile WS BS S T Ag Int WP Fel.",
+        channel="source_object_fts",
+        source_object_id="black-knight-profile",
+        object_type="npc_profile",
+        object_title="Race: Human",
+        heading_path=("Chapter Three: Rise of the Black Knight",),
+        confidence=0.78,
+        rank_reasons=("fusion:rrf=0.01",),
+    )
+
+    ranked = retrieval.rerank_candidates(
+        (phrase_section, stat_profile),
+        retrieval.plan_query("give me the stat block for the black knight", ()),
+    )
+
+    assert [candidate.source_object_id for candidate, _score, _reasons in ranked] == [
+        "black-knight-profile",
+        "black-knight-toc",
+    ]
+
+
+def test_structural_only_stat_query_accepts_typed_stat_evidence() -> None:
+    stat_candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:12",
+        page_number=12,
+        pdf_page_number=12,
+        page_label=None,
+        page_start=12,
+        page_end=12,
+        page_range_label=None,
+        snippet="stat block",
+        base_score=-4,
+        context_text="stat block WS BS S T Ag Int WP Fel",
+        channel="source_object_fts",
+        source_object_id="anonymous-stat-block",
+        object_type="stat_block",
+        object_title="Statistics",
+        confidence=0.82,
+        rank_reasons=("fusion:rrf=0.01",),
+    )
+
+    ranked = retrieval.rerank_candidates(
+        (stat_candidate,),
+        retrieval.plan_query("stat block", ()),
+    )
+
+    assert ranked[0][0].source_object_id == "anonymous-stat-block"
+
+
 def test_entity_queries_reject_heading_path_only_matches() -> None:
     heading_only_candidate = retrieval.EvidenceCandidate(
         book_id="barony",

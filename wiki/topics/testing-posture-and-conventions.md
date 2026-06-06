@@ -202,9 +202,11 @@ Conversation-context tests cover
 bounded prior completed-turn selection, failed/active/current-message
 exclusion, retry anchoring before the original user message, prompt-history
 budgeting, self-contained retrieval queries staying unchanged, follow-up
-retrieval-query contextualization and caps, disabled history limits, provider
-`store=False`, prompt history/evidence separation, retrieval metadata for
-planned queries, and logical retry collapse in chat API/frontend read models.
+retrieval-query contextualization and caps, compact salient history terms,
+assistant failure-answer filtering for retrieval planning, disabled history
+limits, provider `store=False`, prompt history/evidence separation, retrieval
+metadata for planned queries, stream-interruption cleanup, and logical retry
+collapse in chat API/frontend read models.
 
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
@@ -216,7 +218,7 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-06 reported 461 tests
+The latest full backend verification command on 2026-06-06 reported 469 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 131 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful

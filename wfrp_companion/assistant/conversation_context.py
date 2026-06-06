@@ -5,11 +5,27 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from wfrp_companion.assistant import chat_store, prompts
+from wfrp_companion.assistant.query_planner import STOP_WORDS
 from wfrp_companion.assistant.query_planner import meaningful_tokens
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
 
 
+MAX_RETRIEVAL_HISTORY_TERMS = 24
+ASSISTANT_FAILURE_MARKERS = (
+    "cannot verify",
+    "can't verify",
+    "couldn’t find",
+    "couldn't find",
+    "could not find",
+    "do not have",
+    "don't have",
+    "no retrieved",
+    "not included in the retrieved",
+    "retrieved evidence",
+    "retrieved context",
+    "what i do have",
+)
 FOLLOW_UP_TOKENS = {
     "it",
     "its",
@@ -158,12 +174,46 @@ def build_history_aware_retrieval_query(
     parts = [
         current_user_content.strip(),
         "",
-        "Recent chat terms for reference resolution:",
+        "Recent chat terms for reference resolution: "
+        + " ".join(compact_retrieval_history_terms(history_messages)),
     ]
-    for message in history_messages:
-        label = "User" if message.role == "user" else "Familiar"
-        parts.append(f"{label}: {prompts.scrub_private_paths(message.content)}")
     return (limit_text("\n".join(parts), char_limit), "followup_contextualized")
+
+
+def compact_retrieval_history_terms(
+    history_messages: Sequence[ConversationHistoryMessage],
+) -> tuple[str, ...]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for message in history_messages:
+        if (
+            message.role == "assistant"
+            and assistant_answer_is_retrieval_failure(message.content)
+        ):
+            continue
+        for term in salient_terms(message.content):
+            normalized = term.casefold()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            terms.append(term)
+            if len(terms) >= MAX_RETRIEVAL_HISTORY_TERMS:
+                return tuple(terms)
+    return tuple(terms)
+
+
+def salient_terms(text: str) -> tuple[str, ...]:
+    tokens = re.findall(r"(?u)\b[\w'-]+\b", prompts.scrub_private_paths(text))
+    return tuple(
+        token
+        for token in tokens
+        if token and token.casefold() not in STOP_WORDS
+    )
+
+
+def assistant_answer_is_retrieval_failure(content: str) -> bool:
+    normalized = " ".join(content.casefold().split())
+    return any(marker in normalized for marker in ASSISTANT_FAILURE_MARKERS)
 
 
 def is_followup_query(query: str) -> bool:

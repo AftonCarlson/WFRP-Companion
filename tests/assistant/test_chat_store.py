@@ -362,6 +362,43 @@ def test_thread_detail_collapses_failed_run_after_active_retry(tmp_path: Path) -
     assert detail.turns[0].model_run.retryable is False
 
 
+def test_thread_detail_replaces_older_failed_run_with_later_active_retry(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    failed = chat_store.create_provider_unavailable_turn(
+        config,
+        thread.id,
+        content="What is fear?",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    active_retry = chat_store.create_queued_retry(
+        config,
+        failed.model_run.id,
+        idempotency_key="retry-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            "update model_runs set created_at = ? where id = ?",
+            ("2026-06-06T00:00:01Z", failed.model_run.id),
+        )
+        connection.execute(
+            "update model_runs set created_at = ? where id = ?",
+            ("2026-06-06T00:00:02Z", active_retry.model_run.id),
+        )
+
+    detail = chat_store.get_thread_detail(config, thread.id)
+
+    assert len(detail.turns) == 1
+    assert detail.turns[0].model_run.id == active_retry.model_run.id
+
+
 def test_thread_detail_collapses_successful_retry_to_completed_turn(
     tmp_path: Path,
 ) -> None:

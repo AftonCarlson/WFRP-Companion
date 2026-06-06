@@ -389,6 +389,63 @@ def test_stream_chat_message_uses_history_aware_query_for_followup_retrieval(
     ]
 
 
+def test_stream_close_after_retrieval_marks_active_run_failed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_service.chat_store.create_thread(config)
+
+    def fake_retrieve_context(
+        config: AppConfig,
+        thread_id: str,
+        query: str,
+        *,
+        hit_limit: int,
+        total_char_limit: int,
+        window_chars: int,
+    ) -> chat_service.retrieval.RetrievalContext:
+        return chat_service.retrieval.RetrievalContext(
+            query=query,
+            candidates=(),
+            hits=(),
+            source_set_id="rules-core",
+            source_book_ids=("core-rules",),
+            source_map=(),
+        )
+
+    monkeypatch.setattr(
+        chat_service.retrieval,
+        "retrieve_context",
+        fake_retrieve_context,
+    )
+    events = chat_service.stream_chat_message(
+        config,
+        thread_id=thread.id,
+        content="What about it?",
+        idempotency_key="send-interrupted",
+        provider_factory=lambda _: CapturingProvider(),
+    )
+
+    accepted_event = next(events)
+    retrieval_event = next(events)
+    events.close()
+
+    assert accepted_event.type == "accepted"
+    assert retrieval_event.type == "retrieval"
+    with open_connection(config.db_path) as connection:
+        row = connection.execute(
+            "select status, error_code from model_runs where id = ?",
+            (retrieval_event.model_run.id,),
+        ).fetchone()
+
+    assert dict(row) == {
+        "status": "failed",
+        "error_code": "stream_interrupted",
+    }
+
+
 def test_stream_chat_message_fails_without_openai_key(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     config = AppConfig(

@@ -280,9 +280,12 @@ Phase 7 PR11 adds Familiar prompt history and history-aware retrieval planning:
   but factual WFRP claims still have to come from the current checked-book
   retrieved evidence and citations.
 - Self-contained retrieval queries stay unchanged. Only follow-up/reference
-  queries add bounded recent chat terms to the retrieval query, and the raw
+  queries add compact salient chat terms to the retrieval query, and the raw
   user query is still stored separately from the planned retrieval query in
-  `retrieval_runs.metadata_json`.
+  `retrieval_runs.metadata_json`. Familiar does not copy full prior assistant
+  answers into retrieval planning; failure-style answers that say retrieved
+  evidence was missing are skipped as retrieval-query context so wrong-source
+  detours do not snowball.
 - Familiar still resolves enabled books from the thread's active source set at
   run time. Source maps, candidate generation, reranking, prompt context,
   retrieval metadata, and citations remain constrained to that checked-book
@@ -309,7 +312,10 @@ structured-evidence path:
   and source maps, to pick up the repaired table/stat objects.
 - Deterministic reranking now gives accepted typed table/chart and stat/profile
   evidence a structural-intent boost, so complete source objects outrank prose
-  that merely mentions the requested table or stat block.
+  that merely mentions the requested table or stat block. Structural stat/table
+  requests must still match the named entity terms: if the user asks for the
+  `Black Knight` stat block, `Black Orc Statistics` is rejected even though it
+  matches `black` and has a stat profile.
 - Inherited chapter headings and repeated running headers can still help route
   lexical candidates, but they cannot be the only match that admits a
   multi-term entity result into prompt context. This prevents unrelated
@@ -375,6 +381,11 @@ Familiar streams output through the backend-owned endpoint
 `wfrp_companion/assistant/provider.py` wraps the OpenAI Responses API and maps
 OpenAI text delta/completed events into app-owned events. The API key is read
 from `OPENAI_API_KEY` on the backend only.
+
+If a client disconnects after a run has been accepted but before completion,
+the backend marks the active `model_runs` row as `failed` with
+`stream_interrupted` instead of leaving it stuck in `queued`, `retrieving`, or
+`calling_model`.
 
 The Familiar frontend renders streamed assistant text through a safe local
 markdown renderer for common model output structures: headings, paragraphs,

@@ -221,6 +221,14 @@ def stream_queued_result(
             output_tokens=output_tokens,
         )
         yield event_from_result("completed", completed)
+    except GeneratorExit:
+        chat_store.fail_model_run(
+            config,
+            result.model_run.id,
+            error_code="stream_interrupted",
+            error_message="Chat stream ended before the model run completed.",
+        )
+        raise
     except provider.ProviderUnavailableError as error:
         failed = chat_store.fail_model_run(
             config,

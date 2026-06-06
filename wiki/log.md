@@ -1,5 +1,30 @@
 # Wiki Compile Log
 
+## 2026-06-06 Follow-Up Retrieval Hang Repair
+
+- Debugged a live Familiar turn where `aucassin is his name` appeared to hang.
+  The backend eventually completed, but retrieval spent about 50 seconds before
+  the model call because the history-aware planner expanded the short
+  correction into a long query containing the previous assistant's wrong
+  Black Orc/Career Compendium detour.
+- Changed follow-up retrieval planning to use compact salient chat terms and
+  skip failure-style assistant answers as retrieval-query context. The raw
+  user message is still preserved separately in retrieval metadata.
+- Tightened structural stat/table reranking so lexical candidates must match
+  the named entity terms, not just object words like `stat block`. Typed
+  stat/profile objects now outrank phrase-only sections for explicit stat
+  requests, while table-row and chart retrieval stay covered.
+- Stream interruption during an active Familiar run now marks the model run
+  `failed` with `stream_interrupted` instead of leaving a stale `retrieving`
+  run behind.
+- Live checks after the fix reduced the Aucassin follow-up retrieval shape to
+  compact Barony-scoped candidates, put the Barony Black Knight profile ahead
+  of Black Orc/generic career stats, kept Gor Statistics first for Gors, and
+  kept the Core Rules Hit Location table first for hit-location chart queries.
+- Verification: `ruff check .` passed; the full backend coverage gate reported
+  469 tests passing with one existing Starlette/httpx deprecation warning and
+  100.00% coverage.
+
 ## 2026-06-06 Stat/Table Retrieval Repair
 
 - Repaired Familiar stat-block/table retrieval after live QA showed missing

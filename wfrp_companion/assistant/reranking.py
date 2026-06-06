@@ -7,6 +7,7 @@ from typing import Protocol
 
 from wfrp_companion.assistant.evidence import EvidenceCandidate
 from wfrp_companion.assistant.query_planner import QueryPlan
+from wfrp_companion.assistant.query_planner import STRUCTURAL_QUERY_TERMS
 from wfrp_companion.assistant.query_planner import meaningful_tokens
 from wfrp_companion.assistant.query_planner import term_variants
 from wfrp_companion.assistant.query_planner import terms_are_close
@@ -78,6 +79,12 @@ class DeterministicReranker:
             if len(matched_terms) < required_overlap and not has_phrase_match:
                 continue
             if is_heading_path_only_match(candidate, query_plan, required_overlap):
+                continue
+            if not structural_query_matches_named_entity(
+                candidate,
+                query_plan,
+                matched_terms,
+            ):
                 continue
             reasons = list(candidate.rank_reasons)
             reasons.append(f"semantic_overlap:{','.join(matched_terms)}")
@@ -285,12 +292,48 @@ def structural_intent_boost(candidate: EvidenceCandidate, query_plan: QueryPlan)
     }.intersection(terms):
         if candidate.object_type == "stat_block":
             return 14.0
-        if candidate.object_type in {"npc_profile", "monster_profile"} and any(
-            reason.startswith("linked_source_object:stat_block")
-            for reason in candidate.rank_reasons
-        ):
-            return 12.0
+        if candidate.object_type in {"npc_profile", "monster_profile"}:
+            if any(
+                reason.startswith("linked_source_object:stat_block")
+                for reason in candidate.rank_reasons
+            ):
+                return 12.0
+            return 10.0
     return 0.0
+
+
+def structural_query_matches_named_entity(
+    candidate: EvidenceCandidate,
+    query_plan: QueryPlan,
+    matched_terms: Sequence[str],
+) -> bool:
+    original_terms = tuple(dict.fromkeys(query_plan.terms))
+    all_terms = tuple(dict.fromkeys(query_plan.terms + query_plan.expanded_terms))
+    if not STRUCTURAL_QUERY_TERMS.intersection(all_terms):
+        return True
+    entity_terms = tuple(term for term in original_terms if term not in STRUCTURAL_QUERY_TERMS)
+    if not entity_terms:
+        return True
+    if len(entity_terms) == 1:
+        return entity_terms[0] in matched_terms
+    phrase_pairs = adjacent_entity_phrase_pairs(original_terms)
+    if phrase_pairs:
+        phrase_text = candidate_phrase_relevance_text(candidate)
+        return any(phrase_matches(pair, phrase_text) for pair in phrase_pairs)
+    matched_entities = tuple(term for term in matched_terms if term in entity_terms)
+    required_entities = min(2, len(entity_terms))
+    return len(matched_entities) >= required_entities
+
+
+def adjacent_entity_phrase_pairs(terms: Sequence[str]) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for left, right in zip(terms, terms[1:], strict=False):
+        if left in STRUCTURAL_QUERY_TERMS or right in STRUCTURAL_QUERY_TERMS:
+            continue
+        pair = (left, right)
+        if pair not in pairs:
+            pairs.append(pair)
+    return tuple(pairs)
 
 
 def required_semantic_overlap(query_plan: QueryPlan) -> int:
