@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from wfrp_companion.config import AppConfig
+from wfrp_companion.db.connection import initialize_database
+from wfrp_companion.db.migrations import apply_pending_migrations
 from wfrp_companion.source_objects.models import SourceObject
 
 
@@ -28,6 +32,23 @@ class SourcePage:
     text: str
 
 
+@dataclass(frozen=True)
+class ObjectSearchRebuildFailure:
+    book_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ObjectSearchRebuildSummary:
+    discovered: int
+    indexed: int
+    skipped_current: int
+    stale_recovered: int
+    failed: int
+    objects_written: int
+    failures: tuple[ObjectSearchRebuildFailure, ...]
+
+
 def utc_timestamp() -> str:
     return (
         datetime.now(timezone.utc)
@@ -39,6 +60,10 @@ def utc_timestamp() -> str:
 
 def extraction_job_id(book_id: str, text_snapshot_sha256: str) -> str:
     return f"extract_source_objects:{book_id}:{text_snapshot_sha256}"
+
+
+def source_object_search_job_id(book_id: str, source_object_snapshot: str) -> str:
+    return f"rebuild_source_object_fts:{book_id}:{source_object_snapshot}"
 
 
 def eligible_books(
@@ -91,6 +116,303 @@ def book_text_snapshot_sha256(connection: sqlite3.Connection, book_id: str) -> s
         digest.update(row["text_sha256"].encode("utf-8"))
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def source_object_search_snapshot_sha256(
+    connection: sqlite3.Connection,
+    book_id: str,
+) -> str:
+    digest = hashlib.sha256()
+    rows = connection.execute(
+        """
+        select
+          id,
+          book_id,
+          page_id,
+          object_type,
+          title,
+          heading_path_json,
+          page_start,
+          page_end,
+          confidence,
+          search_text,
+          text_snapshot_sha256
+        from source_objects
+        where book_id = ?
+        order by page_start, page_end, id
+        """,
+        (book_id,),
+    ).fetchall()
+    for row in rows:
+        for value in (
+            row["id"],
+            row["book_id"],
+            row["page_id"],
+            row["object_type"],
+            row["title"] or "",
+            heading_path_text(row["heading_path_json"]),
+            str(row["page_start"]),
+            str(row["page_end"]),
+            f"{float(row['confidence']):.6f}",
+            row["search_text"],
+            row["text_snapshot_sha256"],
+        ):
+            digest.update(str(value).encode("utf-8"))
+            digest.update(b"\0")
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def source_object_search_projection_snapshot_sha256(
+    connection: sqlite3.Connection,
+    book_id: str,
+) -> str:
+    digest = hashlib.sha256()
+    rows = connection.execute(
+        """
+        select
+          source_object_search.source_object_id,
+          source_object_search.book_id,
+          source_object_search.page_id,
+          source_object_search.object_type,
+          source_object_search.title,
+          source_object_search.heading_path,
+          source_object_search.page_start,
+          source_object_search.page_end,
+          source_object_search.confidence,
+          source_object_search.search_text,
+          source_objects.text_snapshot_sha256
+        from source_object_search
+        join source_objects
+          on source_objects.id = source_object_search.source_object_id
+        where source_object_search.book_id = ?
+        order by
+          source_object_search.page_start,
+          source_object_search.page_end,
+          source_object_search.source_object_id
+        """,
+        (book_id,),
+    ).fetchall()
+    for row in rows:
+        for value in (
+            row["source_object_id"],
+            row["book_id"],
+            row["page_id"],
+            row["object_type"],
+            row["title"] or "",
+            row["heading_path"],
+            str(row["page_start"]),
+            str(row["page_end"]),
+            f"{float(row['confidence']):.6f}",
+            row["search_text"],
+            row["text_snapshot_sha256"],
+        ):
+            digest.update(str(value).encode("utf-8"))
+            digest.update(b"\0")
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def heading_path_text(heading_path_json: str) -> str:
+    try:
+        parsed = json.loads(heading_path_json or "[]")
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(parsed, list):
+        return ""
+    return " > ".join(value for value in parsed if isinstance(value, str))
+
+
+def source_object_search_current(connection: sqlite3.Connection, book_id: str) -> bool:
+    status = connection.execute(
+        """
+        select status
+        from book_object_status
+        where book_id = ?
+        """,
+        (book_id,),
+    ).fetchone()
+    if status is None or status["status"] != "indexed":
+        return False
+    source_count = connection.execute(
+        "select count(*) from source_objects where book_id = ?",
+        (book_id,),
+    ).fetchone()[0]
+    if source_count == 0:
+        return False
+    search_count = connection.execute(
+        "select count(*) from source_object_search where book_id = ?",
+        (book_id,),
+    ).fetchone()[0]
+    fts_count = connection.execute(
+        """
+        select count(*)
+        from source_object_search_fts
+        join source_object_search
+          on source_object_search.rowid = source_object_search_fts.rowid
+        where source_object_search.book_id = ?
+        """,
+        (book_id,),
+    ).fetchone()[0]
+    if source_count != search_count or search_count != fts_count:
+        return False
+    if source_object_search_snapshot_sha256(
+        connection,
+        book_id,
+    ) != source_object_search_projection_snapshot_sha256(connection, book_id):
+        return False
+    return source_object_fts_matches_projection(connection, book_id)
+
+
+def source_object_fts_matches_projection(
+    connection: sqlite3.Connection,
+    book_id: str,
+) -> bool:
+    rows = connection.execute(
+        """
+        select
+          rowid,
+          title,
+          heading_path,
+          object_type,
+          search_text
+        from source_object_search
+        where book_id = ?
+        order by rowid
+        """,
+        (book_id,),
+    ).fetchall()
+    connection.execute(
+        """
+        create virtual table if not exists temp.expected_source_object_search_fts
+        using fts5(title, heading_path, object_type, search_text)
+        """
+    )
+    connection.execute("delete from temp.expected_source_object_search_fts")
+    for row in rows:
+        connection.execute(
+            """
+            insert into temp.expected_source_object_search_fts (
+              rowid,
+              title,
+              heading_path,
+              object_type,
+              search_text
+            )
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                row["rowid"],
+                row["title"] or "",
+                row["heading_path"],
+                row["object_type"],
+                row["search_text"],
+            ),
+        )
+    if not source_object_fts_vocabulary_matches_projection(connection, book_id):
+        return False
+    for token in source_object_fts_validation_terms(rows):
+        query = f'"{token}"'
+        actual = tuple(
+            row["rowid"]
+            for row in connection.execute(
+                """
+                select source_object_search.rowid
+                from source_object_search_fts
+                join source_object_search
+                  on source_object_search.rowid = source_object_search_fts.rowid
+                where source_object_search.book_id = ?
+                  and source_object_search_fts match ?
+                order by source_object_search.rowid
+                """,
+                (book_id, query),
+            ).fetchall()
+        )
+        expected = tuple(
+            row["rowid"]
+            for row in connection.execute(
+                """
+                select rowid
+                from temp.expected_source_object_search_fts
+                where expected_source_object_search_fts match ?
+                order by rowid
+                """,
+                (query,),
+            ).fetchall()
+        )
+        if actual != expected:
+            return False
+    return True
+
+
+def source_object_fts_vocabulary_matches_projection(
+    connection: sqlite3.Connection,
+    book_id: str,
+) -> bool:
+    connection.execute(
+        """
+        drop table if exists source_object_search_fts_vocab_check
+        """
+    )
+    connection.execute(
+        """
+        create virtual table source_object_search_fts_vocab_check
+        using fts5vocab(source_object_search_fts, 'instance')
+        """
+    )
+    connection.execute(
+        """
+        create virtual table if not exists temp.expected_source_object_search_vocab
+        using fts5vocab(expected_source_object_search_fts, 'instance')
+        """
+    )
+    try:
+        actual = tuple(
+            row["term"]
+            for row in connection.execute(
+                """
+                select distinct source_object_search_fts_vocab_check.term
+                from source_object_search_fts_vocab_check
+                join source_object_search
+                  on source_object_search.rowid = source_object_search_fts_vocab_check.doc
+                where source_object_search.book_id = ?
+                order by source_object_search_fts_vocab_check.term
+                """,
+                (book_id,),
+            ).fetchall()
+        )
+        expected = tuple(
+            row["term"]
+            for row in connection.execute(
+                """
+                select distinct term
+                from temp.expected_source_object_search_vocab
+                order by term
+                """
+            ).fetchall()
+        )
+        return actual == expected
+    finally:
+        connection.execute("drop table if exists source_object_search_fts_vocab_check")
+
+
+def source_object_fts_validation_terms(rows: list[sqlite3.Row]) -> tuple[str, ...]:
+    terms: list[str] = []
+    for row in rows:
+        for token in re.findall(
+            r"(?u)\b\w+\b",
+            " ".join(
+                (
+                    row["title"] or "",
+                    row["heading_path"] or "",
+                    row["object_type"] or "",
+                    row["search_text"] or "",
+                )
+            ).casefold(),
+        ):
+            if len(token) >= 3 and token not in terms:
+                terms.append(token)
+    return tuple(terms)
 
 
 def load_book_pages(
@@ -428,6 +750,398 @@ def replace_book_source_objects(
             where idempotency_key = ?
             """,
             (now, now, job_id),
+        )
+
+
+def rebuild_source_object_search(
+    config: AppConfig,
+    *,
+    book_ids: tuple[str, ...] | None = None,
+    force: bool = False,
+    retry_running: bool = False,
+    stale_running_minutes: int = 30,
+) -> ObjectSearchRebuildSummary:
+    if not config.db_path.exists():
+        initialize_database(config.db_path).close()
+    apply_pending_migrations(config.db_path)
+    failures: list[ObjectSearchRebuildFailure] = []
+    indexed = 0
+    skipped_current = 0
+    objects_written = 0
+    with initialize_database(config.db_path) as connection:
+        stale_recovered = recover_stale_source_object_search_jobs(
+            connection,
+            retry_running=retry_running,
+            stale_running_minutes=stale_running_minutes,
+        )
+        books = source_object_search_book_ids(connection, book_ids=book_ids)
+        for book_id in books:
+            if not force and source_object_search_current(connection, book_id):
+                skipped_current += 1
+                continue
+
+            snapshot = source_object_search_snapshot_sha256(connection, book_id)
+            now = utc_timestamp()
+            job_id = source_object_search_job_id(book_id, snapshot)
+            if not claim_source_object_search_job(
+                connection,
+                book_id=book_id,
+                source_object_snapshot=snapshot,
+                force=force,
+                now=now,
+            ):
+                if failure_reason := source_object_search_claim_failure(
+                    connection,
+                    book_id,
+                ):
+                    failures.append(ObjectSearchRebuildFailure(book_id, failure_reason))
+                else:
+                    skipped_current += 1
+                continue
+            try:
+                written = write_source_object_search_projection(
+                    connection,
+                    book_id=book_id,
+                    job_id=job_id,
+                    now=utc_timestamp(),
+                )
+            except Exception as error:
+                mark_source_object_search_failed(
+                    connection,
+                    book_id=book_id,
+                    job_id=job_id,
+                    error=str(error),
+                    now=utc_timestamp(),
+                )
+                failures.append(ObjectSearchRebuildFailure(book_id, str(error)))
+                continue
+            indexed += 1
+            objects_written += written
+
+    return ObjectSearchRebuildSummary(
+        discovered=len(books),
+        indexed=indexed,
+        skipped_current=skipped_current,
+        stale_recovered=stale_recovered,
+        failed=len(failures),
+        objects_written=objects_written,
+        failures=tuple(failures),
+    )
+
+
+def source_object_search_book_ids(
+    connection: sqlite3.Connection,
+    *,
+    book_ids: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    sql = """
+        select distinct source_objects.book_id
+        from source_objects
+        join books on books.id = source_objects.book_id
+        where books.copy_status = 'copied'
+          and books.text_status = 'imported'
+          and books.search_status = 'indexed'
+    """
+    parameters: list[object] = []
+    if book_ids is not None:
+        if not book_ids:
+            return ()
+        placeholders = ",".join("?" for _ in book_ids)
+        sql += f" and source_objects.book_id in ({placeholders})"
+        parameters.extend(book_ids)
+    sql += " order by source_objects.book_id"
+    return tuple(row["book_id"] for row in connection.execute(sql, parameters).fetchall())
+
+
+def recover_stale_source_object_search_jobs(
+    connection: sqlite3.Connection,
+    *,
+    retry_running: bool,
+    stale_running_minutes: int,
+) -> int:
+    now = utc_timestamp()
+    stale_before = (
+        datetime.now(timezone.utc).replace(microsecond=0)
+        - timedelta(minutes=stale_running_minutes)
+    ).isoformat().replace("+00:00", "Z")
+    if retry_running:
+        rows = connection.execute(
+            """
+            select id, target_id
+            from ingest_jobs
+            where job_type = 'rebuild_source_object_fts'
+              and status = 'running'
+            """
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """
+            select id, target_id
+            from ingest_jobs
+            where job_type = 'rebuild_source_object_fts'
+              and status = 'running'
+              and updated_at < ?
+            """,
+            (stale_before,),
+        ).fetchall()
+    with connection:
+        for row in rows:
+            connection.execute(
+                """
+                update ingest_jobs
+                set status = 'failed',
+                    last_error = 'Recovered stale source-object FTS rebuild job.',
+                    updated_at = ?
+                where id = ?
+                """,
+                (now, row["id"]),
+            )
+            if row["target_id"]:
+                connection.execute(
+                    """
+                    update book_object_status
+                    set status = 'failed',
+                        last_error = 'Recovered stale source-object FTS rebuild job.',
+                        updated_at = ?
+                    where book_id = ?
+                      and status = 'indexing'
+                    """,
+                    (now, row["target_id"]),
+                )
+    return len(rows)
+
+
+def claim_source_object_search_job(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    source_object_snapshot: str,
+    force: bool,
+    now: str,
+) -> bool:
+    ensure_book_object_status(connection, book_id=book_id, now=now)
+    status = connection.execute(
+        "select status from book_object_status where book_id = ?",
+        (book_id,),
+    ).fetchone()
+    if status is not None and status["status"] in {"extracting", "indexing"}:
+        return False
+
+    job_id = source_object_search_job_id(book_id, source_object_snapshot)
+    with connection:
+        status_cursor = connection.execute(
+            """
+            update book_object_status
+            set status = 'indexing',
+                last_error = null,
+                updated_at = ?
+            where book_id = ?
+              and (
+                ? = 1
+                or status in ('not_started', 'failed', 'extracted', 'indexed')
+              )
+            """,
+            (now, book_id, int(force)),
+        )
+        if status_cursor.rowcount != 1:  # pragma: no cover - concurrent status guard
+            return False
+        cursor = connection.execute(
+            """
+            insert into ingest_jobs (
+              id,
+              job_type,
+              target_id,
+              status,
+              idempotency_key,
+              attempts,
+              last_error,
+              created_at,
+              updated_at,
+              completed_at
+            )
+            values (?, 'rebuild_source_object_fts', ?, 'running', ?, 1, null, ?, ?, null)
+            on conflict(idempotency_key) do update set
+              status = 'running',
+              attempts = ingest_jobs.attempts + 1,
+              last_error = null,
+              updated_at = excluded.updated_at,
+              completed_at = null
+            where ingest_jobs.status in ('queued', 'failed', 'succeeded')
+            """,
+            (job_id, book_id, job_id, now, now),
+        )
+        if cursor.rowcount != 1:
+            connection.execute(
+                """
+                update book_object_status
+                set status = 'failed',
+                    last_error = 'Could not claim source-object FTS rebuild job.',
+                    updated_at = ?
+                where book_id = ?
+                  and status = 'indexing'
+                """,
+                (now, book_id),
+            )
+            return False
+    return True
+
+
+def source_object_search_claim_failure(
+    connection: sqlite3.Connection,
+    book_id: str,
+) -> str | None:
+    row = connection.execute(
+        """
+        select status, last_error
+        from book_object_status
+        where book_id = ?
+        """,
+        (book_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["status"] == "failed" and row["last_error"]:
+        return str(row["last_error"])
+    return None
+
+
+def write_source_object_search_projection(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    job_id: str,
+    now: str,
+) -> int:
+    rows = connection.execute(
+        """
+        select
+          id,
+          book_id,
+          page_id,
+          object_type,
+          title,
+          heading_path_json,
+          page_start,
+          page_end,
+          confidence,
+          search_text,
+          text_snapshot_sha256
+        from source_objects
+        where book_id = ?
+        order by page_start, page_end, id
+        """,
+        (book_id,),
+    ).fetchall()
+    text_snapshot = common_text_snapshot(rows)
+    with connection:
+        connection.execute("delete from source_object_search where book_id = ?", (book_id,))
+        for row in rows:
+            connection.execute(
+                """
+                insert into source_object_search (
+                  source_object_id,
+                  book_id,
+                  page_id,
+                  object_type,
+                  title,
+                  heading_path,
+                  page_start,
+                  page_end,
+                  confidence,
+                  search_text
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["book_id"],
+                    row["page_id"],
+                    row["object_type"],
+                    row["title"],
+                    heading_path_text(row["heading_path_json"]),
+                    row["page_start"],
+                    row["page_end"],
+                    row["confidence"],
+                    row["search_text"],
+                ),
+            )
+        rebuild_source_object_fts_table(connection)
+        connection.execute(
+            """
+            update book_object_status
+            set status = 'indexed',
+                object_count = ?,
+                table_count = ?,
+                stat_block_count = ?,
+                location_count = ?,
+                text_snapshot_sha256 = ?,
+                last_error = null,
+                updated_at = ?
+            where book_id = ?
+            """,
+            (
+                len(rows),
+                count_object_type(rows, "table"),
+                count_object_type(rows, "stat_block"),
+                count_object_type(rows, "location_description"),
+                text_snapshot,
+                now,
+                book_id,
+            ),
+        )
+        connection.execute(
+            """
+            update ingest_jobs
+            set status = 'succeeded',
+                last_error = null,
+                updated_at = ?,
+                completed_at = ?
+            where idempotency_key = ?
+            """,
+            (now, now, job_id),
+        )
+    return len(rows)
+
+
+def common_text_snapshot(rows: tuple[sqlite3.Row, ...] | list[sqlite3.Row]) -> str | None:
+    snapshots = {row["text_snapshot_sha256"] for row in rows}
+    if len(snapshots) == 1:
+        return str(next(iter(snapshots)))
+    return None
+
+
+def count_object_type(rows: tuple[sqlite3.Row, ...] | list[sqlite3.Row], object_type: str) -> int:
+    return sum(1 for row in rows if row["object_type"] == object_type)
+
+
+def mark_source_object_search_failed(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    job_id: str,
+    error: str,
+    now: str,
+) -> None:
+    with connection:
+        connection.execute(
+            """
+            update book_object_status
+            set status = 'failed',
+                last_error = ?,
+                updated_at = ?
+            where book_id = ?
+            """,
+            (error, now, book_id),
+        )
+        connection.execute(
+            """
+            update ingest_jobs
+            set status = 'failed',
+                last_error = ?,
+                updated_at = ?
+            where idempotency_key = ?
+            """,
+            (error, now, job_id),
         )
 
 

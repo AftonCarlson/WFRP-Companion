@@ -205,6 +205,19 @@ retrieval modules:
   checked books into `retrieval_run_source_books`, preserving a queryable proof
   of Library scope alongside the JSON compatibility metadata.
 
+Phase 7 PR6 adds a standalone source-object search backfill path:
+
+- `wfrp_companion/source_objects/store.py::rebuild_source_object_search()`
+  rebuilds `source_object_search` and `source_object_search_fts` from current
+  `source_objects` without rerunning source-object extraction.
+- `tools/rebuild_source_object_fts.py` is the count-oriented local CLI for
+  repairing missing or stale object-search projections.
+- The backfill uses existing `ingest_jobs(job_type='rebuild_source_object_fts')`
+  and `book_object_status.status='indexing'/'indexed'` transitions so projection
+  readiness stays explicit and repairable. Currentness checks validate both the
+  projection rows and the FTS index rowids, object-type postings, and
+  vocabulary before skipping a rebuild.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval/source-object metadata. The current populated runtime
@@ -214,8 +227,9 @@ runs, and the `book_readiness` view. Source-set state is now populated in
 `source_sets`, `source_set_books`, and `app_settings.active_source_set_id`.
 Typed source-object tables can now be populated with deterministic
 `rule_section` and `page_chunk` rows, and their object search projections are
-rebuilt during extraction. Durable source-map/profile metadata can now be
-rebuilt from those source objects into `book_source_maps` and
+rebuilt during extraction or repaired independently with
+`tools/rebuild_source_object_fts.py`. Durable source-map/profile metadata can
+now be rebuilt from those source objects into `book_source_maps` and
 `book_query_profiles`, with lifecycle status in `book_retrieval_status`.
 The local API now surfaces library, source-set, exact-search, page-text,
 managed-PDF reader, and streaming chat operations. The frontend now surfaces

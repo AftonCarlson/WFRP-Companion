@@ -146,6 +146,22 @@ retrieval path:
   `retrieval_runs.metadata_json.source_book_ids` remains a compatibility
   snapshot.
 
+Phase 7 PR6 adds a repair/backfill path for source-object search projections:
+
+- `wfrp_companion/source_objects/store.py` now has
+  `rebuild_source_object_search()` to rebuild `source_object_search` and
+  `source_object_search_fts` from existing `source_objects`.
+- `tools/rebuild_source_object_fts.py` repairs databases where typed
+  source-object rows exist but their lexical object-search projection is
+  missing or stale.
+- The tool uses `ingest_jobs(job_type='rebuild_source_object_fts')`, updates
+  `book_object_status.status='indexed'` after successful projection rebuilds,
+  validates FTS rowids, object-type postings, and vocabulary against the
+  current projection before skipping, and reports only counts plus bounded
+  failure reasons.
+- This remains a lexical/object candidate maintenance tool. It does not add
+  vector retrieval, new extraction heuristics, or public/private text exports.
+
 ## Answer Contract
 
 [coverage: high]

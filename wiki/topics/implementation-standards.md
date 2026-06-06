@@ -45,6 +45,8 @@ The current codebase has working local implementations for steps 1 through 6:
   source-map/profile metadata after source objects are current. Familiar uses
   current durable source maps when available and falls back safely when they are
   stale, missing, or malformed.
+- `tools/rebuild_source_object_fts.py` now repairs source-object search and
+  FTS projections from existing `source_objects` without rerunning extraction.
 
 ## Rules For New Code
 
@@ -86,6 +88,9 @@ The current codebase has working local implementations for steps 1 through 6:
   include all current books.
 - Run `tools/extract_source_objects.py` after page text import and global FTS
   rebuild when typed source-object rows need to be refreshed.
+- Run `tools/rebuild_source_object_fts.py` when existing `source_objects` need
+  their `source_object_search` / `source_object_search_fts` projection repaired
+  without rerunning extraction.
 - Run `tools/rebuild_source_maps.py` after source-object extraction when
   durable Familiar source-map/profile metadata needs to be refreshed.
 - Treat `source_set_books.enabled` as scope membership only. Do not use it as a
@@ -143,6 +148,8 @@ database behavior should preserve these constraints:
 - Treat `source_objects` as canonical private local structured evidence and
   `source_object_search` / `source_object_search_fts` as rebuildable
   projections.
+- Object-search repair tools must rebuild projections from `source_objects` and
+  report only counts and bounded failure reasons, never extracted private text.
 - Keep source-object extractor output count-oriented. Do not log or commit
   extracted book text.
 - Keep retrieval-asset lifecycle state explicit in `book_retrieval_status`;

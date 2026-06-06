@@ -1,5 +1,32 @@
 # Wiki Compile Log
 
+## 2026-06-05 Source-Object Search Backfill
+
+- Added `rebuild_source_object_search()` in
+  `wfrp_companion/source_objects/store.py` to rebuild
+  `source_object_search` and `source_object_search_fts` from existing
+  `source_objects` without rerunning extraction.
+- Added `tools/rebuild_source_object_fts.py` as a count-only local repair tool
+  for missing or stale source-object search projections.
+- The backfill uses `ingest_jobs(job_type='rebuild_source_object_fts')`,
+  stale-running recovery, claim-conflict failure reporting, and
+  `book_object_status` transitions to keep object-search readiness explicit.
+- Review fixes strengthened idempotent skip behavior so stale FTS indexes and
+  failed/stale `book_object_status` rows are repaired instead of reported as
+  current.
+- Verification run for this pass: focused store/tool coverage reported 27 tests
+  passing with 100.00% coverage; post-review focused coverage reported 29
+  tests passing with 100.00% coverage; final focused coverage reported 31 tests
+  passing with 100.00% coverage after FTS vocabulary/rowid validation was
+  added; object-type posting validation brought final focused coverage to 32
+  tests passing with 100.00% coverage; full Python tests reported 345 tests
+  passing with one existing
+  Starlette/httpx deprecation warning and 100.00% coverage;
+  `ruff check .` passed; frontend Vitest reported 127 tests passing; frontend
+  coverage passed above configured thresholds; frontend production build passed
+  with the existing large PDF worker chunk warning; Playwright e2e reported 2
+  tests passing.
+
 ## 2026-06-05 Durable Source-Map Retrieval Ownership
 
 - Added migration `0002_source_map_retrieval` for
