@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -12,6 +13,11 @@ from wfrp_companion.assistant.query_planner import terms_are_close
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.library import source_sets
+from wfrp_companion.source_objects.source_map_builder import (
+    BUILDER_VERSION,
+    SCHEMA_VERSION,
+    source_object_snapshot_sha256,
+)
 
 
 SOURCE_MAP_PAGE_CHAR_LIMIT = 180_000
@@ -104,6 +110,8 @@ def source_map_entry_from_book_row(
     *,
     query_terms: tuple[str, ...],
 ) -> SourceMapEntry:
+    if durable_entry := current_durable_source_map_entry(connection, row):
+        return durable_entry
     chapters = source_map_chapters(connection, row["id"])
     aliases = source_map_aliases(
         connection,
@@ -128,6 +136,62 @@ def source_map_entry_from_book_row(
         best_source_for=infer_best_source_for(row["category"], aliases, query_terms),
         chapters=chapters,
     )
+
+def current_durable_source_map_entry(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> SourceMapEntry | None:
+    current_snapshot = source_object_snapshot_sha256(connection, row["id"])
+    durable = connection.execute(
+        """
+        select
+          book_source_maps.summary,
+          book_source_maps.aliases_json,
+          book_source_maps.chapters_json,
+          book_source_maps.best_source_for_json
+        from book_source_maps
+        join book_retrieval_status
+          on book_retrieval_status.book_id = book_source_maps.book_id
+        where book_source_maps.book_id = ?
+          and book_source_maps.source_object_snapshot_sha256 = ?
+          and book_source_maps.schema_version = ?
+          and book_source_maps.builder_version = ?
+          and book_retrieval_status.source_map_status = 'indexed'
+          and book_retrieval_status.source_map_snapshot_sha256 = ?
+        """,
+        (
+            row["id"],
+            current_snapshot,
+            SCHEMA_VERSION,
+            BUILDER_VERSION,
+            current_snapshot,
+        ),
+    ).fetchone()
+    if durable is None:
+        return None
+    aliases = string_tuple_from_json(durable["aliases_json"])
+    best_source_for = string_tuple_from_json(durable["best_source_for_json"])
+    chapters = string_tuple_from_json(durable["chapters_json"])
+    if aliases is None or best_source_for is None or chapters is None:
+        return None
+    return SourceMapEntry(
+        book_id=row["id"],
+        title=row["title"],
+        category=row["category"],
+        summary=durable["summary"],
+        aliases=aliases,
+        best_source_for=best_source_for,
+        chapters=chapters,
+    )
+
+def string_tuple_from_json(value: str) -> tuple[str, ...] | None:
+    try:
+        parsed = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, list):
+        return None
+    return tuple(item for item in parsed if isinstance(item, str))
 
 def source_map_chapters(
     connection: sqlite3.Connection,

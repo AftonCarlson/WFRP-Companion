@@ -28,6 +28,15 @@ def make_config(tmp_path: Path) -> AppConfig:
 
 
 def insert_indexed_book(config: AppConfig, *, book_id: str = "rules") -> None:
+    relative_path = "Core/Rules Primer.pdf"
+    original_source_path = "/source/Rules Primer.pdf"
+    original_sha256 = "source-sha"
+    managed_sha256 = "managed-sha"
+    if book_id != "rules":
+        relative_path = f"Core/{book_id}.pdf"
+        original_source_path = f"/source/{book_id}.pdf"
+        original_sha256 = f"source-sha-{book_id}"
+        managed_sha256 = f"managed-sha-{book_id}"
     with initialize_database(config.db_path) as connection:
         connection.execute(
             """
@@ -61,11 +70,11 @@ def insert_indexed_book(config: AppConfig, *, book_id: str = "rules") -> None:
               'core',
               'Rules Primer',
               'Core',
-              'Core/Rules Primer.pdf',
-              '/source/Rules Primer.pdf',
+              ?,
+              ?,
               '/managed/missing.pdf',
-              'source-sha',
-              'managed-sha',
+              ?,
+              ?,
               2,
               'copied',
               'imported',
@@ -75,7 +84,13 @@ def insert_indexed_book(config: AppConfig, *, book_id: str = "rules") -> None:
               '2026-06-05T00:00:00Z'
             )
             """,
-            (book_id,),
+            (
+                book_id,
+                relative_path,
+                original_source_path,
+                original_sha256,
+                managed_sha256,
+            ),
         )
         pages = (
             (

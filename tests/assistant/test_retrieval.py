@@ -14,6 +14,11 @@ from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database, open_connection
 from wfrp_companion.library import source_sets
 from wfrp_companion.search.fts import rebuild_global_fts
+from wfrp_companion.source_objects.source_map_builder import (
+    BUILDER_VERSION,
+    SCHEMA_VERSION,
+    source_object_snapshot_sha256,
+)
 
 
 def make_config(tmp_path: Path) -> AppConfig:
@@ -252,6 +257,281 @@ def test_retrieval_uses_current_enabled_books_not_stale_thread_snapshot(
     assert context.source_book_ids == ("barony",)
     assert [hit.book_id for hit in context.hits] == ["barony"]
     assert all(entry.book_id == "barony" for entry in context.source_map)
+
+
+def test_source_map_reads_current_durable_maps_for_checked_books(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Critical hit rules are here.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Chapter I: Combat", "Critical Hits"),
+            page_start=1,
+            page_end=1,
+            text="Critical hit rules are here.",
+        )
+        insert_searchable_page(
+            connection,
+            book_id="barony",
+            title="Barony of the Damned",
+            category="Adventure Modules and Campaigns",
+            page_number=1,
+            text="The black knight waits here.",
+        )
+        insert_source_object(
+            connection,
+            object_id="barony:black-knight",
+            book_id="barony",
+            page_id="barony:1",
+            object_type="encounter",
+            title="Black Knight",
+            heading_path=("Chapter II", "Black Knight"),
+            page_start=1,
+            page_end=1,
+            text="The black knight waits here.",
+        )
+        core_snapshot = source_object_snapshot_sha256(connection, "core-rules")
+        barony_snapshot = source_object_snapshot_sha256(connection, "barony")
+        for book_id, snapshot, summary, aliases, chapters, best_source_for in (
+            (
+                "core-rules",
+                core_snapshot,
+                "Durable Core summary.",
+                ("durable-critical", "durable-rules"),
+                ("Durable Combat",),
+                ("rules_lookup",),
+            ),
+            (
+                "barony",
+                barony_snapshot,
+                "Unchecked durable adventure summary.",
+                ("unchecked-leak",),
+                ("Unchecked Chapter",),
+                ("adventure_scene_lookup",),
+            ),
+        ):
+            connection.execute(
+                """
+                insert into book_retrieval_status (book_id, updated_at)
+                values (?, '2026-06-05T00:00:00Z')
+                """,
+                (book_id,),
+            )
+            connection.execute(
+                """
+                update book_retrieval_status
+                set source_map_status = 'indexed',
+                    source_object_snapshot_sha256 = ?,
+                    source_map_snapshot_sha256 = ?,
+                    updated_at = '2026-06-05T00:00:00Z'
+                where book_id = ?
+                """,
+                (snapshot, snapshot, book_id),
+            )
+            connection.execute(
+                """
+                insert into book_source_maps (
+                  book_id,
+                  summary,
+                  aliases_json,
+                  chapters_json,
+                  best_source_for_json,
+                  source_object_snapshot_sha256,
+                  schema_version,
+                  builder_version,
+                  created_at,
+                  updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, '2026-06-05T00:00:00Z',
+                        '2026-06-05T00:00:00Z')
+                """,
+                (
+                    book_id,
+                    summary,
+                    json.dumps(list(aliases)),
+                    json.dumps(list(chapters)),
+                    json.dumps(list(best_source_for)),
+                    snapshot,
+                    SCHEMA_VERSION,
+                    BUILDER_VERSION,
+                ),
+            )
+
+    source_map = retrieval.build_enabled_source_map(
+        config,
+        ("core-rules",),
+        query_terms=("critical",),
+    )
+
+    assert len(source_map) == 1
+    assert source_map[0].book_id == "core-rules"
+    assert source_map[0].summary == "Durable Core summary."
+    assert source_map[0].aliases == ("durable-critical", "durable-rules")
+    assert source_map[0].chapters == ("Durable Combat",)
+    assert source_map[0].best_source_for == ("rules_lookup",)
+    assert all(entry.book_id != "barony" for entry in source_map)
+    assert "unchecked-leak" not in source_map[0].aliases
+
+
+def test_source_map_falls_back_when_durable_map_is_stale_or_malformed(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Critical hit rules are here.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Chapter I: Combat", "Critical Hits"),
+            page_start=1,
+            page_end=1,
+            text="Critical hit rules are here.",
+        )
+        snapshot = source_object_snapshot_sha256(connection, "core-rules")
+        connection.execute(
+            """
+            insert into book_retrieval_status (book_id, updated_at)
+            values ('core-rules', '2026-06-05T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            update book_retrieval_status
+            set source_map_status = 'indexed',
+                source_object_snapshot_sha256 = ?,
+                source_map_snapshot_sha256 = 'stale-snapshot',
+                updated_at = '2026-06-05T00:00:00Z'
+            where book_id = 'core-rules'
+            """,
+            (snapshot,),
+        )
+        connection.execute(
+            """
+            insert into book_source_maps (
+              book_id,
+              summary,
+              aliases_json,
+              chapters_json,
+              best_source_for_json,
+              source_object_snapshot_sha256,
+              schema_version,
+              builder_version,
+              created_at,
+              updated_at
+            )
+            values ('core-rules', 'Stale durable summary.', '{bad json',
+                    '["Stale Chapter"]', '["rules_lookup"]', ?, ?, ?,
+                    '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z')
+            """,
+            (snapshot, SCHEMA_VERSION, BUILDER_VERSION),
+        )
+
+    source_map = retrieval.build_enabled_source_map(
+        config,
+        ("core-rules",),
+        query_terms=("critical",),
+    )
+
+    assert len(source_map) == 1
+    assert source_map[0].summary != "Stale durable summary."
+    assert "Critical Hits" in source_map[0].chapters
+
+
+def test_source_map_falls_back_when_current_durable_map_is_malformed(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Critical hit rules are here.",
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Chapter I: Combat", "Critical Hits"),
+            page_start=1,
+            page_end=1,
+            text="Critical hit rules are here.",
+        )
+        snapshot = source_object_snapshot_sha256(connection, "core-rules")
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              source_map_status,
+              source_object_snapshot_sha256,
+              source_map_snapshot_sha256,
+              updated_at
+            )
+            values ('core-rules', 'indexed', ?, ?,
+                    '2026-06-05T00:00:00Z')
+            """,
+            (snapshot, snapshot),
+        )
+        connection.execute(
+            """
+            insert into book_source_maps (
+              book_id,
+              summary,
+              aliases_json,
+              chapters_json,
+              best_source_for_json,
+              source_object_snapshot_sha256,
+              schema_version,
+              builder_version,
+              created_at,
+              updated_at
+            )
+            values ('core-rules', 'Malformed durable summary.', '{bad json',
+                    '["Current Chapter"]', '["rules_lookup"]', ?, ?, ?,
+                    '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z')
+            """,
+            (snapshot, SCHEMA_VERSION, BUILDER_VERSION),
+        )
+
+    source_map = retrieval.build_enabled_source_map(
+        config,
+        ("core-rules",),
+        query_terms=("critical",),
+    )
+
+    assert len(source_map) == 1
+    assert source_map[0].summary != "Malformed durable summary."
+    assert "Critical Hits" in source_map[0].chapters
 
 
 def test_retrieval_broad_pool_reranks_relevant_hit_over_filler(
@@ -580,6 +860,9 @@ def test_source_map_and_candidate_helper_edges(
 
     with open_connection(config.db_path) as connection:
         assert len(retrieval.source_map_chapters(connection, "core-rules")) == 10
+        assert retrieval_source_map.string_tuple_from_json("{bad json") is None
+        assert retrieval_source_map.string_tuple_from_json('{"not": "a list"}') is None
+        assert retrieval_source_map.string_tuple_from_json('[3, "ok"]') == ("ok",)
         aliases = retrieval.source_map_aliases(
             connection,
             "core-rules",

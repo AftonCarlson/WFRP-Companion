@@ -186,6 +186,25 @@ Phase 7 PR4 keeps retrieval behavior stable while splitting
   object-search backfills, rank fusion, vector candidates, table/stat/glossary
   extraction, and page-label calibration.
 
+Phase 7 PR5 adds durable source-map/profile ownership over those focused
+retrieval modules:
+
+- Migration `0002_source_map_retrieval` adds `book_retrieval_status`,
+  `book_source_maps`, and `retrieval_run_source_books` to both fresh schemas
+  and migrated SQLite databases.
+- `wfrp_companion/source_objects/source_map_builder.py` owns source-map
+  eligibility, source-map input snapshots, guarded rebuild jobs, stale-running
+  recovery, source-map persistence, and derived `book_query_profiles` rebuilds.
+- `tools/rebuild_source_maps.py` is the local count-oriented CLI for rebuilding
+  those source maps after source-object extraction.
+- `wfrp_companion/assistant/source_map.py` now prefers current durable
+  `book_source_maps` for the checked books on a Familiar run and falls back to
+  dynamic source-map construction for missing, stale, or malformed durable
+  rows.
+- `wfrp_companion/assistant/chat_store.py` snapshots each retrieval run's
+  checked books into `retrieval_run_source_books`, preserving a queryable proof
+  of Library scope alongside the JSON compatibility metadata.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval/source-object metadata. The current populated runtime
@@ -195,7 +214,9 @@ runs, and the `book_readiness` view. Source-set state is now populated in
 `source_sets`, `source_set_books`, and `app_settings.active_source_set_id`.
 Typed source-object tables can now be populated with deterministic
 `rule_section` and `page_chunk` rows, and their object search projections are
-rebuilt during extraction.
+rebuilt during extraction. Durable source-map/profile metadata can now be
+rebuilt from those source objects into `book_source_maps` and
+`book_query_profiles`, with lifecycle status in `book_retrieval_status`.
 The local API now surfaces library, source-set, exact-search, page-text,
 managed-PDF reader, and streaming chat operations. The frontend now surfaces
 library selection, exact search, page-text expansion, PDF reading, and the
@@ -256,6 +277,9 @@ Important schema decisions:
   `queued`, `retrieving`, `calling_model`, `completed`, or `failed`.
 - `retrieval_runs` and `retrieval_hits` record the exact pages used for a chat
   answer; citations point back to `books` and `pages`.
+- `retrieval_run_source_books` records the exact checked books considered by a
+  retrieval run, including the source-set id and book-title snapshot. This is
+  the relational audit trail for Library checkbox scope.
 - `retrieval_hits` is now forward-compatible with typed retrieval: it has an
   app-owned `id`, optional `source_object_id`, and immutable snapshot columns
   for source-object type, title, heading path, confidence, rank reasons,
@@ -266,8 +290,16 @@ Important schema decisions:
 - `book_object_status` owns the future source-object extraction/indexing
   lifecycle per book. Frontend inference and incidental FTS row presence should
   not replace that lifecycle state.
-- `book_query_profiles` stores future deterministic per-book query-type boost
-  evidence; do not hard-code boost assumptions in the frontend.
+- `book_retrieval_status` owns per-book retrieval-asset lifecycle state for
+  source maps, future table indexes, future vectors, and page-label
+  calibration.
+- `book_source_maps` owns compact per-book retrieval routing metadata:
+  summaries, aliases, chapters, best-source-for query types, and future
+  index/glossary term lists. It is private local metadata derived from
+  source-object state.
+- `book_query_profiles` stores deterministic per-book query-type boost
+  evidence derived from `book_source_maps`; do not hard-code boost assumptions
+  in the frontend.
 - The built-in `rules-core` / `Rules/Core` source set enables
   `Core Book & GM Essentials` and `Rules and Mechanics Toolkits` by default and
   leaves other categories disabled until the user enables individual books.

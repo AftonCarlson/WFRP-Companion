@@ -10,9 +10,9 @@ path, Phase 3 source-set management/search scoping, Phase 4 local FastAPI
 backend API, Phase 5 browser GUI, Phase 6 Familiar chat loop, Phase 7 PR1
 source-object migration/model foundation, Phase 7 PR2 deterministic
 source-object extraction foundation, Phase 7 PR3 Familiar source-map/object
-retrieval, and Phase 7 PR4 retrieval-module split. Python testing runs through
-the `wfrp-companion` Conda environment. Frontend testing runs through npm in
-`frontend/`.
+retrieval, Phase 7 PR4 retrieval-module split, and Phase 7 PR5 durable
+source-map/profile ownership. Python testing runs through the `wfrp-companion`
+Conda environment. Frontend testing runs through npm in `frontend/`.
 
 ## Expected Coverage
 
@@ -60,7 +60,7 @@ Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_maps --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
 ```
 
 Current frontend verification commands:
@@ -113,10 +113,12 @@ Current focused test files:
 - `tests/tools/test_dev.py`
 - `tests/tools/test_migrate_db.py`
 - `tests/tools/test_extract_source_objects.py`
+- `tests/tools/test_rebuild_source_maps.py`
 - `tests/tools/test_source_sets_cli.py`
 - `tests/source_objects/test_models.py`
 - `tests/source_objects/test_extractor.py`
 - `tests/source_objects/test_layout.py`
+- `tests/source_objects/test_source_map_builder.py`
 - `tests/source_objects/test_store.py`
 - `frontend/src/**/*.test.ts`
 - `frontend/src/**/*.test.tsx`
@@ -131,7 +133,10 @@ source-object constraints and deterministic normalized IDs, source-object
 extraction lifecycle/status/job behavior, text snapshot hashing, layout
 fallback, OCR confidence metadata, heading-derived rule sections, page-chunk
 fallback, same-page/same-title object ID stability, the
-`tools/extract_source_objects.py` CLI entrypoint, the `tools/init_db.py` CLI
+`tools/extract_source_objects.py` CLI entrypoint, source-map rebuild lifecycle,
+book retrieval status backfill, durable source-map freshness/fallback behavior,
+source-map query-profile rebuilds, `retrieval_run_source_books` snapshots,
+the `tools/rebuild_source_maps.py` CLI entrypoint, the `tools/init_db.py` CLI
 entrypoint, managed PDF identity, recursive discovery, SHA/atomic-copy storage
 helpers, idempotent library import, copy-job recovery, collision/failure
 reporting, the `tools/import_pdfs.py` CLI entrypoint,
@@ -157,7 +162,7 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-05 reported 300 tests
+The latest full backend verification command on 2026-06-05 reported 325 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 127 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful

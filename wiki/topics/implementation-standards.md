@@ -41,6 +41,10 @@ The current codebase has working local implementations for steps 1 through 6:
   foundation: explicit migrations, typed model contracts, deterministic
   `rule_section` and `page_chunk` extraction, and object extraction lifecycle
   state for future object-aware retrieval.
+- `tools/rebuild_source_maps.py` now rebuilds durable checked-book
+  source-map/profile metadata after source objects are current. Familiar uses
+  current durable source maps when available and falls back safely when they are
+  stale, missing, or malformed.
 
 ## Rules For New Code
 
@@ -82,6 +86,8 @@ The current codebase has working local implementations for steps 1 through 6:
   include all current books.
 - Run `tools/extract_source_objects.py` after page text import and global FTS
   rebuild when typed source-object rows need to be refreshed.
+- Run `tools/rebuild_source_maps.py` after source-object extraction when
+  durable Familiar source-map/profile metadata needs to be refreshed.
 - Treat `source_set_books.enabled` as scope membership only. Do not use it as a
   replacement for readiness state.
 - Keep exact-search readiness gating in `search_exact()` and the `books`
@@ -139,6 +145,18 @@ database behavior should preserve these constraints:
   projections.
 - Keep source-object extractor output count-oriented. Do not log or commit
   extracted book text.
+- Keep retrieval-asset lifecycle state explicit in `book_retrieval_status`;
+  do not infer source-map/vector/table/page-label readiness from projection row
+  presence alone.
+- Treat `book_source_maps` as the owner of compact source-map routing metadata.
+  `book_query_profiles` is a derived boost table and should be rebuilt from the
+  current source map.
+- Source-map snapshots must include every input that can affect routing:
+  relevant book metadata plus source-object ids, types, titles, heading paths,
+  page ranges, and text snapshots.
+- Retrieval runs must snapshot checked books into `retrieval_run_source_books`
+  as queryable proof of Library checkbox scope. JSON metadata can remain for
+  compatibility, but should not be the only audit trail.
 
 ## Documentation Rules
 

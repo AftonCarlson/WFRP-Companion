@@ -30,6 +30,8 @@ REQUIRED_TABLES = {
     "source_objects",
     "source_object_links",
     "book_object_status",
+    "book_retrieval_status",
+    "book_source_maps",
     "book_query_profiles",
     "source_object_search",
     "source_object_search_fts",
@@ -37,6 +39,7 @@ REQUIRED_TABLES = {
     "chat_thread_source_books",
     "chat_messages",
     "retrieval_runs",
+    "retrieval_run_source_books",
     "retrieval_hits",
     "model_runs",
 }

@@ -1,5 +1,30 @@
 # Wiki Compile Log
 
+## 2026-06-05 Durable Source-Map Retrieval Ownership
+
+- Added migration `0002_source_map_retrieval` for
+  `book_retrieval_status`, `book_source_maps`, and
+  `retrieval_run_source_books`.
+- Added `wfrp_companion/source_objects/source_map_builder.py` and
+  `tools/rebuild_source_maps.py` so source-map/profile metadata is rebuilt from
+  current source objects with guarded jobs, stale-running recovery, count-only
+  output, and deterministic freshness snapshots.
+- Updated Familiar source-map loading so checked books use current durable
+  `book_source_maps` when available and safely fall back to dynamic checked-book
+  source maps when durable rows are missing, stale, or malformed.
+- Updated retrieval-run persistence to snapshot checked books into
+  `retrieval_run_source_books` as relational proof of Library checkbox scope.
+- Addressed independent review findings around claim-conflict failure
+  accounting, source-map freshness inputs, durable source-map loading, and
+  malformed durable-map fallback.
+- Verification run for this pass: focused changed-module coverage reported 61
+  tests passing with 100.00% coverage; full Python tests reported 325 tests
+  passing with one existing Starlette/httpx deprecation warning and 100.00%
+  coverage; `ruff check .` passed; frontend Vitest reported 127 tests passing;
+  frontend coverage passed above configured thresholds; frontend production
+  build passed with the existing large PDF worker chunk warning; Playwright e2e
+  reported 2 tests passing.
+
 ## 2026-06-05 Retrieval Module Split
 
 - Split the Familiar retrieval implementation into focused modules while

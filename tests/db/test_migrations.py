@@ -237,10 +237,12 @@ def create_legacy_phase6_database(db_path: Path) -> None:
               message_id,
               source_set_id,
               query,
-              created_at
+              created_at,
+              metadata_json
             )
             values ('retrieval-1', 'thread-1', 'message-1', 'rules-core',
-                    'critical hits', '2026-06-03T00:00:00Z');
+                    'critical hits', '2026-06-03T00:00:00Z',
+                    '{"source_book_ids": ["core-rules", "missing-book"]}');
 
             insert into retrieval_hits (retrieval_run_id, page_id, score, rank, snippet)
             values ('retrieval-1', 'core-rules:1', 0.5, 1, 'critical hits');
@@ -286,7 +288,10 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
 
     summary = apply_pending_migrations(db_path)
 
-    assert summary.applied == ("0001_phase_7_source_objects",)
+    assert summary.applied == (
+        "0001_phase_7_source_objects",
+        "0002_source_map_retrieval",
+    )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
         assert connection.execute("select count(*) from chat_messages").fetchone()[0] == 1
@@ -319,6 +324,47 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0002_source_map_retrieval",),
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "select count(*) from book_retrieval_status"
+            ).fetchone()[0]
+            == 1
+        )
+        run_source = connection.execute(
+            """
+            select retrieval_run_id, source_set_id, book_id, book_title_snapshot
+            from retrieval_run_source_books
+            where retrieval_run_id = 'retrieval-1'
+            """
+        ).fetchone()
+        assert (
+            connection.execute(
+                """
+                select count(*)
+                from retrieval_run_source_books
+                where retrieval_run_id = 'retrieval-1'
+                """
+            ).fetchone()[0]
+            == 1
+        )
+        assert run_source["source_set_id"] == "rules-core"
+        assert run_source["book_id"] == "core-rules"
+        assert run_source["book_title_snapshot"] == "Core Rules"
+
+
+def test_metadata_source_book_ids_ignores_invalid_metadata() -> None:
+    assert migrations.metadata_source_book_ids("{") == ()
+    assert migrations.metadata_source_book_ids('{"source_book_ids": "core-rules"}') == ()
+    assert migrations.metadata_source_book_ids(
+        '{"source_book_ids": ["core-rules", 3, null]}'
+    ) == ("core-rules",)
 
 
 def test_phase7_migration_allows_new_job_types_local_provider_and_object_hits(
@@ -343,6 +389,23 @@ def test_phase7_migration_allows_new_job_types_local_provider_and_object_hits(
             )
             values ('extract-1', 'extract_source_objects', 'core-rules',
                     'running', 'extract_source_objects:core-rules:sha', 1,
+                    '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into ingest_jobs (
+              id,
+              job_type,
+              target_id,
+              status,
+              idempotency_key,
+              attempts,
+              created_at,
+              updated_at
+            )
+            values ('source-map-1', 'rebuild_source_maps', 'core-rules',
+                    'running', 'rebuild_source_maps:core-rules:sha:v1', 1,
                     '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')
             """
         )
@@ -497,9 +560,15 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
     first = apply_pending_migrations(db_path)
     second = apply_pending_migrations(db_path)
 
-    assert first.applied == ("0001_phase_7_source_objects",)
+    assert first.applied == (
+        "0001_phase_7_source_objects",
+        "0002_source_map_retrieval",
+    )
     assert second.applied == ()
-    assert second.skipped == ("0001_phase_7_source_objects",)
+    assert second.skipped == (
+        "0001_phase_7_source_objects",
+        "0002_source_map_retrieval",
+    )
 
 
 def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
@@ -510,12 +579,22 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
 
     summary = apply_pending_migrations(db_path)
 
-    assert summary.applied == ("0001_phase_7_source_objects",)
+    assert summary.applied == (
+        "0001_phase_7_source_objects",
+        "0002_source_map_retrieval",
+    )
     with open_connection(db_path) as connection:
         assert (
             connection.execute(
                 "select id from schema_migrations where id = ?",
                 ("0001_phase_7_source_objects",),
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0002_source_map_retrieval",),
             ).fetchone()
             is not None
         )

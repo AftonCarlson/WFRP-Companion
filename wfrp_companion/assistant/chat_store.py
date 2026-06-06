@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -655,6 +655,13 @@ def record_retrieval_run(
                     now,
                 ),
             )
+            record_retrieval_run_source_books(
+                connection,
+                retrieval_run_id=retrieval_run_id,
+                source_set_id=source_set_id,
+                source_book_ids=source_book_ids,
+                captured_at=now,
+            )
             for hit in hits:
                 source_object_id = getattr(hit, "source_object_id", None)
                 object_type = getattr(hit, "object_type", None)
@@ -703,6 +710,42 @@ def record_retrieval_run(
                     ),
                 )
     return retrieval_run_id
+
+
+def record_retrieval_run_source_books(
+    connection: sqlite3.Connection,
+    *,
+    retrieval_run_id: str,
+    source_set_id: str | None,
+    source_book_ids: Sequence[str],
+    captured_at: str,
+) -> None:
+    for book_id in source_book_ids:
+        book = connection.execute(
+            "select title from books where id = ?",
+            (book_id,),
+        ).fetchone()
+        if book is None:
+            continue
+        connection.execute(
+            """
+            insert into retrieval_run_source_books (
+              retrieval_run_id,
+              source_set_id,
+              book_id,
+              book_title_snapshot,
+              captured_at
+            )
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                retrieval_run_id,
+                source_set_id,
+                book_id,
+                book["title"],
+                captured_at,
+            ),
+        )
 
 
 def retrieval_run_metadata(

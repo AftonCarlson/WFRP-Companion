@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-05 Retrieval module split
+Last compiled: 2026-06-05 Durable source-map retrieval ownership
 
 ## Topics
 

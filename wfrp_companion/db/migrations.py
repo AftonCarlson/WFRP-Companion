@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,7 +11,11 @@ from wfrp_companion.db.connection import open_connection
 
 MIGRATION_DIR = Path(__file__).with_name("migration_files")
 PHASE_7_MIGRATION_ID = "0001_phase_7_source_objects"
-MIGRATION_IDS: tuple[str, ...] = (PHASE_7_MIGRATION_ID,)
+SOURCE_MAP_RETRIEVAL_MIGRATION_ID = "0002_source_map_retrieval"
+MIGRATION_IDS: tuple[str, ...] = (
+    PHASE_7_MIGRATION_ID,
+    SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
+)
 
 
 @dataclass(frozen=True)
@@ -106,16 +111,20 @@ def migration_applied(connection: sqlite3.Connection, migration_id: str) -> bool
 
 
 def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
-    if migration_id != PHASE_7_MIGRATION_ID:
+    if migration_id == PHASE_7_MIGRATION_ID:
+        migration_function = apply_phase_7_source_objects
+        preflight_phase_7_source_objects(connection)
+    elif migration_id == SOURCE_MAP_RETRIEVAL_MIGRATION_ID:
+        migration_function = apply_source_map_retrieval
+    else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
-    preflight_phase_7_source_objects(connection)
     foreign_keys_enabled = connection.execute("pragma foreign_keys").fetchone()[0]
     try:
         connection.execute("pragma foreign_keys = off")
         connection.execute("begin")
         ensure_schema_migrations(connection)
-        apply_phase_7_source_objects(connection)
+        migration_function(connection)
         connection.execute(
             """
             insert into schema_migrations (id, applied_at)
@@ -143,6 +152,21 @@ def apply_phase_7_source_objects(connection: sqlite3.Connection) -> None:
     rebuild_model_runs_if_needed(connection)
     rebuild_retrieval_hits_if_needed(connection)
     create_phase_7_indexes(connection)
+
+
+def apply_source_map_retrieval(connection: sqlite3.Connection) -> None:
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{SOURCE_MAP_RETRIEVAL_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+    rebuild_ingest_jobs_if_needed(
+        connection,
+        required_job_type="rebuild_source_maps",
+    )
+    backfill_book_retrieval_status(connection)
+    backfill_retrieval_run_source_books(connection)
 
 
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
@@ -182,6 +206,9 @@ def collect_table_counts(connection: sqlite3.Connection) -> tuple[tuple[str, int
         "source_object_links",
         "book_object_status",
         "source_object_search",
+        "book_retrieval_status",
+        "book_source_maps",
+        "retrieval_run_source_books",
         "retrieval_hits",
         "model_runs",
         "ingest_jobs",
@@ -225,8 +252,12 @@ def column_names(connection: sqlite3.Connection, table_name: str) -> tuple[str, 
     return tuple(row["name"] for row in rows)
 
 
-def rebuild_ingest_jobs_if_needed(connection: sqlite3.Connection) -> None:
-    if "extract_source_objects" in table_sql(connection, "ingest_jobs"):
+def rebuild_ingest_jobs_if_needed(
+    connection: sqlite3.Connection,
+    *,
+    required_job_type: str = "extract_source_objects",
+) -> None:
+    if required_job_type in table_sql(connection, "ingest_jobs"):
         return
 
     connection.execute("drop index if exists ix_ingest_jobs_status")
@@ -261,6 +292,73 @@ def rebuild_ingest_jobs_if_needed(connection: sqlite3.Connection) -> None:
         """
     )
     connection.execute("drop table ingest_jobs_phase6")
+
+
+def backfill_book_retrieval_status(connection: sqlite3.Connection) -> None:
+    now = utc_timestamp()
+    connection.execute(
+        """
+        insert into book_retrieval_status (book_id, updated_at)
+        select books.id, ?
+        from books
+        where not exists (
+          select 1
+          from book_retrieval_status
+          where book_retrieval_status.book_id = books.id
+        )
+        """,
+        (now,),
+    )
+
+
+def backfill_retrieval_run_source_books(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        """
+        select id, source_set_id, created_at, metadata_json
+        from retrieval_runs
+        order by created_at, id
+        """
+    ).fetchall()
+    for row in rows:
+        source_book_ids = metadata_source_book_ids(row["metadata_json"])
+        for book_id in source_book_ids:
+            book = connection.execute(
+                "select title from books where id = ?",
+                (book_id,),
+            ).fetchone()
+            if book is None:
+                continue
+            connection.execute(
+                """
+                insert into retrieval_run_source_books (
+                  retrieval_run_id,
+                  source_set_id,
+                  book_id,
+                  book_title_snapshot,
+                  captured_at
+                )
+                values (?, ?, ?, ?, ?)
+                on conflict(retrieval_run_id, book_id) do nothing
+                """,
+                (
+                    row["id"],
+                    row["source_set_id"],
+                    book_id,
+                    book["title"],
+                    row["created_at"],
+                ),
+            )
+
+
+def metadata_source_book_ids(metadata_json: str) -> tuple[str, ...]:
+    try:
+        metadata = json.loads(metadata_json or "{}")
+    except json.JSONDecodeError:
+        return ()
+    source_book_ids = metadata.get("source_book_ids")
+    if not isinstance(source_book_ids, list):
+        return ()
+    return tuple(book_id for book_id in source_book_ids if isinstance(book_id, str))
 
 
 def rebuild_model_runs_if_needed(connection: sqlite3.Connection) -> None:
@@ -392,7 +490,8 @@ create table ingest_jobs (
     'scan_visual_assets',
     'render_page',
     'extract_source_objects',
-    'rebuild_source_object_fts'
+    'rebuild_source_object_fts',
+    'rebuild_source_maps'
   )),
   check(status in ('queued', 'running', 'succeeded', 'failed'))
 )

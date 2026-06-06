@@ -123,6 +123,29 @@ label issue, multi-page evidence requirement, and the research basis for using
 lexical search, vector search, source-object search, query rewriting, rank
 fusion, and semantic reranking together.
 
+Phase 7 PR5 adds durable source-map/profile ownership for the checked-book
+retrieval path:
+
+- Migration `0002_source_map_retrieval` adds `book_retrieval_status`,
+  `book_source_maps`, and `retrieval_run_source_books`.
+- `tools/rebuild_source_maps.py` builds local source maps for books that have
+  current source objects. It reports counts and failure reasons only; it must
+  not print private extracted book text.
+- `book_source_maps` owns compact per-book summaries, aliases, chapters, and
+  query-profile routing metadata. `book_query_profiles` is now repopulated as a
+  derived boost table during source-map rebuilds.
+- Source-map freshness is based on the source-map inputs that affect routing:
+  book title/category plus source-object ids, types, titles, heading paths,
+  page ranges, and text snapshots.
+- Familiar loads durable source maps only for the current checked-book
+  snapshot. Missing, stale, or malformed durable rows fall back to the dynamic
+  checked-book source-map builder rather than leaking unchecked source metadata
+  or weakening query planning.
+- `retrieval_run_source_books` snapshots the exact books considered by each
+  retrieval run in queryable relational form, while
+  `retrieval_runs.metadata_json.source_book_ids` remains a compatibility
+  snapshot.
+
 ## Answer Contract
 
 [coverage: high]

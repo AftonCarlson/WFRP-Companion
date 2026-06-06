@@ -116,6 +116,55 @@ def test_create_thread_snapshots_enabled_books(tmp_path: Path) -> None:
     assert new_detail.source_book_ids == ("barony",)
 
 
+def test_record_retrieval_run_snapshots_source_books_in_relationship_table(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="What sources are checked?",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+
+    retrieval_run_id = chat_store.record_retrieval_run(
+        config,
+        thread_id=thread.id,
+        message_id=queued.user_message.id,
+        source_set_id=thread.active_source_set_id,
+        query="What sources are checked?",
+        hits=(),
+        source_book_ids=("barony", "missing-book", "core-rules"),
+        source_map=(),
+        candidates=("checked sources",),
+    )
+
+    with open_connection(config.db_path) as connection:
+        metadata = connection.execute(
+            "select metadata_json from retrieval_runs where id = ?",
+            (retrieval_run_id,),
+        ).fetchone()["metadata_json"]
+        rows = connection.execute(
+            """
+            select source_set_id, book_id, book_title_snapshot
+            from retrieval_run_source_books
+            where retrieval_run_id = ?
+            order by book_id
+            """,
+            (retrieval_run_id,),
+        ).fetchall()
+
+    assert '"source_book_ids": ["barony", "missing-book", "core-rules"]' in metadata
+    assert [tuple(row) for row in rows] == [
+        ("rules-core", "barony", "Barony of the Damned"),
+        ("rules-core", "core-rules", "Core Rules"),
+    ]
+
+
 def test_create_thread_requires_active_or_existing_source_set(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     with initialize_database(config.db_path) as connection:
