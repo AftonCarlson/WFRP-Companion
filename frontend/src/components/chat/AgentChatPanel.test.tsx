@@ -41,19 +41,295 @@ describe("AgentChatPanel", () => {
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
   });
 
-  it("opens the placeholder chat history menu", async () => {
-    const user = userEvent.setup();
-    renderApp(<AgentChatHarness />);
-
-    await user.click(screen.getByRole("button", { name: "Open chat history" }));
+  it("loads chat history threads when the drawer is open", async () => {
+    const client = chatClient({
+      listChatThreads: async () => ({
+        threads: [
+          {
+            id: "thread-old",
+            title: "Old Rules Chat",
+            active_source_set_id: "rules-core",
+            source_book_count: 1,
+            created_at: "2026-06-06T00:00:00Z",
+            updated_at: "not-a-date",
+          },
+        ],
+      }),
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={true} />);
 
     expect(screen.getByText("Chat history")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Old Rules Chat/ })).toBeInTheDocument();
+    expect(screen.getByText("not-a-date")).toBeInTheDocument();
     expect(
-      screen.getByText(/chat persistence arrives in the agent phase/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Close chat history" }),
-    ).toBeInTheDocument();
+      screen.queryByText(/chat persistence arrives in the agent phase/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("selects a stored thread and continues sending in that thread", async () => {
+    const user = userEvent.setup();
+    const streamChatMessage = vi.fn(async (threadId, options) => {
+      options.onEvent({
+        type: "accepted",
+        user_message: {
+          id: "m-next",
+          thread_id: threadId,
+          role: "user",
+          content: options.content,
+          created_at: "now",
+        },
+        model_run: { ...modelRun("calling_model"), id: "run-next", thread_id: threadId },
+      });
+      options.onEvent({
+        type: "completed",
+        assistant_message: {
+          id: "a-next",
+          thread_id: threadId,
+          role: "assistant",
+          content: "Continued answer.",
+          created_at: "later",
+        },
+        model_run: { ...modelRun("completed"), id: "run-next", thread_id: threadId },
+        citations: [],
+      });
+    });
+    const client = chatClient({
+      listChatThreads: async () => ({
+        threads: [
+          {
+            id: "thread-old",
+            title: "Old Rules Chat",
+            active_source_set_id: "rules-core",
+            source_book_count: 1,
+            created_at: "2026-06-06T00:00:00Z",
+            updated_at: "2026-06-06T00:02:00Z",
+          },
+        ],
+      }),
+      getChatThread: async () => ({
+        thread: {
+          id: "thread-old",
+          title: "Old Rules Chat",
+          active_source_set_id: "rules-core",
+          source_book_count: 1,
+          created_at: "2026-06-06T00:00:00Z",
+          updated_at: "2026-06-06T00:02:00Z",
+        },
+        source_book_ids: ["core-rules"],
+        turns: [
+          {
+            user_message: {
+              id: "m-old",
+              thread_id: "thread-old",
+              role: "user",
+              content: "Loaded question",
+              created_at: "then",
+            },
+            assistant_message: {
+              id: "a-old",
+              thread_id: "thread-old",
+              role: "assistant",
+              content: "Loaded answer",
+              created_at: "then",
+            },
+            model_run: { ...modelRun("completed"), id: "run-old", thread_id: "thread-old" },
+            citations: [],
+          },
+        ],
+      }),
+      streamChatMessage,
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={true} />);
+
+    await user.click(await screen.findByRole("button", { name: /Old Rules Chat/ }));
+    expect(await screen.findByText("Loaded question")).toBeInTheDocument();
+    expect(screen.getByText("Loaded answer")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "continue");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(await screen.findByText("Continued answer.")).toBeInTheDocument();
+    expect(streamChatMessage).toHaveBeenCalledWith(
+      "thread-old",
+      expect.objectContaining({ content: "continue" }),
+    );
+  });
+
+  it("disables history thread selection while a message is streaming", async () => {
+    const user = userEvent.setup();
+    let finishStream!: () => void;
+    const streamChatMessage = vi.fn(
+      async (threadId, options) =>
+        new Promise<void>((resolve) => {
+          options.onEvent({
+            type: "accepted",
+            user_message: {
+              id: "m-active",
+              thread_id: threadId,
+              role: "user",
+              content: options.content,
+              created_at: "now",
+            },
+            model_run: { ...modelRun("calling_model"), id: "run-active", thread_id: threadId },
+          });
+          finishStream = () => {
+            options.onEvent({
+              type: "completed",
+              assistant_message: {
+                id: "a-active",
+                thread_id: threadId,
+                role: "assistant",
+                content: "Done.",
+                created_at: "later",
+              },
+              model_run: { ...modelRun("completed"), id: "run-active", thread_id: threadId },
+              citations: [],
+            });
+            resolve();
+          };
+        }),
+    );
+    const client = chatClient({
+      listChatThreads: async () => ({
+        threads: [
+          {
+            id: "thread-old",
+            title: "Old Rules Chat",
+            active_source_set_id: "rules-core",
+            source_book_count: 1,
+            created_at: "2026-06-06T00:00:00Z",
+            updated_at: "2026-06-06T00:02:00Z",
+          },
+        ],
+      }),
+      streamChatMessage,
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={true} />);
+
+    const historyButton = await screen.findByRole("button", { name: /Old Rules Chat/ });
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "streaming");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(historyButton).toBeDisabled());
+    finishStream();
+    expect(await screen.findByText("Done.")).toBeInTheDocument();
+  });
+
+  it("ignores late history loads while a message is streaming", async () => {
+    const user = userEvent.setup();
+    let resolveHistory!: (
+      detail: Awaited<ReturnType<ApiClient["getChatThread"]>>,
+    ) => void;
+    let finishStream!: () => void;
+    const streamChatMessage = vi.fn(
+      async (threadId, options) =>
+        new Promise<void>((resolve) => {
+          options.onEvent({
+            type: "accepted",
+            thread: {
+              id: threadId,
+              title: null,
+              active_source_set_id: "rules-core",
+              source_book_count: 1,
+              created_at: "now",
+              updated_at: "now",
+            },
+            user_message: {
+              id: "m-active",
+              thread_id: threadId,
+              role: "user",
+              content: options.content,
+              created_at: "now",
+            },
+            model_run: { ...modelRun("calling_model"), id: "run-active", thread_id: threadId },
+          });
+          finishStream = () => {
+            options.onEvent({
+              type: "completed",
+              thread: {
+                id: threadId,
+                title: null,
+                active_source_set_id: "rules-core",
+                source_book_count: 1,
+                created_at: "now",
+                updated_at: "later",
+              },
+              assistant_message: {
+                id: "a-active",
+                thread_id: threadId,
+                role: "assistant",
+                content: "Live answer.",
+                created_at: "later",
+              },
+              model_run: { ...modelRun("completed"), id: "run-active", thread_id: threadId },
+              citations: [],
+            });
+            resolve();
+          };
+        }),
+    );
+    const client = chatClient({
+      listChatThreads: async () => ({
+        threads: [
+          {
+            id: "thread-old",
+            title: "Old Rules Chat",
+            active_source_set_id: "rules-core",
+            source_book_count: 1,
+            created_at: "2026-06-06T00:00:00Z",
+            updated_at: "2026-06-06T00:02:00Z",
+          },
+        ],
+      }),
+      getChatThread: async () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+      streamChatMessage,
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={true} />);
+
+    await user.click(await screen.findByRole("button", { name: /Old Rules Chat/ }));
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "live");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("live")).toBeInTheDocument();
+    resolveHistory({
+      thread: {
+        id: "thread-old",
+        title: "Old Rules Chat",
+        active_source_set_id: "rules-core",
+        source_book_count: 1,
+        created_at: "2026-06-06T00:00:00Z",
+        updated_at: "2026-06-06T00:02:00Z",
+      },
+      source_book_ids: ["core-rules"],
+      turns: [
+        {
+          user_message: {
+            id: "m-old",
+            thread_id: "thread-old",
+            role: "user",
+            content: "Loaded old question",
+            created_at: "then",
+          },
+          assistant_message: {
+            id: "a-old",
+            thread_id: "thread-old",
+            role: "assistant",
+            content: "Loaded old answer",
+            created_at: "then",
+          },
+          model_run: { ...modelRun("completed"), id: "run-old", thread_id: "thread-old" },
+          citations: [],
+        },
+      ],
+    });
+    await expect(
+      screen.findByText("Loaded old question", undefined, { timeout: 100 }),
+    ).rejects.toThrow();
+    finishStream();
+
+    expect(await screen.findByText("Live answer.")).toBeInTheDocument();
+    expect(screen.queryByText("Loaded old answer")).not.toBeInTheDocument();
   });
 
   it("streams assistant output into the transcript", async () => {
@@ -116,6 +392,44 @@ describe("AgentChatPanel", () => {
     expect(await screen.findByText("Critical hits")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open Core Rules page 1" }));
     expect(opened).toEqual(["core-rules"]);
+  });
+
+  it("ignores stream updates for unknown model run ids", async () => {
+    const user = userEvent.setup();
+    const client = chatClient({
+      async streamChatMessage(threadId, options) {
+        options.onEvent({
+          type: "accepted",
+          user_message: {
+            id: "m1",
+            thread_id: threadId,
+            role: "user",
+            content: options.content,
+            created_at: "now",
+          },
+          model_run: { ...modelRun("calling_model"), id: "run-active" },
+        });
+        options.onEvent({
+          type: "completed",
+          assistant_message: {
+            id: "m2",
+            thread_id: threadId,
+            role: "assistant",
+            content: "Wrong target.",
+            created_at: "later",
+          },
+          model_run: { ...modelRun("completed"), id: "run-other" },
+          citations: [],
+        });
+      },
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={false} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "fear");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(await screen.findByText("fear")).toBeInTheDocument();
+    expect(screen.queryByText("Wrong target.")).not.toBeInTheDocument();
   });
 
   it("renders streamed markdown tables as readable tables", async () => {
@@ -187,6 +501,31 @@ describe("AgentChatPanel", () => {
               rank: 1,
               score: -1,
             },
+            {
+              book_id: "core-rules",
+              title: "Core Rules",
+              category: "Core",
+              page_id: "core-rules:132",
+              page_number: 132,
+              pdf_page_number: 132,
+              page_label: "132",
+              page_range_label: "132",
+              snippet: "Critical hit",
+              rank: 2,
+              score: -2,
+            },
+            {
+              book_id: "core-rules",
+              title: "Core Rules",
+              category: "Core",
+              page_id: "core-rules:7",
+              page_number: 7,
+              pdf_page_number: 8,
+              page_label: "7",
+              snippet: "Critical hit",
+              rank: 3,
+              score: -3,
+            },
           ],
         });
       },
@@ -208,6 +547,12 @@ describe("AgentChatPanel", () => {
         name: "Open Core Rules printed pages 132-133",
       }),
     );
+    expect(
+      screen.getByRole("button", { name: "Open Core Rules printed page 132" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open Core Rules printed page 7" }),
+    ).toBeInTheDocument();
     expect(opened).toEqual([133]);
   });
 

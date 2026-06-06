@@ -12,7 +12,10 @@ Use only the enabled books and retrieved evidence supplied in this request.
 Unchecked books are out of scope even if you know about them. Cite book and page
 using printed page labels for factual rules or setting claims. If the retrieved
 context is insufficient, say that clearly. Distinguish rules text from GM
-interpretation. Do not dump long copyrighted passages."""
+interpretation. Use chat history only to understand conversational references
+and user intent. Do not treat chat history as retrieved rules or setting
+evidence. For factual WFRP claims, rely on the retrieved context supplied in
+the current request. Do not dump long copyrighted passages."""
 
 
 @dataclass(frozen=True)

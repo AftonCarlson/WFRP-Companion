@@ -64,6 +64,13 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
         chat_context_hit_limit=config.chat_context_hit_limit,
         chat_context_char_limit=config.chat_context_char_limit,
         chat_context_window_chars=config.chat_context_window_chars,
+        chat_prompt_history_turn_limit=config.chat_prompt_history_turn_limit,
+        chat_prompt_history_char_limit=config.chat_prompt_history_char_limit,
+        chat_retrieval_history_turn_limit=config.chat_retrieval_history_turn_limit,
+        chat_retrieval_query_char_limit=config.chat_retrieval_query_char_limit,
+        embedding_provider=config.embedding_provider,
+        embedding_model=config.embedding_model,
+        embedding_dimensions=config.embedding_dimensions,
     )
 
 

@@ -21,6 +21,10 @@ class AppConfig:
     chat_context_hit_limit: int = 6
     chat_context_char_limit: int = 9000
     chat_context_window_chars: int = 1600
+    chat_prompt_history_turn_limit: int = 6
+    chat_prompt_history_char_limit: int = 2500
+    chat_retrieval_history_turn_limit: int = 3
+    chat_retrieval_query_char_limit: int = 900
     embedding_provider: str = "disabled"
     embedding_model: str = "local-hash-v1"
     embedding_dimensions: int = 64
@@ -52,6 +56,18 @@ def load_config(
         chat_context_hit_limit=int(source.get("WFRP_CHAT_CONTEXT_HIT_LIMIT", "6")),
         chat_context_char_limit=int(source.get("WFRP_CHAT_CONTEXT_CHAR_LIMIT", "9000")),
         chat_context_window_chars=int(source.get("WFRP_CHAT_CONTEXT_WINDOW_CHARS", "1600")),
+        chat_prompt_history_turn_limit=int(
+            source.get("WFRP_CHAT_PROMPT_HISTORY_TURN_LIMIT", "6")
+        ),
+        chat_prompt_history_char_limit=int(
+            source.get("WFRP_CHAT_PROMPT_HISTORY_CHAR_LIMIT", "2500")
+        ),
+        chat_retrieval_history_turn_limit=int(
+            source.get("WFRP_CHAT_RETRIEVAL_HISTORY_TURN_LIMIT", "3")
+        ),
+        chat_retrieval_query_char_limit=int(
+            source.get("WFRP_CHAT_RETRIEVAL_QUERY_CHAR_LIMIT", "900")
+        ),
         embedding_provider=source.get("WFRP_EMBEDDING_PROVIDER", "disabled"),
         embedding_model=source.get("WFRP_EMBEDDING_MODEL", "local-hash-v1"),
         embedding_dimensions=int(source.get("WFRP_EMBEDDING_DIMENSIONS", "64")),

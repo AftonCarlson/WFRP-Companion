@@ -297,6 +297,26 @@ Phase 7 PR10 adds printed page-label calibration/backfill:
 - Manual-review gaps do not produce printed-page labels; the UI can still open
   the PDF page by number while avoiding false printed citations.
 
+Phase 7 PR11 adds app-owned conversation context for Familiar:
+
+- `wfrp_companion/assistant/conversation_context.py` prepares bounded prompt
+  history and a separate history-aware retrieval query for each model run.
+- Prompt history uses only prior completed logical turns from the same thread;
+  failed, active, and current user messages are excluded.
+- Follow-up queries can include bounded recent chat terms for reference
+  resolution, while self-contained queries remain unchanged.
+- `retrieval_runs.query` stores the raw user message, and
+  `retrieval_runs.metadata_json` stores the planned retrieval query plus
+  history message ids/count/strategy for auditability.
+- `OpenAIProvider` passes `store=False` and does not use provider conversation
+  chaining, keeping SQLite as the only durable chat memory.
+- `load_turns()` collapses retries into one logical turn for API/frontend
+  reads, so a successful retry replaces the failed attempt in the visible chat
+  history.
+- `AgentChatPanel` now loads saved threads from the history drawer, restores
+  stored logical turns, continues sending in the selected thread, and targets
+  stream updates by `model_run.id`.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval/source-object metadata. The current populated runtime
@@ -316,10 +336,9 @@ be rebuilt into `book_page_label_calibrations`, with summary status also in
 `book_retrieval_status`.
 The local API now surfaces library, source-set, exact-search, page-text,
 managed-PDF reader, and streaming chat operations. The frontend now surfaces
-library selection, exact search, page-text expansion, PDF reading, and the
-first cited streaming Familiar chat loop. Later phases will deepen typed
-retrieval, chat history UX, campaign/session memory, visual assets, and
-adventure-generation workflows.
+library selection, exact search, page-text expansion, PDF reading, cited
+streaming Familiar chat, and saved chat history. Later phases will deepen
+campaign/session memory, visual assets, and adventure-generation workflows.
 
 ## Major Modules
 
@@ -367,13 +386,18 @@ Important schema decisions:
   source set. It is not a search-readiness flag.
 - `app_settings.active_source_set_id` stores the active source set for default
   retrieval/search scope.
-- `chat_thread_source_books` snapshots enabled books when a chat thread is
-  created. Existing threads do not silently change scope when the Library
-  toggles change later.
+- `chat_thread_source_books` preserves the thread-creation book snapshot for
+  historical display. New Familiar retrieval runs use the thread's
+  `active_source_set_id` and re-read enabled `source_set_books` at run time, so
+  the Library checkboxes remain authoritative for source maps, candidates,
+  prompt context, metadata, and citations.
 - `model_runs` is the app-owned source of truth for Familiar generation state:
   `queued`, `retrieving`, `calling_model`, `completed`, or `failed`.
 - `retrieval_runs` and `retrieval_hits` record the exact pages used for a chat
   answer; citations point back to `books` and `pages`.
+- `retrieval_runs.query` records the raw user message. For history-aware
+  follow-up queries, the planned retrieval query and bounded history metadata
+  live in `retrieval_runs.metadata_json`.
 - `retrieval_run_source_books` records the exact checked books considered by a
   retrieval run, including the source-set id and book-title snapshot. This is
   the relational audit trail for Library checkbox scope.

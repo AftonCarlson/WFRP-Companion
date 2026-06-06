@@ -266,6 +266,33 @@ Phase 7 PR10 adds printed page-label calibration/backfill:
 - Label lookup is a display/citation layer after retrieval selection; it does
   not expand source scope and cannot introduce unchecked-book evidence.
 
+Phase 7 PR11 adds Familiar prompt history and history-aware retrieval planning:
+
+- `wfrp_companion/assistant/conversation_context.py` builds the app-owned
+  conversation context for each Familiar run. It loads only prior completed
+  logical turns in the same thread, applies configurable turn/character
+  limits, and returns separate prompt-history and retrieval-query views.
+- Provider-side memory remains disabled. `OpenAIProvider` sends Responses API
+  requests with `store=False` and does not use provider conversation IDs or
+  `previous_response_id`; SQLite chat messages/model runs remain the durable
+  source of truth.
+- Chat history is **not evidence**. It may resolve pronouns or follow-up intent,
+  but factual WFRP claims still have to come from the current checked-book
+  retrieved evidence and citations.
+- Self-contained retrieval queries stay unchanged. Only follow-up/reference
+  queries add bounded recent chat terms to the retrieval query, and the raw
+  user query is still stored separately from the planned retrieval query in
+  `retrieval_runs.metadata_json`.
+- Familiar still resolves enabled books from the thread's active source set at
+  run time. Source maps, candidate generation, reranking, prompt context,
+  retrieval metadata, and citations remain constrained to that checked-book
+  snapshot.
+- The chat read model now collapses retries into one visible logical turn:
+  completed retries win, active retries are visible over failed attempts, and
+  otherwise the newest failed run is shown.
+- The browser history drawer loads saved threads, restores logical turns, and
+  disables thread switching while a stream is active.
+
 ## Answer Contract
 
 [coverage: high]
@@ -302,6 +329,12 @@ Phase 7 PR3 prompt construction also includes a compact source map for checked
 books and section-aware evidence labels such as object title, heading path, and
 printed page/page-range labels. Unchecked books are explicitly out of scope in
 the system prompt.
+
+Phase 7 PR11 prompt construction can include bounded prior chat messages before
+the current question. The system prompt explicitly says that recent chat is
+only for conversational references and user intent; it is not retrieved
+rules/evidence. Current retrieved context remains the only basis for cited WFRP
+claims.
 
 ## Streaming Provider Loop
 

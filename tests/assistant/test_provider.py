@@ -80,6 +80,9 @@ def test_openai_provider_streams_text_deltas_and_metadata() -> None:
     assert fake_client.responses.kwargs is not None
     assert fake_client.responses.kwargs["model"] == "gpt-5.4-mini"
     assert fake_client.responses.kwargs["stream"] is True
+    assert fake_client.responses.kwargs["store"] is False
+    assert "conversation" not in fake_client.responses.kwargs
+    assert "previous_response_id" not in fake_client.responses.kwargs
     assert fake_client.responses.kwargs["extra_headers"] == {
         "X-Client-Request-Id": "run-1"
     }

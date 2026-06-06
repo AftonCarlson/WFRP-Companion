@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,6 +30,22 @@ class FakeProvider:
             input_tokens=10,
             output_tokens=2,
         )
+
+
+class CapturingProvider:
+    def __init__(self, answer: str = "Follow-up answer.") -> None:
+        self.answer = answer
+        self.messages: tuple[provider.ProviderMessage, ...] = ()
+
+    def stream_response(
+        self,
+        *,
+        messages: Sequence[provider.ProviderMessage],
+        request_id: str,
+    ):
+        self.messages = tuple(messages)
+        yield provider.ProviderStreamEvent(type="delta", text_delta=self.answer)
+        yield provider.ProviderStreamEvent(type="completed")
 
 
 class EmptyDeltaProvider:
@@ -227,6 +244,149 @@ def test_stream_chat_message_persists_completed_run_and_streams_deltas(
     assert [event.type for event in duplicate_events] == ["accepted", "completed"]
     assert duplicate_events[-1].assistant_message is not None
     assert duplicate_events[-1].assistant_message.content == "Critical hits."
+
+
+def test_stream_chat_message_sends_recent_completed_turns_to_provider(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_service.chat_store.create_thread(config)
+    first_provider = CapturingProvider(answer="Captain Alder wears mail.")
+
+    first_events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="Tell me about Captain Alder.",
+            idempotency_key="send-1",
+            provider_factory=lambda _: first_provider,
+        )
+    )
+    assert first_events[-1].assistant_message is not None
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            "update chat_messages set created_at = ? where id in (?, ?)",
+            (
+                "2026-06-06T00:00:01Z",
+                first_events[-1].user_message.id,
+                first_events[-1].assistant_message.id,
+            ),
+        )
+        connection.execute(
+            """
+            update model_runs
+            set created_at = ?, updated_at = ?, completed_at = ?
+            where id = ?
+            """,
+            (
+                "2026-06-06T00:00:01Z",
+                "2026-06-06T00:00:01Z",
+                "2026-06-06T00:00:01Z",
+                first_events[-1].model_run.id,
+            ),
+        )
+    followup_provider = CapturingProvider()
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="What about his armor?",
+            idempotency_key="send-2",
+            provider_factory=lambda _: followup_provider,
+        )
+    )
+
+    assert events[-1].assistant_message is not None
+    assert [message.role for message in followup_provider.messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert followup_provider.messages[1].content == "Tell me about Captain Alder."
+    assert followup_provider.messages[2].content == "Captain Alder wears mail."
+    assert followup_provider.messages[-1].content.startswith(
+        "Question:\nWhat about his armor?"
+    )
+
+
+def test_stream_chat_message_uses_history_aware_query_for_followup_retrieval(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_service.chat_store.create_thread(config)
+    first_provider = CapturingProvider(
+        answer="Critical hit rules use the critical hit table."
+    )
+
+    first_events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="Tell me about critical hits.",
+            idempotency_key="send-1",
+            provider_factory=lambda _: first_provider,
+        )
+    )
+    assert first_events[-1].assistant_message is not None
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            "update chat_messages set created_at = ? where id in (?, ?)",
+            (
+                "2026-06-06T00:00:01Z",
+                first_events[-1].user_message.id,
+                first_events[-1].assistant_message.id,
+            ),
+        )
+        connection.execute(
+            """
+            update model_runs
+            set created_at = ?, updated_at = ?, completed_at = ?
+            where id = ?
+            """,
+            (
+                "2026-06-06T00:00:01Z",
+                "2026-06-06T00:00:01Z",
+                "2026-06-06T00:00:01Z",
+                first_events[-1].model_run.id,
+            ),
+        )
+
+    second_events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="What about it?",
+            idempotency_key="send-2",
+            provider_factory=lambda _: CapturingProvider(),
+        )
+    )
+
+    retrieval_events = [event for event in second_events if event.type == "retrieval"]
+    assert retrieval_events
+    assert retrieval_events[0].citations[0].title == "Core Rules"
+    with open_connection(config.db_path) as connection:
+        row = connection.execute(
+            """
+            select query, metadata_json
+            from retrieval_runs
+            where message_id = ?
+            """,
+            (second_events[-1].user_message.id,),
+        ).fetchone()
+    metadata = json.loads(row["metadata_json"])
+    assert row["query"] == "What about it?"
+    assert metadata["retrieval_query"] != "What about it?"
+    assert "critical hits" in metadata["retrieval_query"].lower()
+    assert metadata["history_strategy"] == "followup_contextualized"
+    assert metadata["history_turn_count"] == 1
+    assert metadata["history_message_ids"] == [
+        first_events[-1].user_message.id,
+        first_events[-1].assistant_message.id,
+    ]
 
 
 def test_stream_chat_message_fails_without_openai_key(tmp_path: Path) -> None:

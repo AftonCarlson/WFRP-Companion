@@ -1,5 +1,34 @@
 # Wiki Compile Log
 
+## 2026-06-06 Familiar Conversation Context
+
+- Added bounded app-owned conversation context for Familiar in
+  `wfrp_companion/assistant/conversation_context.py`. Prompt history now uses
+  only prior completed logical turns from the same thread, while failed,
+  active, and current user messages are excluded.
+- Added history-aware retrieval planning for follow-up/reference-resolution
+  queries. Self-contained queries stay unchanged; follow-ups store the raw user
+  message separately from the planned retrieval query and history metadata in
+  `retrieval_runs.metadata_json`.
+- Kept chat history out of the evidence layer. Recent chat can clarify user
+  intent, but source maps, candidates, reranking, prompt evidence, metadata,
+  and citations remain scoped to the current checked-book snapshot.
+- Disabled provider-side persistence by sending OpenAI Responses API calls with
+  `store=False` and no provider conversation chaining.
+- Updated the chat read model and frontend history drawer so saved threads load
+  logical turns, successful retries replace failed visible turns, and streaming
+  updates target the correct `model_run.id`.
+- Independent review found edge cases in prompt-history turn limits, retrieval
+  history metadata, stale failed-run retryability after completed retries,
+  frontend stream targeting, and over-broad follow-up detection. All were fixed
+  with focused regressions before final verification.
+- Verification run for this pass: full Python tests reported 452 tests passing
+  with one existing Starlette/httpx deprecation warning and 100.00% coverage;
+  `ruff check .` passed; frontend coverage reported 131 Vitest tests passing
+  above configured thresholds; frontend production build passed with the
+  existing large PDF worker chunk warning; Playwright e2e reported 2 tests
+  passing with the existing `NO_COLOR`/`FORCE_COLOR` warnings.
+
 ## 2026-06-06 Printed Page-Label Calibration/Backfill
 
 - Added migration `0005_page_label_calibration` to create

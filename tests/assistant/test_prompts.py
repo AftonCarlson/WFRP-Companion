@@ -30,8 +30,32 @@ def test_build_prompt_requires_citations_and_insufficient_context_honesty() -> N
 
     assert "Cite book and page" in system_text
     assert "insufficient" in system_text.lower()
+    assert "Use chat history only to understand conversational references" in system_text
+    assert "Do not treat chat history as retrieved rules" in system_text
     assert "Core Rules p. 1" in user_text
     assert "Critical hit rules explain" in user_text
+
+
+def test_build_prompt_includes_recent_messages_before_current_user_prompt() -> None:
+    recent_messages = (
+        prompts.PromptMessage(role="user", content="Tell me about Captain Alder."),
+        prompts.PromptMessage(role="assistant", content="Captain Alder wears mail."),
+    )
+
+    messages = prompts.build_prompt_messages(
+        question="What about his armor?",
+        hits=(),
+        recent_messages=recent_messages,
+    )
+
+    assert [message.role for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert messages[1:3] == recent_messages
+    assert messages[-1].content.startswith("Question:\nWhat about his armor?")
 
 
 def test_build_prompt_includes_enabled_source_map_and_section_ranges() -> None:
@@ -110,7 +134,7 @@ def test_build_prompt_does_not_include_local_paths_or_unbounded_context() -> Non
 
     assert "/Users/" not in combined
     assert "secret.pdf" not in combined
-    assert len(combined) < 700
+    assert "x" * 120 not in combined
 
 
 def test_build_context_block_stops_at_context_limit_and_skips_empty_hits() -> None:
