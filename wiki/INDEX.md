@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-05 Source-object search backfill
+Last compiled: 2026-06-05 Retrieval rank fusion and reranker protocol
 
 ## Topics
 

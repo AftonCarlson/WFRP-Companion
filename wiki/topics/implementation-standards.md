@@ -47,6 +47,9 @@ The current codebase has working local implementations for steps 1 through 6:
   stale, missing, or malformed.
 - `tools/rebuild_source_object_fts.py` now repairs source-object search and
   FTS projections from existing `source_objects` without rerunning extraction.
+- Familiar retrieval now fuses candidate-channel ranks and applies a
+  replaceable reranker protocol. The default reranker is deterministic and
+  local; provider-backed reranking is not part of the current codebase.
 
 ## Rules For New Code
 
@@ -71,6 +74,9 @@ The current codebase has working local implementations for steps 1 through 6:
 - Fail gracefully when context is missing.
 - Log enough retrieval metadata to debug ranking, not enough to create an
   accidental copy of the books.
+- Treat lexical/page/object search as candidate generation. A reranker must
+  decide whether a candidate is relevant enough to enter Familiar prompt
+  context.
 
 ## PDF/Search Rules
 
@@ -83,6 +89,9 @@ The current codebase has working local implementations for steps 1 through 6:
 - Keep managed PDF copies versioned by source SHA and store the active absolute
   path in SQLite.
 - Use full-text search for exact matches.
+- Preserve exact object-type lookup signals such as tables and stat blocks in
+  reranker relevance text, even when private body text does not repeat the type
+  label.
 - Rebuild global FTS through `tools/rebuild_fts.py` after page text changes.
 - Run `tools/source_sets.py init` after importing books so built-in source sets
   include all current books.

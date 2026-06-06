@@ -23,4 +23,7 @@ def test_retrieval_facade_reexports_phase_one_helpers() -> None:
     assert retrieval.build_enabled_source_map is source_map.build_enabled_source_map
     assert retrieval.plan_query is query_planner.plan_query
     assert retrieval.collect_evidence_candidates is candidates.collect_evidence_candidates
+    assert retrieval.reciprocal_rank_fuse is reranking.reciprocal_rank_fuse
+    assert retrieval.ReciprocalRankFusion is reranking.ReciprocalRankFusion
+    assert retrieval.DeterministicReranker is reranking.DeterministicReranker
     assert retrieval.rerank_candidates is reranking.rerank_candidates

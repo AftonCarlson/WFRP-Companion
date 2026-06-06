@@ -29,8 +29,12 @@ from wfrp_companion.assistant.query_planner import query_candidates_from_terms a
 from wfrp_companion.assistant.query_planner import term_variants as term_variants
 from wfrp_companion.assistant.query_planner import terms_are_close as terms_are_close
 from wfrp_companion.assistant.reranking import candidate_relevance_text as candidate_relevance_text
+from wfrp_companion.assistant.reranking import DeterministicReranker as DeterministicReranker
 from wfrp_companion.assistant.reranking import phrase_matches as phrase_matches
+from wfrp_companion.assistant.reranking import reciprocal_rank_fuse as reciprocal_rank_fuse
+from wfrp_companion.assistant.reranking import ReciprocalRankFusion as ReciprocalRankFusion
 from wfrp_companion.assistant.reranking import rerank_candidates as rerank_candidates
+from wfrp_companion.assistant.reranking import Reranker as Reranker
 from wfrp_companion.assistant.reranking import semantic_overlap_count as semantic_overlap_count
 from wfrp_companion.assistant.reranking import semantic_overlaps as semantic_overlaps
 from wfrp_companion.assistant.reranking import token_matches_source as token_matches_source

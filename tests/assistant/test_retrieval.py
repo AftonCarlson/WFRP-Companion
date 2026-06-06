@@ -585,6 +585,313 @@ def test_retrieval_broad_pool_reranks_relevant_hit_over_filler(
     assert any(
         "semantic_overlap" in reason for reason in context.hits[0].rank_reasons
     )
+    assert any(reason.startswith("fusion:rrf=") for reason in context.hits[0].rank_reasons)
+    assert any(
+        reason.startswith("reranker:deterministic:accepted")
+        for reason in context.hits[0].rank_reasons
+    )
+
+
+def test_retrieval_rejects_weak_lexical_candidate_after_fusion(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="filler",
+            title="Coin Tossing Etiquette",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text=(
+                "The word critical appears in a joke about counting coins. "
+                "Nothing here explains bookkeeping or ledgers."
+            ),
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "critical hit injury result",
+        hit_limit=1,
+        total_char_limit=500,
+        window_chars=180,
+    )
+
+    assert context.hits == ()
+
+
+def test_reciprocal_rank_fusion_prefers_candidate_seen_by_multiple_channels() -> None:
+    page_only = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:1",
+        page_number=1,
+        pdf_page_number=1,
+        page_label=None,
+        page_start=1,
+        page_end=1,
+        page_range_label=None,
+        snippet="critical hit",
+        base_score=-0.8,
+        context_text="critical hit",
+        channel="page_fts",
+        rank_reasons=("candidate:page_fts",),
+    )
+    multi_page = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:2",
+        page_number=2,
+        pdf_page_number=2,
+        page_label=None,
+        page_start=2,
+        page_end=2,
+        page_range_label=None,
+        snippet="critical hit table",
+        base_score=-0.4,
+        context_text="critical hit table",
+        channel="page_fts",
+        source_object_id="critical-table",
+        object_type="table",
+        object_title="Critical Hits",
+        rank_reasons=("candidate:page_fts",),
+    )
+    multi_object = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:2",
+        page_number=2,
+        pdf_page_number=2,
+        page_label=None,
+        page_start=2,
+        page_end=2,
+        page_range_label=None,
+        snippet="critical hit table",
+        base_score=-0.2,
+        context_text="critical hit table",
+        channel="source_object_fts",
+        source_object_id="critical-table",
+        object_type="table",
+        object_title="Critical Hits",
+        rank_reasons=("candidate:source_object_fts",),
+    )
+
+    fused = retrieval.reciprocal_rank_fuse((page_only, multi_page, multi_object))
+
+    assert [candidate.dedupe_key for candidate in fused] == [
+        "source-object:critical-table",
+        "page:core-rules:1",
+    ]
+    assert any(
+        "fusion_channel:page_fts@2" in reason for reason in fused[0].rank_reasons
+    )
+    assert any(
+        "fusion_channel:source_object_fts@1" in reason
+        for reason in fused[0].rank_reasons
+    )
+    assert retrieval.ReciprocalRankFusion(rank_constant=60).fuse((page_only,))[
+        0
+    ].dedupe_key == "page:core-rules:1"
+    with pytest.raises(ValueError, match="rank_constant"):
+        retrieval.reciprocal_rank_fuse((page_only,), rank_constant=0)
+
+
+def test_reciprocal_rank_fusion_deduplicates_channel_before_ranking() -> None:
+    duplicate_best = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:1",
+        page_number=1,
+        pdf_page_number=1,
+        page_label=None,
+        page_start=1,
+        page_end=1,
+        page_range_label=None,
+        snippet="critical hit",
+        base_score=-0.9,
+        context_text="critical hit",
+        channel="page_fts",
+    )
+    duplicate_worse = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:1",
+        page_number=1,
+        pdf_page_number=1,
+        page_label=None,
+        page_start=1,
+        page_end=1,
+        page_range_label=None,
+        snippet="critical hit",
+        base_score=-0.8,
+        context_text="critical hit",
+        channel="page_fts",
+    )
+    next_unique = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:2",
+        page_number=2,
+        pdf_page_number=2,
+        page_label=None,
+        page_start=2,
+        page_end=2,
+        page_range_label=None,
+        snippet="critical hit table",
+        base_score=-0.7,
+        context_text="critical hit table",
+        channel="page_fts",
+    )
+
+    fused = retrieval.reciprocal_rank_fuse(
+        (duplicate_best, duplicate_worse, next_unique)
+    )
+
+    assert [candidate.dedupe_key for candidate in fused] == [
+        "page:core-rules:1",
+        "page:core-rules:2",
+    ]
+    assert any(
+        reason.startswith("fusion_channel:page_fts@2:")
+        for reason in fused[1].rank_reasons
+    )
+
+
+def test_retrieval_preserves_exact_table_name_candidate(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    table_text = (
+        "Critical Hit Effects\n"
+        "This table lists critical hit effects and the injury result to apply."
+    )
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=17,
+            text=table_text,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hit-effects",
+            book_id="core-rules",
+            page_id="core-rules:17",
+            object_type="table",
+            title="Critical Hit Effects",
+            heading_path=("Combat", "Critical Hit Effects"),
+            page_start=17,
+            page_end=17,
+            text=table_text,
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Critical Hit Effects table",
+        hit_limit=1,
+        total_char_limit=500,
+        window_chars=180,
+    )
+
+    assert len(context.hits) == 1
+    assert context.hits[0].source_object_id == "core-rules:critical-hit-effects"
+    assert context.hits[0].object_type == "table"
+    assert any("phrase_match:query_terms" in reason for reason in context.hits[0].rank_reasons)
+
+
+def test_retrieval_preserves_object_type_table_candidate(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    table_text = (
+        "Wyrdstone\n"
+        "Roll once for the strange mineral result and apply the listed entry."
+    )
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=18,
+            text=table_text,
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:wyrdstone",
+            book_id="core-rules",
+            page_id="core-rules:18",
+            object_type="table",
+            title="Wyrdstone",
+            heading_path=("Appendix", "Wyrdstone"),
+            page_start=18,
+            page_end=18,
+            text=table_text,
+        )
+        connection.execute(
+            """
+            insert into source_object_search (
+              source_object_id,
+              book_id,
+              page_id,
+              object_type,
+              title,
+              heading_path,
+              page_start,
+              page_end,
+              confidence,
+              search_text
+            )
+            values (
+              'core-rules:wyrdstone',
+              'core-rules',
+              'core-rules:18',
+              'table',
+              'Wyrdstone',
+              'Appendix > Wyrdstone',
+              18,
+              18,
+              0.91,
+              ?
+            )
+            """,
+            (table_text,),
+        )
+        connection.execute(
+            "insert into source_object_search_fts(source_object_search_fts) values('rebuild')"
+        )
+    source_sets.ensure_builtin_source_sets(config)
+    rebuild_global_fts(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "Wyrdstone table",
+        hit_limit=1,
+        total_char_limit=500,
+        window_chars=180,
+    )
+
+    assert len(context.hits) == 1
+    assert context.hits[0].source_object_id == "core-rules:wyrdstone"
+    assert context.hits[0].object_type == "table"
 
 
 def test_retrieval_resolves_hits_to_complete_source_object_spans(
@@ -953,6 +1260,53 @@ def test_semantic_helper_edges(tmp_path: Path) -> None:
         (candidate,),
         retrieval.plan_query("critical hit", ()),
     ) == ()
+    accepted_candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:1",
+        page_number=1,
+        pdf_page_number=1,
+        page_label=None,
+        page_start=1,
+        page_end=1,
+        page_range_label=None,
+        snippet="critical hit",
+        base_score=0,
+        context_text="critical hit",
+        channel="page_fts",
+        rank_reasons=("fusion:rrf=not-a-number",),
+    )
+    assert retrieval.rerank_candidates(
+        (accepted_candidate,),
+        retrieval.plan_query("critical hit", ()),
+    )
+    candidates: dict[str, retrieval.EvidenceCandidate] = {}
+    retrieval.keep_best_candidate(candidates, accepted_candidate)
+    retrieval.keep_best_candidate(candidates, candidate)
+    assert candidates[accepted_candidate.dedupe_key] == accepted_candidate
+    better_candidate = retrieval.EvidenceCandidate(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:1",
+        page_number=1,
+        pdf_page_number=1,
+        page_label=None,
+        page_start=1,
+        page_end=1,
+        page_range_label=None,
+        snippet="critical hit",
+        base_score=-1,
+        context_text="critical hit",
+        channel="page_fts",
+    )
+    retrieval.keep_best_candidate(candidates, better_candidate)
+    assert candidates[accepted_candidate.dedupe_key] == better_candidate
+    assert retrieval.rerank_candidates(
+        (better_candidate,),
+        retrieval.plan_query("critical hit", ()),
+    )
 
 
 def test_retrieval_records_ranked_hits(tmp_path: Path) -> None:
@@ -1015,7 +1369,13 @@ def test_retrieval_records_ranked_hits(tmp_path: Path) -> None:
     assert [(hit["page_id"], hit["rank"]) for hit in hits] == [("core-rules:1", 1)]
     assert "Critical" in hits[0]["snippet"]
     assert hits[0]["object_type_snapshot"] == "page_fallback"
-    assert json.loads(hits[0]["rank_reasons_json"])
+    rank_reasons = json.loads(hits[0]["rank_reasons_json"])
+    assert any(reason.startswith("fusion_channel:page_fts@") for reason in rank_reasons)
+    assert any(reason.startswith("fusion:rrf=") for reason in rank_reasons)
+    assert any(
+        reason.startswith("reranker:deterministic:accepted")
+        for reason in rank_reasons
+    )
 
 
 def test_retrieval_returns_no_hits_for_zero_limit(tmp_path: Path) -> None:

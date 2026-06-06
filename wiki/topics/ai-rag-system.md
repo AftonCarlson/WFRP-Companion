@@ -162,6 +162,28 @@ Phase 7 PR6 adds a repair/backfill path for source-object search projections:
 - This remains a lexical/object candidate maintenance tool. It does not add
   vector retrieval, new extraction heuristics, or public/private text exports.
 
+Phase 7 PR7 adds rank fusion and an explicit reranker protocol:
+
+- `wfrp_companion/assistant/candidates.py` now collects raw page/object
+  channel candidates and sends them through reciprocal rank fusion before final
+  reranking.
+- `wfrp_companion/assistant/reranking.py` owns `ReciprocalRankFusion`, the
+  `Reranker` protocol, and the default `DeterministicReranker`.
+- Lexical channels remain candidate generators only. The deterministic
+  reranker is the final local semantic gate and can reject weak lexical-only
+  hits before they enter prompt context.
+- RRF deduplicates candidates within each channel before assigning channel
+  ranks, then combines independent channel contributions by evidence key.
+- Source-object type text such as `table` and `stat block` participates in the
+  reranker relevance text, so exact object-type queries can survive the
+  semantic gate even when the private body text does not repeat the type label.
+- Selected `retrieval_hits.rank_reasons_json` snapshots now include
+  `fusion_channel:*`, `fusion:rrf=*`,
+  `reranker:deterministic:accepted:*`, and
+  `reranker_score:deterministic=*` entries for ranking auditability.
+- This phase does **not** add vector candidates, embeddings, a provider-backed
+  reranker, new extraction heuristics, or any public/private text export.
+
 ## Answer Contract
 
 [coverage: high]

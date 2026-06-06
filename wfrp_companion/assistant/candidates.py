@@ -9,6 +9,7 @@ from wfrp_companion.assistant.evidence import load_page_text_from_connection
 from wfrp_companion.assistant.evidence import parse_heading_path
 from wfrp_companion.assistant.query_planner import QueryPlan
 from wfrp_companion.assistant.query_planner import meaningful_tokens
+from wfrp_companion.assistant.reranking import reciprocal_rank_fuse
 from wfrp_companion.assistant.reranking import semantic_overlap_count
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
@@ -24,7 +25,7 @@ def collect_evidence_candidates(
 ) -> tuple[EvidenceCandidate, ...]:
     if not source_book_ids:
         return ()
-    candidates: dict[str, EvidenceCandidate] = {}
+    candidates: list[EvidenceCandidate] = []
     with initialize_database(config.db_path) as connection:
         for candidate_query in query_plan.candidates:
             for hit in search_exact(
@@ -39,15 +40,15 @@ def collect_evidence_candidates(
                     query_terms=query_plan.terms + query_plan.expanded_terms,
                 )
                 if candidate is not None:
-                    keep_best_candidate(candidates, candidate)
+                    candidates.append(candidate)
             for candidate in search_source_object_candidates(
                 connection,
                 candidate_query,
                 book_ids=source_book_ids,
                 limit=per_candidate_limit,
             ):
-                keep_best_candidate(candidates, candidate)
-    return tuple(candidates.values())
+                candidates.append(candidate)
+    return reciprocal_rank_fuse(candidates)
 
 def keep_best_candidate(
     candidates: dict[str, EvidenceCandidate],

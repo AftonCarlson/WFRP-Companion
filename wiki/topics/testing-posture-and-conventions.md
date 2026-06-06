@@ -11,7 +11,8 @@ backend API, Phase 5 browser GUI, Phase 6 Familiar chat loop, Phase 7 PR1
 source-object migration/model foundation, Phase 7 PR2 deterministic
 source-object extraction foundation, Phase 7 PR3 Familiar source-map/object
 retrieval, Phase 7 PR4 retrieval-module split, and Phase 7 PR5 durable
-source-map/profile ownership, and Phase 7 PR6 source-object search backfill.
+source-map/profile ownership, Phase 7 PR6 source-object search backfill, and
+Phase 7 PR7 retrieval rank fusion/reranker protocol.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -160,6 +161,12 @@ source-set routes, exact-search routes, chat routes, and the page-text,
 source-set, search, API, dev, migration, and source-object extraction CLI
 entrypoints.
 
+Retrieval-specific tests now also cover RRF deterministic ordering,
+same-channel dedupe before fusion-rank assignment, weak lexical-only
+rejection, exact table/object-type query preservation, deterministic reranker
+protocol exports, and persisted rank reasons that include channel
+contribution, fusion score, and reranker judgment.
+
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
 behavior, Library/Search tabs, grouped book sections, per-book source-set
@@ -170,7 +177,7 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-05 reported 345 tests
+The latest full backend verification command on 2026-06-05 reported 350 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
 entrypoints. The latest frontend verification reported 127 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful

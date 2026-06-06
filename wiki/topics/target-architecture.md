@@ -218,6 +218,25 @@ Phase 7 PR6 adds a standalone source-object search backfill path:
   projection rows and the FTS index rowids, object-type postings, and
   vocabulary before skipping a rebuild.
 
+Phase 7 PR7 adds the rank-fusion/reranker seam for later vector retrieval:
+
+- `wfrp_companion/assistant/candidates.py` now keeps channel candidates long
+  enough for RRF instead of immediately collapsing the pool to one best
+  lexical hit per evidence key.
+- `wfrp_companion/assistant/reranking.py` exposes `ReciprocalRankFusion`,
+  `Reranker`, and `DeterministicReranker`; `retrieve_context()` still uses the
+  deterministic local reranker by default.
+- RRF reasons and deterministic reranker judgments are preserved on selected
+  hits through `retrieval_hits.rank_reasons_json`, making ranking decisions
+  auditable without logging private book text.
+- The reranker remains the authority for whether a lexical/object candidate is
+  relevant enough to enter prompt context. Weak lexical-only hits can be
+  rejected, while exact object-type queries such as table lookups are preserved
+  through normalized source-object type relevance text.
+- Vector candidates, embeddings, and provider/local cross-encoder rerankers
+  remain later phases and should attach to this pipeline as additional
+  candidate/reranker implementations under the same checked-book scope.
+
 The schema already includes the planned tables for pages, page text, FTS
 projection, source sets, visual assets, readiness state, and future AI
 chat/retrieval/source-object metadata. The current populated runtime

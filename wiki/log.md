@@ -1,5 +1,33 @@
 # Wiki Compile Log
 
+## 2026-06-05 Retrieval Rank Fusion And Reranker Protocol
+
+- Added reciprocal rank fusion to Familiar retrieval candidates before final
+  reranking. Page FTS, source-object FTS, and fallback object scans remain
+  candidate channels; they do not decide final prompt evidence on their own.
+- Added the `Reranker` protocol and `DeterministicReranker` default in
+  `wfrp_companion/assistant/reranking.py`, keeping provider-backed reranking
+  out of the current phase while making the interface replaceable.
+- Rank reasons for selected hits now include channel-rank contributions
+  (`fusion_channel:*`), total RRF contribution (`fusion:rrf=*`), deterministic
+  reranker acceptance, and deterministic reranker score. These are persisted in
+  `retrieval_hits.rank_reasons_json`.
+- The deterministic reranker now rejects weak lexical-only matches for
+  multi-term queries while preserving exact object/table lookup signals,
+  including cases where the only table/stat/profile cue is the source-object
+  `object_type`.
+- Independent review initially found two ranking issues: object-type table
+  candidates could be rejected by the semantic gate, and same-channel duplicate
+  candidates could inflate RRF rank positions. Both were fixed with regression
+  tests; follow-up review reported no findings.
+- Verification run for this pass: focused retrieval coverage reported 27 tests
+  passing with 100.00% coverage; full Python tests reported 350 tests passing
+  with one existing Starlette/httpx deprecation warning and 100.00% coverage;
+  `ruff check .` passed; `git diff --check` passed; frontend Vitest reported
+  127 tests passing; frontend coverage passed above configured thresholds;
+  frontend production build passed with the existing large PDF worker chunk
+  warning; Playwright e2e reported 2 tests passing.
+
 ## 2026-06-05 Source-Object Search Backfill
 
 - Added `rebuild_source_object_search()` in
