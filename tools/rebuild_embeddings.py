@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
@@ -54,6 +55,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Embedding vector dimensions.",
     )
     parser.add_argument(
+        "--embedding-batch-size",
+        type=int,
+        default=None,
+        help="Embedding document batch size for local model inference.",
+    )
+    parser.add_argument(
+        "--embedding-device",
+        default=None,
+        help="Optional local embedding device, such as cpu, cuda, or mps.",
+    )
+    parser.add_argument(
+        "--embedding-query-prompt-name",
+        default=None,
+        help="Optional query prompt name for instruction-aware embedding models.",
+    )
+    parser.add_argument(
+        "--embedding-local-files-only",
+        action="store_true",
+        default=None,
+        help="Load local embedding model files only; do not download from the hub.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Rebuild even when the embedding projection is current.",
@@ -78,23 +101,36 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
     db_path = args.db_path or (
         data_dir / "wfrp_companion.sqlite" if args.data_dir else config.db_path
     )
-    return AppConfig(
-        pdf_root=config.pdf_root,
+    return replace(
+        config,
         data_dir=data_dir,
         db_path=db_path,
-        asset_dir=config.asset_dir,
-        openai_api_key=config.openai_api_key,
-        openai_model=config.openai_model,
-        openai_timeout_seconds=config.openai_timeout_seconds,
-        chat_context_hit_limit=config.chat_context_hit_limit,
-        chat_context_char_limit=config.chat_context_char_limit,
-        chat_context_window_chars=config.chat_context_window_chars,
         embedding_provider=args.embedding_provider or config.embedding_provider,
         embedding_model=args.embedding_model or config.embedding_model,
         embedding_dimensions=(
             args.embedding_dimensions
             if args.embedding_dimensions is not None
             else config.embedding_dimensions
+        ),
+        embedding_batch_size=(
+            args.embedding_batch_size
+            if args.embedding_batch_size is not None
+            else config.embedding_batch_size
+        ),
+        embedding_device=(
+            args.embedding_device
+            if args.embedding_device is not None
+            else config.embedding_device
+        ),
+        embedding_query_prompt_name=(
+            args.embedding_query_prompt_name
+            if args.embedding_query_prompt_name is not None
+            else config.embedding_query_prompt_name
+        ),
+        embedding_local_files_only=(
+            args.embedding_local_files_only
+            if args.embedding_local_files_only is not None
+            else config.embedding_local_files_only
         ),
     )
 
@@ -105,6 +141,13 @@ def print_summary(config: AppConfig, summary: EmbeddingRebuildSummary) -> None:
     print(f"Embedding provider: {config.embedding_provider}")
     print(f"Embedding model: {config.embedding_model}")
     print(f"Embedding dimensions: {config.embedding_dimensions}")
+    print(f"Embedding batch size: {config.embedding_batch_size}")
+    print(f"Embedding device: {config.embedding_device or 'auto'}")
+    print(f"Embedding query prompt: {config.embedding_query_prompt_name or 'none'}")
+    print(
+        "Embedding local files only: "
+        f"{str(config.embedding_local_files_only).lower()}"
+    )
     print(f"Books discovered: {summary.discovered}")
     print(f"Books indexed: {summary.indexed}")
     print(f"Skipped current: {summary.skipped_current}")

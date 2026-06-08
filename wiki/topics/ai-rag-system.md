@@ -207,6 +207,48 @@ Phase 7 PR8 adds a local vector candidate channel:
 - This phase does not add hosted embeddings, a hosted vector database, or a
   provider-backed/cross-encoder reranker.
 
+The local semantic embeddings phase upgrades that vector path from a smoke
+test to a real local provider boundary:
+
+- Migration `0006_embedding_provider_identity` makes both
+  `book_retrieval_status` and `source_object_embeddings` provider-aware, so
+  `local-hash` and `sentence-transformers` rows cannot collide.
+- `wfrp_companion/source_objects/embedding_providers.py` owns the provider
+  protocol, deterministic `local-hash` provider, and lazy
+  `sentence-transformers` provider.
+- The recommended semantic profile is
+  `WFRP_EMBEDDING_PROVIDER=sentence-transformers`,
+  `WFRP_EMBEDDING_MODEL=BAAI/bge-m3`, and
+  `WFRP_EMBEDDING_DIMENSIONS=1024`.
+- Sentence Transformers model instances are cached by model, device, and
+  local-files-only mode. Source-object text and query text are not cached.
+- Embedding rebuilds claim the job and mark `indexing` in short SQLite
+  transactions, compute vectors outside write transactions, recheck the
+  source-object snapshot, and only then replace rows for the same
+  book/provider/model/dimensions.
+- Vector currentness also requires the stored vector blob byte length to match
+  the configured dimensions, so malformed local rows cannot look current or
+  crash query-time scoring.
+- If source objects change during local inference, existing vector rows are
+  preserved, the book becomes `needs_refresh`, and the job is failed with a
+  bounded safe reason.
+- If local embedding inference fails after a rebuild job is claimed, both
+  `book_retrieval_status` and the matching `ingest_jobs` row are marked
+  failed with a bounded error and `completed_at`, so normal retry behavior does
+  not depend on stale-job recovery.
+- Query-time vector search resolves the configured provider, embeds the query
+  locally, filters by checked-book currentness, and records
+  `vector_provider:*`, `vector_model:*`, and `vector_similarity:*` rank
+  reasons before RRF/reranking.
+- Query-time provider dependency, runtime, or dimension failures are treated as
+  a missing vector channel for that retrieval run. Familiar still uses exact
+  page/object candidates rather than failing the model run.
+- `/api/books` exposes vector status, provider, and dimensions only; it does
+  not expose `embedding_model` because that user-configurable value can be a
+  local filesystem path. The Library UI shows one compact semantic-search
+  status summary. It does not expose raw vector errors, local paths, source
+  text, or per-book semantic badges.
+
 Phase 7 PR9 adds structured source-object evidence and link-aware evidence
 resolution:
 

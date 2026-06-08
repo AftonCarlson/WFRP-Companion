@@ -20,6 +20,9 @@ const book = {
   search_ready: true,
   fully_ready: false,
   needs_attention: false,
+  vector_status: "indexed",
+  embedding_provider: "sentence-transformers",
+  embedding_dimensions: 1024,
 };
 
 const sourceSetBook = {
@@ -53,6 +56,9 @@ const unindexedBook = {
   id: "unindexed-book",
   title: "Unindexed Book",
   search_ready: false,
+  vector_status: "not_started",
+  embedding_provider: null,
+  embedding_dimensions: null,
 };
 
 const unindexedSourceSetBook = {
@@ -221,6 +227,45 @@ it("does not render per-book readiness labels", () => {
   expect(screen.queryByText("ready")).not.toBeInTheDocument();
   expect(screen.queryByText("needs attention")).not.toBeInTheDocument();
   expect(screen.queryByText("not indexed")).not.toBeInTheDocument();
+});
+
+it("renders a compact semantic search status summary", () => {
+  const needsRefreshBook = {
+    ...book,
+    id: "needs-refresh-book",
+    title: "Needs Refresh",
+    vector_status: "needs_refresh",
+  };
+  const failedBook = {
+    ...book,
+    id: "failed-book",
+    title: "Failed Semantic",
+    vector_status: "failed",
+  };
+
+  renderApp(
+    <LibraryTab
+      activeSourceSetId="rules-core"
+      books={[book, needsRefreshBook, failedBook, unindexedBook]}
+      client={client()}
+      collapsedCategories={[]}
+      onOpenBook={vi.fn()}
+      onSourceSetBookUpdated={vi.fn()}
+      onToggleCategory={vi.fn()}
+      sourceSetBooks={[
+        sourceSetBook,
+        { ...sourceSetBook, book_id: "needs-refresh-book", title: "Needs Refresh" },
+        { ...sourceSetBook, book_id: "failed-book", title: "Failed Semantic" },
+        unindexedSourceSetBook,
+      ]}
+    />,
+  );
+
+  expect(
+    screen.getByLabelText("Semantic search status"),
+  ).toHaveTextContent(
+    "Semantic search: 1 indexed, 1 needs rebuild, 1 not indexed, 1 failed",
+  );
 });
 
 it("enables every unchecked book in a category from the section checkbox", async () => {

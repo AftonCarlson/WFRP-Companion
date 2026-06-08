@@ -117,6 +117,7 @@ Initial Python tooling includes:
 - FastAPI and Uvicorn for the upcoming local API
 - OpenAI Python SDK for server-side Familiar provider calls
 - Pillow, OpenCV, and ImageHash for upcoming visual asset detection
+- PyTorch and Sentence Transformers for opt-in local semantic embeddings
 - pytest for tests
 - pytest-cov for coverage gates
 - ruff for lint/format checks
@@ -276,6 +277,42 @@ summaries only. Current extraction types are `rule_section` and `page_chunk`;
 object FTS, table/stat/location passes, and Familiar object-aware ranking are
 later Phase 7 work.
 
+Rebuild local source-object embeddings after source objects are current:
+
+```bash
+conda activate wfrp-companion
+WFRP_EMBEDDING_PROVIDER=sentence-transformers \
+WFRP_EMBEDDING_MODEL=BAAI/bge-m3 \
+WFRP_EMBEDDING_DIMENSIONS=1024 \
+python tools/rebuild_embeddings.py --force
+```
+
+The embedding rebuild tool accepts:
+
+```bash
+python tools/rebuild_embeddings.py --data-dir "/path/to/private-data"
+python tools/rebuild_embeddings.py --db-path "/path/to/wfrp.sqlite"
+python tools/rebuild_embeddings.py --book-id <book_id>
+python tools/rebuild_embeddings.py --embedding-provider sentence-transformers
+python tools/rebuild_embeddings.py --embedding-model BAAI/bge-m3
+python tools/rebuild_embeddings.py --embedding-dimensions 1024
+python tools/rebuild_embeddings.py --embedding-batch-size 16
+python tools/rebuild_embeddings.py --embedding-device mps
+python tools/rebuild_embeddings.py --embedding-query-prompt-name query
+python tools/rebuild_embeddings.py --embedding-local-files-only
+python tools/rebuild_embeddings.py --retry-running
+```
+
+`local-hash` remains available for deterministic smoke tests. The real local
+semantic profile is `sentence-transformers` with `BAAI/bge-m3`. Rebuild output
+is count-only and must not print source-object text. First use may download
+model files from Hugging Face unless `--embedding-local-files-only` or
+`WFRP_EMBEDDING_LOCAL_FILES_ONLY=1` is set.
+If local model loading or embedding inference fails after a rebuild job is
+claimed, the tool records a failed vector status and closes the matching
+`ingest_jobs` row as failed; retry with the same command after fixing the local
+runtime or model cache.
+
 Run the local backend API with:
 
 ```bash
@@ -380,6 +417,13 @@ Current local config variables:
 - `WFRP_CHAT_CONTEXT_HIT_LIMIT` defaults to `6`
 - `WFRP_CHAT_CONTEXT_CHAR_LIMIT` defaults to `9000`
 - `WFRP_CHAT_CONTEXT_WINDOW_CHARS` defaults to `1600`
+- `WFRP_EMBEDDING_PROVIDER` defaults to `disabled`
+- `WFRP_EMBEDDING_MODEL` defaults to `local-hash-v1`
+- `WFRP_EMBEDDING_DIMENSIONS` defaults to `64`
+- `WFRP_EMBEDDING_BATCH_SIZE` defaults to `16`
+- `WFRP_EMBEDDING_DEVICE`
+- `WFRP_EMBEDDING_QUERY_PROMPT_NAME`
+- `WFRP_EMBEDDING_LOCAL_FILES_ONLY` defaults to false
 
 Do not commit real API keys, PDFs, extracted copyrighted text, or local vector
 indexes. SQLite databases, managed PDFs, generated assets, and coverage output

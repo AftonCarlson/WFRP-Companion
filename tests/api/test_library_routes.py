@@ -112,6 +112,29 @@ def seed_book(
 def test_books_detail_and_page_routes_return_reader_metadata(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_book(config)
+    with initialize_database(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              vector_status,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              last_error,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'indexed',
+              'sentence-transformers',
+              'BAAI/bge-m3',
+              1024,
+              '/private/path/should-not-leak',
+              '2026-06-08T00:00:00Z'
+            )
+            """
+        )
     client = TestClient(create_app(config))
 
     books_response = client.get("/api/books")
@@ -121,10 +144,20 @@ def test_books_detail_and_page_routes_return_reader_metadata(tmp_path: Path) -> 
     assert books_response.status_code == 200
     assert books_response.json()["books"][0]["id"] == "core-rules"
     assert books_response.json()["books"][0]["reader_ready"] is True
+    assert books_response.json()["books"][0]["vector_status"] == "indexed"
+    assert (
+        books_response.json()["books"][0]["embedding_provider"]
+        == "sentence-transformers"
+    )
+    assert books_response.json()["books"][0]["embedding_dimensions"] == 1024
     assert "managed_pdf_path" not in books_response.text
+    assert "BAAI/bge-m3" not in books_response.text
+    assert "should-not-leak" not in books_response.text
     assert detail_response.status_code == 200
     assert detail_response.json()["managed_pdf_available"] is True
+    assert detail_response.json()["vector_status"] == "indexed"
     assert "managed_pdf_path" not in detail_response.text
+    assert "should-not-leak" not in detail_response.text
     assert page_response.status_code == 200
     assert page_response.json() == {
         "page_id": "core-rules:1",

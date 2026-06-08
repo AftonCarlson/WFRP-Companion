@@ -294,6 +294,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0003_vector_retrieval",
         "0004_structured_evidence",
         "0005_page_label_calibration",
+        "0006_embedding_provider_identity",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -355,6 +356,13 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0006_embedding_provider_identity",),
+            ).fetchone()
+            is not None
+        )
         assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
         assert (
@@ -383,6 +391,124 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         assert run_source["source_set_id"] == "rules-core"
         assert run_source["book_id"] == "core-rules"
         assert run_source["book_title_snapshot"] == "Core Rules"
+
+
+def test_embedding_provider_identity_migration_backfills_legacy_vectors(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-vectors.sqlite"
+    create_legacy_phase6_database(db_path)
+    with open_connection(db_path) as connection:
+        apply_migration(connection, "0001_phase_7_source_objects")
+        apply_migration(connection, "0002_source_map_retrieval")
+        apply_migration(connection, "0003_vector_retrieval")
+        connection.execute(
+            """
+            insert into source_objects (
+              id,
+              book_id,
+              page_id,
+              object_type,
+              heading_path_json,
+              page_start,
+              page_end,
+              text,
+              search_text,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            )
+            values (
+              'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+              'core-rules',
+              'core-rules:1',
+              'rule_section',
+              '[]',
+              1,
+              1,
+              'Critical hits',
+              'Critical hits',
+              0.8,
+              'test',
+              'snapshot',
+              '2026-06-08T00:00:00Z',
+              '2026-06-08T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            update book_retrieval_status
+            set vector_status = 'indexed',
+                vector_snapshot_sha256 = 'source-snapshot',
+                embedding_model = 'local-hash-test',
+                embedding_dimensions = 16
+            where book_id = 'core-rules'
+            """
+        )
+        connection.execute(
+            """
+            insert into source_object_embeddings (
+              id,
+              source_object_id,
+              book_id,
+              embedding_model,
+              embedding_dimensions,
+              text_snapshot_sha256,
+              vector_blob,
+              created_at,
+              updated_at
+            )
+            values (
+              'embedding:legacy',
+              'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+              'core-rules',
+              'local-hash-test',
+              16,
+              'snapshot',
+              ?,
+              '2026-06-08T00:00:00Z',
+              '2026-06-08T00:00:00Z'
+            )
+            """,
+            (sqlite3.Binary(b"\0\0\0\0"),),
+        )
+
+        connection.commit()
+        apply_migration(connection, "0006_embedding_provider_identity")
+
+        embedding = connection.execute(
+            """
+            select embedding_provider
+            from source_object_embeddings
+            where id = 'embedding:legacy'
+            """
+        ).fetchone()
+        status = connection.execute(
+            """
+            select embedding_provider
+            from book_retrieval_status
+            where book_id = 'core-rules'
+            """
+        ).fetchone()
+        index_columns = tuple(
+            row["name"]
+            for row in connection.execute(
+                "pragma index_info(ux_source_object_embeddings_current)"
+            ).fetchall()
+        )
+
+    assert embedding["embedding_provider"] == "local-hash"
+    assert status["embedding_provider"] == "local-hash"
+    assert index_columns == (
+        "source_object_id",
+        "embedding_provider",
+        "embedding_model",
+        "embedding_dimensions",
+        "text_snapshot_sha256",
+    )
 
 
 def test_metadata_source_book_ids_ignores_invalid_metadata() -> None:
@@ -719,6 +845,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0003_vector_retrieval",
         "0004_structured_evidence",
         "0005_page_label_calibration",
+        "0006_embedding_provider_identity",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -727,6 +854,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0003_vector_retrieval",
         "0004_structured_evidence",
         "0005_page_label_calibration",
+        "0006_embedding_provider_identity",
     )
 
 
@@ -744,6 +872,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0003_vector_retrieval",
         "0004_structured_evidence",
         "0005_page_label_calibration",
+        "0006_embedding_provider_identity",
     )
     with open_connection(db_path) as connection:
         assert (

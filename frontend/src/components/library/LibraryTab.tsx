@@ -14,6 +14,24 @@ import type {
 } from "../../types/api";
 import { BookCategorySection } from "./BookCategorySection";
 
+const VECTOR_STATUS_LABELS: Record<string, string> = {
+  disabled: "disabled",
+  failed: "failed",
+  indexed: "indexed",
+  indexing: "indexing",
+  needs_refresh: "needs rebuild",
+  not_started: "not indexed",
+};
+
+const VECTOR_STATUS_ORDER = [
+  "indexed",
+  "needs_refresh",
+  "not_started",
+  "indexing",
+  "failed",
+  "disabled",
+];
+
 export type LibraryTabProps = {
   activeSourceSetId: string | null;
   books: BookSummaryResponse[];
@@ -51,6 +69,7 @@ export function LibraryTab({
         book.category.toLowerCase().includes(needle),
     );
   }, [books, filter, sourceSetBooks]);
+  const semanticStatus = useMemo(() => semanticSearchStatus(books), [books]);
 
   async function handleToggle(book: LibraryBookRow, enabled: boolean) {
     if (activeSourceSetId === null) {
@@ -92,6 +111,12 @@ export function LibraryTab({
         type="search"
         value={filter}
       />
+      <div
+        aria-label="Semantic search status"
+        className="library-tab__semantic-status"
+      >
+        {semanticStatus}
+      </div>
       <div className="library-tab__list">
         {groupByCategory(rows).map((group) => (
           <BookCategorySection
@@ -109,4 +134,24 @@ export function LibraryTab({
       </div>
     </div>
   );
+}
+
+function semanticSearchStatus(books: BookSummaryResponse[]) {
+  const counts = new Map<string, number>();
+  for (const book of books) {
+    const status = book.vector_status || "disabled";
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+  const orderedStatuses = [
+    ...VECTOR_STATUS_ORDER,
+    ...[...counts.keys()].filter((status) => !VECTOR_STATUS_ORDER.includes(status)),
+  ];
+  const parts = orderedStatuses.flatMap((status) => {
+    const count = counts.get(status) ?? 0;
+    if (count === 0) {
+      return [];
+    }
+    return `${count} ${VECTOR_STATUS_LABELS[status] ?? status.replace(/_/g, " ")}`;
+  });
+  return `Semantic search: ${parts.length ? parts.join(", ") : "0 indexed"}`;
 }

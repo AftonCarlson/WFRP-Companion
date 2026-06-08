@@ -22,6 +22,9 @@ class BookSummaryResponse(BaseModel):
     search_ready: bool
     fully_ready: bool
     needs_attention: bool
+    vector_status: str
+    embedding_provider: str | None
+    embedding_dimensions: int | None
 
 
 class BookDetailResponse(BookSummaryResponse):

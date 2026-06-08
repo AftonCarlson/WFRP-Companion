@@ -1,5 +1,40 @@
 # Wiki Compile Log
 
+## 2026-06-08 Local Semantic Embeddings
+
+- Upgraded the local vector retrieval channel from deterministic `local-hash`
+  smoke vectors to a provider boundary with lazy Sentence Transformers support.
+  The recommended real local semantic profile is
+  `sentence-transformers` / `BAAI/bge-m3` / `1024` dimensions.
+- Added migration `0006_embedding_provider_identity` so
+  `book_retrieval_status` and `source_object_embeddings` are provider-aware.
+  Rebuilds preserve other provider/model rows and only replace vectors for the
+  active book/provider/model/dimensions.
+- Added safe rebuild lifecycle behavior: jobs are claimed in short
+  transactions, local inference runs outside write transactions, source-object
+  snapshots are rechecked before final writes, source drift preserves existing
+  rows and marks `needs_refresh`, and provider failures close the matching
+  `ingest_jobs` row as failed with `completed_at`.
+- Familiar now resolves the configured provider at query time, embeds queries
+  locally, filters vector rows by checked-book currentness, uses resolved
+  provider identity for SQL matching, and skips malformed vector rows or
+  provider failures instead of failing the chat run.
+- `/api/books` now exposes vector status, provider, and dimensions for Library
+  status summaries, but intentionally does not expose `embedding_model` because
+  user-configured Sentence Transformers models may be local filesystem paths.
+- Independent review found and drove fixes for three high-risk failure paths:
+  claimed rebuild jobs left running after provider inference failure,
+  query-time provider failures bubbling into Familiar, and malformed vector
+  blobs escaping scoring/currentness checks. CodeRabbit also caught raw config
+  identity being used in vector SQL after provider resolution; this was fixed
+  and covered.
+- Verification run for this phase: `ruff check .` passed; full backend
+  coverage reported 494 tests passing with one existing Starlette/httpx
+  deprecation warning and 100.00% coverage; frontend coverage reported 132
+  Vitest tests passing above configured thresholds; frontend production build
+  passed with the existing large PDF worker chunk warning; final narrow agent
+  review reported no findings.
+
 ## 2026-06-06 Follow-Up Retrieval Hang Repair
 
 - Debugged a live Familiar turn where `aucassin is his name` appeared to hang.

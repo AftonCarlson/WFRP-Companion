@@ -127,6 +127,10 @@ def test_list_books_and_get_book_expose_readiness_without_paths(tmp_path: Path) 
             search_ready=True,
             fully_ready=False,
             needs_attention=False,
+            vector_status="disabled",
+            embedding_provider=None,
+            embedding_model=None,
+            embedding_dimensions=None,
         ),
     )
     assert detail.managed_pdf_available is True

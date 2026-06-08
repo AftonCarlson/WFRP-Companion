@@ -51,7 +51,9 @@ The current codebase has working local implementations for steps 1 through 6:
   replaceable reranker protocol. The default reranker is deterministic and
   local; provider-backed reranking is not part of the current codebase.
 - `tools/rebuild_embeddings.py` now rebuilds local source-object vectors when
-  `WFRP_EMBEDDING_PROVIDER=local-hash`; the default provider is disabled.
+  embeddings are explicitly enabled. `local-hash` remains the deterministic
+  test/smoke provider; `sentence-transformers` is the real local semantic
+  provider. The default provider is disabled.
 - Source-object extraction now emits structured local evidence objects for
   simple tables/table rows, stat/profile blocks, index entries, glossary
   entries, and cross references, and persists deterministic
@@ -94,6 +96,21 @@ The current codebase has working local implementations for steps 1 through 6:
 - Treat vector search as another candidate channel. It must be scoped to
   checked books, validated against current local embedding snapshots, and fed
   through rank fusion plus reranking before prompt context.
+- Keep vector storage provider-aware. Currentness checks must compare provider,
+  model, dimensions, source-object snapshot, row count, row freshness, and
+  vector blob byte length.
+- Do not hold SQLite write transactions open during local transformer
+  inference. Claim/update lifecycle state in short transactions, compute
+  embeddings outside the write transaction, then do a guarded final write.
+- After an embedding rebuild job is claimed, any provider/load/inference/commit
+  failure must close the matching `ingest_jobs` row as `failed` with
+  `completed_at`; do not leave retry behavior dependent on stale-job recovery.
+- Query-time vector provider failures must fail closed to the non-vector
+  retrieval channels. Missing local model files, dependency errors, runtime
+  errors, or dimension mismatches should not fail Familiar chat.
+- Query-time vector scoring must also fail closed for malformed local vector
+  rows. Skip bad vector rows rather than surfacing blob/dimension errors as
+  Familiar model-run failures.
 - Treat linked source-object traversal as evidence resolution, not scope
   expansion. Links may resolve row/stat/index/cross-reference candidates to
   complete parent or target objects only when the target book is in the checked
@@ -131,8 +148,10 @@ The current codebase has working local implementations for steps 1 through 6:
 - Run `tools/rebuild_source_maps.py` after source-object extraction when
   durable Familiar source-map/profile metadata needs to be refreshed.
 - Run `tools/rebuild_embeddings.py` after source-object extraction when local
-  vector candidates are explicitly enabled. The command is count-only and must
-  not print private source-object text.
+  vector candidates are explicitly enabled. Use `local-hash` for deterministic
+  smoke tests and `sentence-transformers` with `BAAI/bge-m3` for real local
+  semantic retrieval. The command is count-only and must not print private
+  source-object text.
 - Run `tools/backfill_page_labels.py` after page-text import when printed
   labels need to be calibrated or repaired. Use repeatable
   `--anchor book_id:pdf_page_number:printed_label` values for books whose
@@ -211,6 +230,16 @@ database behavior should preserve these constraints:
 - Keep retrieval-asset lifecycle state explicit in `book_retrieval_status`;
   do not infer source-map/vector/table/page-label readiness from projection row
   presence alone.
+- Keep `book_retrieval_status.embedding_provider` and
+  `source_object_embeddings.embedding_provider` authoritative for vector cache
+  ownership. Rebuilds must delete/replace only rows for the same
+  book/provider/model/dimensions and must preserve other provider/model rows.
+- Keep embedding model names internal to storage, tooling, and rank audit
+  reasons. Do not expose `/api/books` model strings because local Sentence
+  Transformers model identifiers can be filesystem paths.
+- Keep rebuild job state and vector lifecycle state in sync. A failed local
+  provider load or inference attempt must mark both the book vector status and
+  the claimed rebuild job failed.
 - Keep printed-page calibration details in `book_page_label_calibrations`.
   `book_retrieval_status.page_label_status` is only the summary lifecycle
   state.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
@@ -62,12 +63,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
     db_path = args.db_path or (
         data_dir / "wfrp_companion.sqlite" if args.data_dir else config.db_path
     )
-    return AppConfig(
-        pdf_root=config.pdf_root,
-        data_dir=data_dir,
-        db_path=db_path,
-        asset_dir=config.asset_dir,
-    )
+    return replace(config, data_dir=data_dir, db_path=db_path)
 
 
 def print_hits(config: AppConfig, query: str, hits: tuple[SearchHit, ...]) -> None:
