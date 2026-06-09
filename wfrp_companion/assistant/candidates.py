@@ -57,7 +57,7 @@ def collect_evidence_candidates(
                 candidate = evidence_candidate_from_page_hit(
                     connection,
                     hit,
-                    query_terms=query_plan.terms + query_plan.expanded_terms,
+                    query_terms=query_plan.match_terms,
                 )
                 if candidate is not None:
                     candidates.append(candidate)

@@ -65,7 +65,7 @@ class DeterministicReranker:
         query_plan: QueryPlan,
     ) -> tuple[RankedCandidate, ...]:
         ranked: list[RankedCandidate] = []
-        all_terms = query_plan.terms + query_plan.expanded_terms
+        all_terms = query_plan.match_terms
         required_overlap = required_semantic_overlap(query_plan)
         for candidate in candidates:
             matched_terms = semantic_overlaps(
@@ -278,7 +278,7 @@ def candidate_fusion_score(candidate: EvidenceCandidate) -> float:
 
 
 def structural_intent_boost(candidate: EvidenceCandidate, query_plan: QueryPlan) -> float:
-    terms = set(query_plan.terms + query_plan.expanded_terms)
+    terms = set(query_plan.match_terms)
     if {"table", "tables", "chart", "charts"}.intersection(terms) and candidate.object_type == "table":
         return 14.0
     if {
@@ -308,7 +308,7 @@ def structural_query_matches_named_entity(
     matched_terms: Sequence[str],
 ) -> bool:
     original_terms = tuple(dict.fromkeys(query_plan.terms))
-    all_terms = tuple(dict.fromkeys(query_plan.terms + query_plan.expanded_terms))
+    all_terms = tuple(dict.fromkeys(query_plan.match_terms))
     if not STRUCTURAL_QUERY_TERMS.intersection(all_terms):
         return True
     entity_terms = tuple(term for term in original_terms if term not in STRUCTURAL_QUERY_TERMS)
@@ -389,11 +389,11 @@ def is_heading_path_only_match(
 ) -> bool:
     if candidate.source_object_id is None or len(query_plan.terms) < 2:
         return False
-    heading_matches = semantic_overlaps(query_plan.terms, " ".join(candidate.heading_path))
+    heading_matches = semantic_overlaps(query_plan.match_terms, " ".join(candidate.heading_path))
     if len(heading_matches) < required_overlap:
         return False
     direct_matches = semantic_overlaps(
-        query_plan.terms,
+        query_plan.match_terms,
         candidate_direct_relevance_text(candidate),
     )
     return len(direct_matches) < required_overlap

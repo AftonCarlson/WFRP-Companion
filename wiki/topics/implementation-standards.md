@@ -90,6 +90,12 @@ The current codebase has working local implementations for steps 1 through 6:
 - Keep structural retrieval terms (`stat`, `block`, `table`, `chart`,
   `profile`, and close variants) authoritative as object-intent signals. Do
   not edit-distance expand them into unrelated source-map aliases.
+- Use bounded deterministic sparse query normalization for retrieval recall:
+  split common structural compounds such as `statblock` and `hit-location`,
+  generate singular/plural FTS candidates, and keep reranker match terms
+  concept-level so variants do not double-count relevance.
+- Fix retrieval vocabulary gaps with general query/object/indexing rules, not
+  entity-specific aliases for one creature, NPC, table, or book.
 - Let inherited chapter headings and OCR running headers help candidate
   routing, but do not let heading-only matches admit multi-term entity evidence
   into Familiar prompt context.

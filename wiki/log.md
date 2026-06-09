@@ -1,5 +1,28 @@
 # Wiki Compile Log
 
+## 2026-06-08 Sparse Retrieval Query Normalization
+
+- Repaired a live Familiar miss where `give me the statblock for gors` produced
+  no retrieved evidence even though Old World Bestiary source objects contained
+  the relevant Gor Statistics profile.
+- Root cause: sparse retrieval searched literal compound/plural forms such as
+  `statblock` and `gors`, while source-object FTS contained separated
+  structural words and singular entity text such as `stat block` and `Gor`.
+- Added bounded deterministic query normalization for sparse candidate
+  generation: structural compounds such as `statblock` / `hit-location` are
+  split, singular/plural alternatives are generated for FTS, and no
+  creature-specific aliases are introduced.
+- Added planner `match_terms` so deterministic reranking and page-to-object
+  resolution use normalized structural intent without double-counting
+  singular/plural variants as separate relevance concepts. Dense vector query
+  text remains close to the user's original meaningful terms.
+- Live QA against the latest thread's 13 checked books now returns Old World
+  Bestiary page 84 / Gor Statistics as rank 1 for the original query.
+- Verification run for this repair: retrieval tests reported 54 passing;
+  the full backend coverage gate reported 496 tests passing with one existing
+  Starlette/httpx deprecation warning and 100.00% coverage; `ruff check .`
+  passed.
+
 ## 2026-06-08 Local Semantic Embeddings
 
 - Upgraded the local vector retrieval channel from deterministic `local-hash`

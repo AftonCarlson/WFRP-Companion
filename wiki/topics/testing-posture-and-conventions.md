@@ -197,7 +197,9 @@ extractor-version invalidation, duplicate same-page table-row ID prevention,
 WFRP-style pipe/percent stat profiles, range-chart table extraction with OCR
 title normalization, derived source-object links and count updates, table-row
 citations resolving to parent table page ranges, stat-block retrieval resolving
-to complete profiles, structural query terms refusing unsafe fuzzy expansion,
+to complete profiles, compound/plural structural queries retrieving singular
+stat evidence through generalized sparse alternatives, structural query terms
+refusing unsafe fuzzy expansion,
 typed chart/table evidence outranking prose mentions, heading/running-header
 only entity matches being rejected, index routing to deterministic target
 sections or page-only target pages, glossary evidence retaining definition

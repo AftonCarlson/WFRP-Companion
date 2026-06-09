@@ -363,6 +363,34 @@ structured-evidence path:
   multi-term entity result into prompt context. This prevents unrelated
   subsections in a chapter from supplying wrong stat-like evidence.
 
+Follow-up sparse query normalization repair on 2026-06-08 tightened the current
+hybrid retrieval path:
+
+- Query planning now produces bounded sparse alternatives for common structural
+  compounds and inflections. For example, `statblocks for harpies` can search
+  `stat block harpy`, and `statblock for gors` can search `stat block gor`,
+  without adding creature-specific aliases.
+- Planner `match_terms` are intentionally narrower than FTS candidates. They
+  split structural compounds such as `statblock` into `stat` and `block`, but
+  they do not add every plural/singular variant as a separate relevance term.
+  This prevents the deterministic reranker from double-counting one concept
+  such as `critical` plus `criticals`.
+- Exact page resolution and deterministic reranking use `match_terms`, so page
+  hits, object hits, and source-object link resolution apply the same
+  normalized structural intent. Dense vector query text stays close to the
+  user's original meaningful terms, keeping semantic embeddings from being
+  polluted by synthetic sparse variants.
+- Research grounding: this follows established hybrid IR/RAG practice: sparse
+  lexical search preserves exact term evidence, query expansion improves
+  candidate recall, and two-stage retrieval/reranking protects the prompt
+  budget. See SQLite FTS5 tokenizers, SPLADE sparse lexical retrieval,
+  Query2doc query expansion, and recent hybrid/two-stage RAG papers. The app
+  keeps this expansion deterministic and bounded because private rules lookup
+  needs auditable evidence rather than generated pseudo-book text.
+- Live QA after the repair confirmed that the original query
+  `give me the statblock for gors` retrieves Old World Bestiary page 84 / Gor
+  Statistics as the first evidence item under the checked 13-book source set.
+
 ## Answer Contract
 
 [coverage: high]

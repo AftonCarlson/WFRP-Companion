@@ -29,6 +29,7 @@ from wfrp_companion.source_objects import embeddings as embedding_module
 from wfrp_companion.source_objects.embedding_providers import (
     EmbeddingProviderDependencyError,
 )
+from wfrp_companion.source_objects.store import rebuild_source_object_search
 
 
 def make_config(tmp_path: Path) -> AppConfig:
@@ -3035,6 +3036,58 @@ def test_structural_query_terms_do_not_fuzzy_match_source_map_aliases() -> None:
     }
     assert "black" not in plan.expanded_terms
     assert retrieval.token_matches_source("block", {"black"}) is False
+
+
+def test_query_planner_generates_compound_and_plural_search_alternatives() -> None:
+    plan = retrieval.plan_query("give me the statblocks for harpies", ())
+
+    assert "stat block harpy" in plan.candidates
+    assert "stat block" in plan.candidates
+    assert "harpy" in plan.candidates
+
+
+def test_compound_plural_structural_query_retrieves_singular_stat_evidence(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="bestiary",
+            title="Bestiary",
+            category="Rules",
+            page_number=12,
+            text="Harpy Statistics Main Profile WS BS S T Ag Int WP Fel.",
+        )
+        connection.execute("update books set search_status = 'indexed'")
+        insert_source_object(
+            connection,
+            object_id="bestiary:harpy-statistics",
+            book_id="bestiary",
+            page_id="bestiary:12",
+            object_type="stat_block",
+            title="Harpy Statistics",
+            heading_path=("Creatures",),
+            page_start=12,
+            page_end=12,
+            text="Harpy Statistics stat block Main Profile WS BS S T Ag Int WP Fel.",
+        )
+    rebuild_source_object_search(config, force=True)
+
+    evidence_pool = retrieval.collect_evidence_candidates(
+        config,
+        source_book_ids=("bestiary",),
+        query_plan=retrieval.plan_query("give me the statblocks for harpies", ()),
+        per_candidate_limit=5,
+    )
+    ranked = retrieval.rerank_candidates(
+        evidence_pool,
+        retrieval.plan_query("give me the statblocks for harpies", ()),
+    )
+
+    assert [candidate.source_object_id for candidate, _score, _reasons in ranked] == [
+        "bestiary:harpy-statistics"
+    ]
 
 
 def test_keep_best_candidate_replaces_weaker_page_candidate() -> None:
