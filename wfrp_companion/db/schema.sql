@@ -516,6 +516,7 @@ create table if not exists familiar_research_runs (
     'planning',
     'tool_calling',
     'validating',
+    'deciding',
     'finalizing',
     'completed',
     'insufficient',
@@ -532,9 +533,32 @@ create table if not exists familiar_research_runs (
   check(tool_rounds_used <= max_tool_rounds)
 );
 
+create table if not exists familiar_research_plans (
+  id text primary key,
+  research_run_id text not null references familiar_research_runs(id) on delete cascade,
+  revision integer not null,
+  status text not null,
+  intent text not null,
+  plan_summary text not null,
+  subject_json text not null default '{}',
+  requirements_json text not null default '[]',
+  planned_actions_json text not null default '[]',
+  provider_call_id text,
+  validation_errors_json text not null default '[]',
+  created_at text not null,
+  updated_at text not null,
+  check(revision >= 1),
+  check(status in ('proposed', 'accepted', 'rejected', 'superseded')),
+  check(length(intent) > 0),
+  check(length(plan_summary) > 0)
+);
+
 create table if not exists familiar_tool_calls (
   id text primary key,
   research_run_id text not null references familiar_research_runs(id) on delete cascade,
+  research_plan_id text references familiar_research_plans(id) on delete set null,
+  requirement_id text,
+  purpose text,
   step_number integer not null,
   call_index integer not null default 0,
   provider_call_id text,
@@ -559,6 +583,8 @@ create table if not exists familiar_tool_calls (
 create table if not exists familiar_evidence_judgments (
   id text primary key,
   research_run_id text not null references familiar_research_runs(id) on delete cascade,
+  research_plan_id text references familiar_research_plans(id) on delete set null,
+  requirement_id text,
   retrieval_run_id text references retrieval_runs(id) on delete set null,
   retrieval_hit_id text references retrieval_hits(id) on delete set null,
   source_object_id text references source_objects(id) on delete set null,
@@ -568,6 +594,8 @@ create table if not exists familiar_evidence_judgments (
   status text not null,
   reason_code text not null,
   reasons_json text not null default '[]',
+  subject_constraint_json text not null default '{}',
+  constraint_status text,
   created_at text not null,
   check(status in ('accepted', 'rejected', 'partial')),
   check(length(requirement_type) > 0),
@@ -629,6 +657,13 @@ create index if not exists ix_familiar_research_runs_model_run
 on familiar_research_runs(model_run_id);
 create index if not exists ix_familiar_research_runs_thread
 on familiar_research_runs(thread_id, created_at);
+create unique index if not exists ux_familiar_research_plans_run_revision
+on familiar_research_plans(research_run_id, revision);
+create unique index if not exists ux_familiar_research_plans_accepted_run
+on familiar_research_plans(research_run_id)
+where status = 'accepted';
+create index if not exists ix_familiar_research_plans_run_status
+on familiar_research_plans(research_run_id, status);
 create index if not exists ix_familiar_tool_calls_run
 on familiar_tool_calls(research_run_id, step_number);
 create unique index if not exists ux_familiar_tool_calls_step_call
@@ -638,10 +673,14 @@ on familiar_tool_calls(research_run_id, provider_call_id)
 where provider_call_id is not null;
 create index if not exists ix_familiar_tool_calls_retrieval
 on familiar_tool_calls(retrieval_run_id);
+create index if not exists ix_familiar_tool_calls_plan_requirement
+on familiar_tool_calls(research_plan_id, requirement_id, step_number);
 create index if not exists ix_familiar_evidence_judgments_run
 on familiar_evidence_judgments(research_run_id, status);
 create index if not exists ix_familiar_evidence_judgments_hit
 on familiar_evidence_judgments(retrieval_hit_id);
+create index if not exists ix_familiar_evidence_judgments_requirement
+on familiar_evidence_judgments(research_plan_id, requirement_id, status);
 
 create view if not exists book_readiness as
 select

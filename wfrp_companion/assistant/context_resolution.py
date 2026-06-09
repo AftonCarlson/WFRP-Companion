@@ -65,6 +65,29 @@ PAGE_REFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 SAME_FOR_RE = re.compile(r"\bsame\s+for\s+(?P<subject>[\w' -]+)$", re.IGNORECASE)
+RECOMMENDATION_TERMS = {
+    "best",
+    "better",
+    "good",
+    "great",
+    "ideal",
+    "recommend",
+    "recommendation",
+    "suggest",
+    "suggestion",
+}
+SETTING_RECOMMENDATION_TERMS = {
+    "adventure",
+    "module",
+    "place",
+    "run",
+    "setting",
+    "settings",
+    "site",
+}
+DUNGEON_CRAWL_RETRIEVAL_QUERY = (
+    "dungeon crawl adventure setting underground ruins sewer mine"
+)
 
 
 @dataclass(frozen=True)
@@ -97,9 +120,14 @@ def resolve_research_request(
         raw_query,
         active_context=active_context,
     )
+    recommendation_query = recommendation_retrieval_query(normalized)
 
     same_for_subject = same_for_subject_from_query(normalized)
-    if same_for_subject is not None:
+    if recommendation_query is not None:
+        subject = None
+        intent = RULES_INTENT
+        used_active_subject = False
+    elif same_for_subject is not None:
         subject = same_for_subject
         intent = active_intent or RULES_INTENT
         used_active_subject = False
@@ -122,7 +150,7 @@ def resolve_research_request(
             subject=subject,
             intent=intent,
             page_reference=page_reference,
-            fallback=normalized,
+            fallback=recommendation_query or normalized,
         ),
         intent=intent,
         subject=subject,
@@ -187,6 +215,24 @@ def same_for_subject_from_query(normalized_query: str) -> str | None:
     if match is None:
         return None
     return normalize_subject(match.group("subject"))
+
+
+def recommendation_retrieval_query(normalized_query: str) -> str | None:
+    tokens = set(meaningful_tokens(normalized_query))
+    if (
+        tokens.intersection(RECOMMENDATION_TERMS)
+        and tokens.intersection(SETTING_RECOMMENDATION_TERMS)
+        and has_dungeon_crawl_terms(tokens)
+    ):
+        return DUNGEON_CRAWL_RETRIEVAL_QUERY
+    return None
+
+
+def has_dungeon_crawl_terms(tokens: set[str]) -> bool:
+    has_dungeon = bool(tokens.intersection({"dungeon", "dungeons"}))
+    has_crawl = bool(tokens.intersection({"crawl", "crawls"}))
+    has_compound = bool(tokens.intersection({"dungeon-crawl", "dungeon-crawls"}))
+    return has_compound or (has_dungeon and has_crawl)
 
 
 def subject_from_query(normalized_query: str, *, intent: str) -> str | None:

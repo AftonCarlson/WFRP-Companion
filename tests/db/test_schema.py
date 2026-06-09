@@ -46,6 +46,7 @@ REQUIRED_TABLES = {
     "retrieval_hits",
     "model_runs",
     "familiar_research_runs",
+    "familiar_research_plans",
     "familiar_tool_calls",
     "familiar_evidence_judgments",
 }
@@ -173,7 +174,7 @@ def test_load_config_uses_local_defaults(tmp_path: Path) -> None:
     assert config.db_path == repo_root / "data" / "wfrp_companion.sqlite"
     assert config.asset_dir == repo_root / "data" / "library" / "assets"
     assert config.openai_api_key is None
-    assert config.openai_model == "gpt-5.4-mini"
+    assert config.openai_model == "gpt-5.5"
     assert config.openai_timeout_seconds == 60
     assert config.chat_context_hit_limit == 6
     assert config.chat_prompt_history_turn_limit == 6
@@ -1168,9 +1169,27 @@ def test_familiar_research_schema_tracks_agent_workflow(tmp_path: Path) -> None:
             "updated_at",
             "completed_at",
         )
+        assert column_names(connection, "familiar_research_plans") == (
+            "id",
+            "research_run_id",
+            "revision",
+            "status",
+            "intent",
+            "plan_summary",
+            "subject_json",
+            "requirements_json",
+            "planned_actions_json",
+            "provider_call_id",
+            "validation_errors_json",
+            "created_at",
+            "updated_at",
+        )
         assert column_names(connection, "familiar_tool_calls") == (
             "id",
             "research_run_id",
+            "research_plan_id",
+            "requirement_id",
+            "purpose",
             "step_number",
             "call_index",
             "provider_call_id",
@@ -1189,6 +1208,8 @@ def test_familiar_research_schema_tracks_agent_workflow(tmp_path: Path) -> None:
         assert column_names(connection, "familiar_evidence_judgments") == (
             "id",
             "research_run_id",
+            "research_plan_id",
+            "requirement_id",
             "retrieval_run_id",
             "retrieval_hit_id",
             "source_object_id",
@@ -1198,8 +1219,26 @@ def test_familiar_research_schema_tracks_agent_workflow(tmp_path: Path) -> None:
             "status",
             "reason_code",
             "reasons_json",
+            "subject_constraint_json",
+            "constraint_status",
             "created_at",
         )
+        assert "deciding" in connection.execute(
+            """
+            select sql
+            from sqlite_master
+            where type = 'table'
+              and name = 'familiar_research_runs'
+            """
+        ).fetchone()["sql"]
+        assert index_columns(
+            connection,
+            "ux_familiar_research_plans_accepted_run",
+        ) == ("research_run_id",)
+        assert index_columns(
+            connection,
+            "ux_familiar_research_plans_run_revision",
+        ) == ("research_run_id", "revision")
         assert index_columns(
             connection,
             "ux_familiar_tool_calls_step_call",
@@ -1208,6 +1247,14 @@ def test_familiar_research_schema_tracks_agent_workflow(tmp_path: Path) -> None:
             connection,
             "ux_familiar_tool_calls_provider_call",
         ) == ("research_run_id", "provider_call_id")
+        assert index_columns(
+            connection,
+            "ix_familiar_tool_calls_plan_requirement",
+        ) == ("research_plan_id", "requirement_id", "step_number")
+        assert index_columns(
+            connection,
+            "ix_familiar_evidence_judgments_requirement",
+        ) == ("research_plan_id", "requirement_id", "status")
 
 
 def test_familiar_research_schema_enforces_agent_workflow_constraints(
@@ -1282,6 +1329,23 @@ def test_familiar_research_schema_enforces_agent_workflow_constraints(
             values ('research-1', 'run-1', 'thread-1', 'message-1',
                     'rules-core', 'stats?', 'harpy stats', 'statline_lookup',
                     'planning', 4, 'not_evaluated',
+                    '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into familiar_research_plans (
+              id,
+              research_run_id,
+              revision,
+              status,
+              intent,
+              plan_summary,
+              created_at,
+              updated_at
+            )
+            values ('plan-1', 'research-1', 1, 'accepted', 'statline_lookup',
+                    'Find Harpy statline evidence.',
                     '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
             """
         )
@@ -1375,6 +1439,42 @@ def test_familiar_research_schema_enforces_agent_workflow_constraints(
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 """
+                insert into familiar_research_plans (
+                  id,
+                  research_run_id,
+                  revision,
+                  status,
+                  intent,
+                  plan_summary,
+                  created_at,
+                  updated_at
+                )
+                values ('plan-duplicate-revision', 'research-1', 1, 'rejected',
+                        'statline_lookup', 'Invalid duplicate revision.',
+                        '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into familiar_research_plans (
+                  id,
+                  research_run_id,
+                  revision,
+                  status,
+                  intent,
+                  plan_summary,
+                  created_at,
+                  updated_at
+                )
+                values ('plan-duplicate-accepted', 'research-1', 2, 'accepted',
+                        'statline_lookup', 'Second accepted plan.',
+                        '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
                 insert into familiar_research_runs (
                   id,
                   model_run_id,
@@ -1395,6 +1495,46 @@ def test_familiar_research_schema_enforces_agent_workflow_constraints(
                         '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
                 """
             )
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              user_message_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+              updated_at
+            )
+            values ('run-2', 'thread-1', 'message-1', 'openai', 'gpt-test',
+                    'retrieving', 'send-2', '2026-06-09T00:00:00Z',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into familiar_research_runs (
+              id,
+              model_run_id,
+              thread_id,
+              user_message_id,
+              raw_query,
+              resolved_query,
+              intent,
+              status,
+              max_tool_rounds,
+              evidence_status,
+              created_at,
+              updated_at
+            )
+            values ('research-deciding', 'run-2', 'thread-1',
+                    'message-1', 'stats?', 'harpy stats', 'statline_lookup',
+                    'deciding', 4, 'partial', '2026-06-09T00:00:00Z',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
 
 
 def test_page_assets_must_match_referenced_page_identity(tmp_path: Path) -> None:

@@ -28,6 +28,7 @@ class ResponseProvider(Protocol):
         tool_results: Sequence[provider.ProviderToolResult] = (),
         previous_response_id: str | None = None,
         tool_choice: object | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> Iterable[provider.ProviderStreamEvent]:
         pass  # pragma: no cover - protocol declaration only
 

@@ -11,6 +11,7 @@ from wfrp_companion.api.dependencies import ConfigDependency
 from wfrp_companion.api.schemas import (
     ChatCitationResponse,
     ChatMessageResponse,
+    ChatResearchEventResponse,
     ChatThreadDetailResponse,
     ChatThreadResponse,
     ChatThreadsResponse,
@@ -63,7 +64,7 @@ def get_thread_detail(
     return ChatThreadDetailResponse(
         thread=thread_response(detail.thread),
         source_book_ids=list(detail.source_book_ids),
-        turns=[turn_response(turn) for turn in detail.turns],
+        turns=[turn_response(config, turn) for turn in detail.turns],
     )
 
 
@@ -174,7 +175,7 @@ def model_run_response(model_run: chat_store.ModelRun) -> ModelRunResponse:
     return ModelRunResponse(**model_run.__dict__)
 
 
-def turn_response(turn: chat_store.ChatTurn) -> ChatTurnResponse:
+def turn_response(config, turn: chat_store.ChatTurn) -> ChatTurnResponse:
     return ChatTurnResponse(
         user_message=message_response(turn.user_message),
         assistant_message=None
@@ -182,6 +183,13 @@ def turn_response(turn: chat_store.ChatTurn) -> ChatTurnResponse:
         else message_response(turn.assistant_message),
         model_run=model_run_response(turn.model_run),
         citations=[citation_response(citation) for citation in turn.citations],
+        research_events=[
+            ChatResearchEventResponse(**event)
+            for event in chat_store.list_public_research_events(
+                config,
+                turn.model_run.id,
+            )
+        ],
     )
 
 

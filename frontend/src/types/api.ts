@@ -154,6 +154,12 @@ export type ChatCitationResponse = {
   page_range_label?: string | null;
 };
 
+export type ChatResearchEventResponse = {
+  type: string;
+  label: string;
+  metadata?: Record<string, unknown>;
+};
+
 export type ReaderContextRequest = {
   active_book_id?: string | null;
   active_pdf_page_number?: number | null;
@@ -174,6 +180,7 @@ export type ChatTurnResponse = {
   assistant_message: ChatMessageResponse | null;
   model_run: ModelRunResponse;
   citations: ChatCitationResponse[];
+  research_events?: ChatResearchEventResponse[];
 };
 
 export type ChatThreadDetailResponse = {
@@ -186,10 +193,12 @@ export type ChatStreamEvent = {
   type:
     | "accepted"
     | "research_started"
+    | "research_plan"
     | "tool_call"
     | "retrieval"
     | "tool_result"
     | "evidence_validation"
+    | "finalizing"
     | "delta"
     | "completed"
     | "failed";

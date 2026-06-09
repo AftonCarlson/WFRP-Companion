@@ -134,6 +134,18 @@ describe("AgentChatPanel", () => {
             },
             model_run: { ...modelRun("completed"), id: "run-old", thread_id: "thread-old" },
             citations: [],
+            research_events: [
+              {
+                type: "research_plan",
+                label: "Research plan accepted",
+                metadata: {},
+              },
+              {
+                type: "evidence_validation",
+                label: "Evidence sufficient; 1 accepted, 0 partial",
+                metadata: {},
+              },
+            ],
           },
         ],
       }),
@@ -144,6 +156,9 @@ describe("AgentChatPanel", () => {
     await user.click(await screen.findByRole("button", { name: /Old Rules Chat/ }));
     expect(await screen.findByText("Loaded question")).toBeInTheDocument();
     expect(screen.getByText("Loaded answer")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Evidence sufficient; 1 accepted, 0 partial").length,
+    ).toBeGreaterThan(0);
     await user.type(screen.getByRole("textbox", { name: "Message" }), "continue");
     await user.click(screen.getByRole("button", { name: "Send message" }));
 
@@ -418,6 +433,10 @@ describe("AgentChatPanel", () => {
         metadata: { resolved_query: "harpy statline" },
       });
       options.onEvent({
+        type: "research_plan",
+        metadata: { plan_summary: "Find cited Harpy statline evidence." },
+      });
+      options.onEvent({
         type: "tool_call",
         metadata: {
           tool_name: "search_library",
@@ -437,6 +456,10 @@ describe("AgentChatPanel", () => {
           evidence_status: "sufficient",
           accepted_hit_count: 1,
         },
+      });
+      options.onEvent({
+        type: "finalizing",
+        metadata: { decision_summary: "Requirements satisfied." },
       });
       options.onEvent({
         type: "completed",
@@ -474,13 +497,13 @@ describe("AgentChatPanel", () => {
       await screen.findAllByText("Evidence sufficient; 1 accepted")
     )[0];
     await user.click(summary);
-    expect(screen.getByText('Researching "harpy statline"')).toBeInTheDocument();
-    expect(
-      screen.getByText('Running hybrid search for "harpy statline"'),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Research started")).toBeInTheDocument();
+    expect(screen.getByText("Research plan accepted")).toBeInTheDocument();
+    expect(screen.getByText("Running hybrid search")).toBeInTheDocument();
     expect(
       screen.getByText("Tool returned 1 candidate(s); vector ran"),
     ).toBeInTheDocument();
+    expect(screen.getAllByText("Answering from evidence").length).toBeGreaterThan(0);
   });
 
   it("renders fallback research trace labels for non-search tool events", async () => {

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from wfrp_companion.assistant import research
+from wfrp_companion.assistant import agent_planning, research
 from wfrp_companion.assistant import chat_store
 from wfrp_companion.assistant.evidence import RetrievedHit
 from wfrp_companion.config import AppConfig
@@ -1122,6 +1122,198 @@ def test_familiar_tool_call_records_arguments_and_guarded_transitions(
     assert unchanged.status == "succeeded"
     assert unchanged.error_code is None
     assert count_rows(config, "familiar_tool_calls") == 1
+
+
+def test_familiar_research_plan_and_requirement_linkage_round_trip(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="harpy statline",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    research_run = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="harpy statline",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+    )
+    plan = agent_planning.ResearchPlan(
+        id="plan-1",
+        research_run_id=research_run.id,
+        revision=1,
+        intent="statline_lookup",
+        plan_summary="Find Harpy statline evidence.",
+        subject=agent_planning.SubjectConstraint(
+            canonical="harpy",
+            surface="harpy",
+            include_terms=("harpy",),
+        ),
+        requirements=(
+            agent_planning.EvidenceRequirement(
+                id="harpy_stats",
+                requirement_type="statline_evidence",
+                subject=agent_planning.SubjectConstraint(
+                    canonical="harpy",
+                    surface="harpy",
+                    include_terms=("harpy",),
+                ),
+                object_type_hints=("stat_block", "monster_profile"),
+            ),
+        ),
+        planned_actions=(
+            agent_planning.PlannedAction(
+                tool_name="search_library",
+                requirement_id="harpy_stats",
+                purpose="Find a Harpy stat block.",
+                arguments={
+                    "query": "harpy statline",
+                    "intent": "statline_lookup",
+                    "subject": "harpy",
+                    "limit": 8,
+                    "include_terms": ["harpy"],
+                    "exclude_terms": [],
+                    "object_type_hints": ["stat_block", "monster_profile"],
+                    "book_title_hints": [],
+                    "page_hints": [],
+                },
+            ),
+        ),
+        provider_call_id="call-plan",
+    )
+
+    stored = chat_store.record_familiar_research_plan(config, plan)
+    duplicate = chat_store.record_familiar_research_plan(config, plan)
+    tool_call = chat_store.record_familiar_tool_call(
+        config,
+        research_run.id,
+        research_plan_id=stored.id,
+        requirement_id="harpy_stats",
+        purpose="Find a Harpy stat block.",
+        step_number=1,
+        provider_call_id="call-tool",
+        tool_name="search_library",
+        arguments={"query": "harpy statline"},
+    )
+    judgment = chat_store.record_familiar_evidence_judgment(
+        config,
+        research_run_id=research_run.id,
+        research_plan_id=stored.id,
+        requirement_id="harpy_stats",
+        requirement_type="statline_evidence",
+        status="rejected",
+        reason_code="missing_statline_markers",
+        reasons=("No statline markers.",),
+        subject_constraint={
+            "canonical": "harpy",
+            "include_terms": ["harpy"],
+            "exclude_terms": [],
+        },
+        constraint_status="failed",
+    )
+    chat_store.transition_familiar_research_run(
+        config,
+        research_run.id,
+        from_statuses=("planning",),
+        to_status="insufficient",
+        evidence_status="partial",
+    )
+    reloaded = chat_store.get_familiar_research_plan(config, stored.id)
+    public_events = chat_store.list_public_research_events(config, queued.model_run.id)
+
+    assert stored == plan
+    assert duplicate == plan
+    assert reloaded == plan
+    assert tool_call.research_plan_id == stored.id
+    assert tool_call.requirement_id == "harpy_stats"
+    assert tool_call.purpose == "Find a Harpy stat block."
+    assert judgment.research_plan_id == stored.id
+    assert judgment.requirement_id == "harpy_stats"
+    assert judgment.subject_constraint == {
+        "canonical": "harpy",
+        "include_terms": ["harpy"],
+        "exclude_terms": [],
+    }
+    assert judgment.constraint_status == "failed"
+    assert public_events[-1]["label"] == "Evidence partial; 0 accepted, 0 partial"
+    assert count_rows(config, "familiar_research_plans") == 1
+
+
+def test_public_research_events_cover_failed_and_tool_fallback_labels(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="harpy statline",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    research_run = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="harpy statline",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+    )
+    for index, tool_name in enumerate(
+        ("search_library", "open_page", "lookup_source_object", "custom_tool"),
+        start=1,
+    ):
+        chat_store.record_familiar_tool_call(
+            config,
+            research_run.id,
+            step_number=index,
+            provider_call_id=f"call-tool-{index}",
+            tool_name=tool_name,
+            arguments={"query": "harpy statline"},
+        )
+    chat_store.transition_familiar_research_run(
+        config,
+        research_run.id,
+        from_statuses=("planning",),
+        to_status="failed",
+        evidence_status="insufficient",
+    )
+
+    events = chat_store.list_public_research_events(config, queued.model_run.id)
+
+    assert [event["label"] for event in events] == [
+        "Research started",
+        "Searched enabled books",
+        "Opened source page",
+        "Inspected source object",
+        "Ran custom_tool",
+        "Research failed before evidence was accepted",
+    ]
+    assert "resolved_query" not in events[0]["metadata"]
+    assert chat_store.list_public_research_events(config, "missing-run") == ()
+
+
+def test_research_plan_row_and_json_list_edge_cases(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    with open_connection(config.db_path) as connection:
+        with pytest.raises(chat_store.ModelRunNotFoundError):
+            chat_store.familiar_research_plan_row(connection, "missing-plan")
+
+    assert chat_store.json_list_from_string(None) == []
+    assert chat_store.json_list_from_string("{bad json") == []
+    assert chat_store.json_list_from_string("{}") == []
+    assert chat_store.json_list_from_string("[1, 2]") == [1, 2]
 
 
 def test_familiar_evidence_judgments_and_thread_context_round_trip(

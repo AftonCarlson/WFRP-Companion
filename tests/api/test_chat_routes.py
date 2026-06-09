@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from types import SimpleNamespace
 from pathlib import Path
@@ -339,6 +340,13 @@ def test_thread_detail_route_collapses_successful_retry(tmp_path: Path) -> None:
     assert turn["model_run"]["id"] == retry.json()["model_run"]["id"]
     assert turn["model_run"]["status"] == "completed"
     assert turn["model_run"]["retryable"] is False
+    assert [event["type"] for event in turn["research_events"]] == [
+        "research_started",
+        "research_plan",
+        "tool_call",
+    ]
+    assert turn["research_events"][1]["label"] == "Research plan accepted"
+    assert "plan_summary" not in turn["research_events"][1]["metadata"]
 
 
 def test_chat_routes_map_missing_resources_and_validation(tmp_path: Path) -> None:
@@ -479,6 +487,66 @@ class FakeProvider:
     def stream_response(self, *, messages, request_id, **_kwargs):
         assert request_id.startswith("run-")
         assert messages[-1].role == "user"
+        tools = _kwargs.get("tools") or ()
+        if tools and [tool.name for tool in tools] == ["set_research_plan"]:
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="set_research_plan",
+                tool_call_id="call-plan",
+                tool_arguments_json=json.dumps(
+                    {
+                        "intent": "rules_lookup",
+                        "plan_summary": "Find cited rules evidence.",
+                        "subject": {
+                            "canonical": None,
+                            "surface": None,
+                            "include_terms": [],
+                            "exclude_terms": [],
+                            "book_title_hints": [],
+                            "page_hints": [],
+                            "notes": None,
+                        },
+                        "requirements": [
+                            {
+                                "id": "rules_evidence",
+                                "requirement_type": "topical_evidence",
+                                "subject": {
+                                    "canonical": None,
+                                    "surface": None,
+                                    "include_terms": [],
+                                    "exclude_terms": [],
+                                    "book_title_hints": [],
+                                    "page_hints": [],
+                                    "notes": None,
+                                },
+                                "required_terms": [],
+                                "excluded_terms": [],
+                                "object_type_hints": [],
+                                "min_accepted_hits": 1,
+                                "required": True,
+                            }
+                        ],
+                        "planned_actions": [
+                            {
+                                "tool_name": "search_library",
+                                "requirement_id": "rules_evidence",
+                                "purpose": "Search enabled books for rules evidence.",
+                                "arguments": {
+                                    "query": "rules evidence",
+                                    "intent": "rules_lookup",
+                                    "subject": None,
+                                    "limit": 4,
+                                },
+                            }
+                        ],
+                    }
+                ),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
+        if tools:
+            yield provider.ProviderStreamEvent(type="completed")
+            return
         yield provider.ProviderStreamEvent(type="delta", text_delta="Rules answer.")
         yield provider.ProviderStreamEvent(
             type="completed",

@@ -41,10 +41,11 @@ def test_build_prompt_requires_citations_and_insufficient_context_honesty() -> N
 def test_system_prompt_describes_tool_calling_agent_contract() -> None:
     system_text = prompts.SYSTEM_INSTRUCTIONS
 
-    assert "bounded tool-calling research agent" in system_text
-    assert "Hybrid retrieval is backend policy" in system_text
+    assert "bounded research agent" in system_text
+    assert "local app owns source scope" in system_text
     assert "accepted retrieved evidence" in system_text
     assert "Do not answer factual WFRP claims from memory" in system_text
+    assert "Reader context can guide tool use" in system_text
     assert "Do not dump long copyrighted passages" in system_text
 
 
@@ -66,6 +67,106 @@ def test_build_research_prompt_names_tools_and_active_context() -> None:
     assert "lookup_source_object" in messages[-1].content
     assert "Active book: bestiary" in messages[-1].content
     assert "Active printed page: 99" in messages[-1].content
+    assert "Accepted research plan:" in messages[-1].content
+    assert "Requirements: none recorded" in messages[-1].content
+
+
+def test_build_research_prompt_includes_requirement_status_ledger() -> None:
+    messages = prompts.build_research_prompt_messages(
+        raw_query="compare them",
+        resolved_query="compare harpy and gor statlines",
+        intent="statline_lookup",
+        subject=None,
+        active_book_id=None,
+        active_printed_page_label=None,
+        recent_messages=(),
+        plan_summary="/Users/aftoncarlson/private/notes.pdf find both statlines",
+        requirement_summaries=(
+            {
+                "id": "harpy_stats",
+                "requirement_type": "statline_evidence",
+                "status": "satisfied",
+                "accepted_hit_count": 1,
+                "partial_hit_count": 0,
+                "min_accepted_hits": 1,
+                "required": True,
+                "subject": {
+                    "canonical": "harpy",
+                    "surface": "Harpy",
+                    "include_terms": ["harpy"],
+                    "exclude_terms": ["rat ogre"],
+                    "book_title_hints": ["Old World Bestiary.pdf"],
+                    "page_hints": ["99"],
+                },
+                "required_terms": ["harpy", "statistics"],
+                "excluded_terms": ["rat ogre"],
+                "object_type_hints": ["stat_block"],
+            },
+            {
+                "id": "gor_stats",
+                "requirement_type": "statline_evidence",
+                "status": "unsatisfied",
+                "accepted_hit_count": 0,
+                "partial_hit_count": 0,
+                "min_accepted_hits": 1,
+                "required": True,
+                "subject": {
+                    "canonical": "gor",
+                    "surface": "Gor",
+                    "include_terms": ["gor"],
+                    "exclude_terms": [],
+                    "book_title_hints": [],
+                    "page_hints": [],
+                },
+                "required_terms": ["gor", "statistics"],
+                "excluded_terms": [],
+                "object_type_hints": ["stat_block"],
+            },
+        ),
+    )
+
+    user_text = messages[-1].content
+
+    assert "Plan summary: [local path removed] find both statlines" in user_text
+    assert "harpy_stats (statline_evidence): satisfied; accepted 1/1" in user_text
+    assert "subject: harpy" in user_text
+    assert "include: harpy" in user_text
+    assert "exclude: rat ogre" in user_text
+    assert "required_terms: harpy, statistics" in user_text
+    assert "object_types: stat_block" in user_text
+    assert "book_hints: [pdf filename removed]" in user_text
+    assert "gor_stats (statline_evidence): unsatisfied; accepted 0/1" in user_text
+    assert "/Users/" not in user_text
+    assert ".pdf" not in user_text
+
+
+def test_research_plan_status_helpers_cover_non_sequence_and_truncation() -> None:
+    assert prompts.safe_summary_list("harpy") == "none"
+    assert prompts.safe_summary_list({"ignored": "mapping"}) == "none"
+    assert prompts.safe_summary_value("x" * 120, max_chars=12) == "x" * 12
+
+
+def test_build_research_planning_prompt_keeps_resolved_hint_on_one_line() -> None:
+    messages = prompts.build_research_planning_prompt_messages(
+        raw_query="What about it?",
+        resolved_query=(
+            "What about it?\n\n"
+            "Recent chat terms for reference resolution: critical hits table"
+        ),
+        intent="rules_lookup",
+        subject=None,
+        active_book_id=None,
+        active_printed_page_label=None,
+        recent_messages=(),
+    )
+
+    user_text = messages[-1].content
+
+    assert (
+        "Resolved query hint: What about it? Recent chat terms for "
+        "reference resolution: critical hits table"
+    ) in user_text
+    assert "\nRecent chat terms for reference resolution" not in user_text
 
 
 def test_build_research_prompt_includes_scrubbed_prior_tool_outputs(
@@ -128,10 +229,22 @@ def test_build_final_answer_prompt_uses_only_accepted_evidence() -> None:
         question="harpy statline",
         accepted_hits=(accepted,),
         evidence_status="sufficient",
+        plan_summary="Find cited Harpy statline evidence.",
+        requirement_summaries=(
+            {
+                "id": "harpy_stats",
+                "requirement_type": "statline_evidence",
+                "status": "satisfied",
+            },
+        ),
+        answer_policy="cite_required",
         recent_messages=(),
     )
 
     user_text = messages[-1].content
+    assert "Public plan: Find cited Harpy statline evidence." in user_text
+    assert "Answer policy: cite_required" in user_text
+    assert "- harpy_stats (statline_evidence): satisfied" in user_text
     assert "Accepted evidence:" in user_text
     assert "Synthetic Harpy stat_block" in user_text
     assert "Answer only from accepted evidence" in user_text

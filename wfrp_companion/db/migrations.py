@@ -17,6 +17,7 @@ STRUCTURED_EVIDENCE_MIGRATION_ID = "0004_structured_evidence"
 PAGE_LABEL_CALIBRATION_MIGRATION_ID = "0005_page_label_calibration"
 EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID = "0006_embedding_provider_identity"
 FAMILIAR_AGENT_RESEARCH_MIGRATION_ID = "0007_familiar_agent_research"
+FAMILIAR_RESEARCH_PLANS_MIGRATION_ID = "0008_familiar_research_plans"
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
@@ -25,6 +26,7 @@ MIGRATION_IDS: tuple[str, ...] = (
     PAGE_LABEL_CALIBRATION_MIGRATION_ID,
     EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID,
     FAMILIAR_AGENT_RESEARCH_MIGRATION_ID,
+    FAMILIAR_RESEARCH_PLANS_MIGRATION_ID,
 )
 
 
@@ -136,6 +138,8 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         migration_function = apply_embedding_provider_identity
     elif migration_id == FAMILIAR_AGENT_RESEARCH_MIGRATION_ID:
         migration_function = apply_familiar_agent_research
+    elif migration_id == FAMILIAR_RESEARCH_PLANS_MIGRATION_ID:
+        migration_function = apply_familiar_research_plans
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -267,6 +271,19 @@ def apply_familiar_agent_research(connection: sqlite3.Connection) -> None:
     )
 
 
+def apply_familiar_research_plans(connection: sqlite3.Connection) -> None:
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{FAMILIAR_RESEARCH_PLANS_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+    rebuild_familiar_research_runs_if_needed(connection)
+    rebuild_familiar_tool_calls_if_needed(connection)
+    rebuild_familiar_evidence_judgments_if_needed(connection)
+    create_familiar_research_plan_indexes(connection)
+
+
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
     for statement in sql.split(";"):
         statement = statement.strip()
@@ -313,6 +330,7 @@ def collect_table_counts(connection: sqlite3.Connection) -> tuple[tuple[str, int
         "model_runs",
         "chat_thread_context",
         "familiar_research_runs",
+        "familiar_research_plans",
         "familiar_tool_calls",
         "familiar_evidence_judgments",
         "ingest_jobs",
@@ -568,6 +586,185 @@ def rebuild_retrieval_hits_if_needed(connection: sqlite3.Connection) -> None:
         """
     )
     connection.execute("drop table retrieval_hits_phase6")
+
+
+def rebuild_familiar_research_runs_if_needed(connection: sqlite3.Connection) -> None:
+    if "deciding" in table_sql(connection, "familiar_research_runs"):
+        return
+
+    drop_familiar_research_indexes(connection)
+    connection.execute(
+        "alter table familiar_research_runs rename to familiar_research_runs_before_0008"
+    )
+    connection.execute(FAMILIAR_RESEARCH_RUNS_TABLE_SQL)
+    connection.execute(
+        """
+        insert into familiar_research_runs (
+          id,
+          model_run_id,
+          thread_id,
+          user_message_id,
+          source_set_id,
+          raw_query,
+          resolved_query,
+          intent,
+          status,
+          max_tool_rounds,
+          tool_rounds_used,
+          evidence_status,
+          final_retrieval_run_id,
+          metadata_json,
+          created_at,
+          updated_at,
+          completed_at
+        )
+        select
+          id,
+          model_run_id,
+          thread_id,
+          user_message_id,
+          source_set_id,
+          raw_query,
+          resolved_query,
+          intent,
+          status,
+          max_tool_rounds,
+          tool_rounds_used,
+          evidence_status,
+          final_retrieval_run_id,
+          metadata_json,
+          created_at,
+          updated_at,
+          completed_at
+        from familiar_research_runs_before_0008
+        """
+    )
+    connection.execute("drop table familiar_research_runs_before_0008")
+
+
+def rebuild_familiar_tool_calls_if_needed(connection: sqlite3.Connection) -> None:
+    if "research_plan_id" in column_names(connection, "familiar_tool_calls"):
+        return
+
+    drop_familiar_research_indexes(connection)
+    connection.execute(
+        "alter table familiar_tool_calls rename to familiar_tool_calls_before_0008"
+    )
+    connection.execute(FAMILIAR_TOOL_CALLS_TABLE_SQL)
+    connection.execute(
+        """
+        insert into familiar_tool_calls (
+          id,
+          research_run_id,
+          step_number,
+          call_index,
+          provider_call_id,
+          tool_name,
+          arguments_json,
+          argument_hash,
+          status,
+          retrieval_run_id,
+          output_summary_json,
+          error_code,
+          error_message,
+          created_at,
+          updated_at,
+          completed_at
+        )
+        select
+          id,
+          research_run_id,
+          step_number,
+          call_index,
+          provider_call_id,
+          tool_name,
+          arguments_json,
+          argument_hash,
+          status,
+          retrieval_run_id,
+          output_summary_json,
+          error_code,
+          error_message,
+          created_at,
+          updated_at,
+          completed_at
+        from familiar_tool_calls_before_0008
+        """
+    )
+    connection.execute("drop table familiar_tool_calls_before_0008")
+
+
+def rebuild_familiar_evidence_judgments_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    if "research_plan_id" in column_names(connection, "familiar_evidence_judgments"):
+        return
+
+    drop_familiar_research_indexes(connection)
+    connection.execute(
+        """
+        alter table familiar_evidence_judgments
+        rename to familiar_evidence_judgments_before_0008
+        """
+    )
+    connection.execute(FAMILIAR_EVIDENCE_JUDGMENTS_TABLE_SQL)
+    connection.execute(
+        """
+        insert into familiar_evidence_judgments (
+          id,
+          research_run_id,
+          retrieval_run_id,
+          retrieval_hit_id,
+          source_object_id,
+          book_id,
+          printed_page_label,
+          requirement_type,
+          status,
+          reason_code,
+          reasons_json,
+          created_at
+        )
+        select
+          id,
+          research_run_id,
+          retrieval_run_id,
+          retrieval_hit_id,
+          source_object_id,
+          book_id,
+          printed_page_label,
+          requirement_type,
+          status,
+          reason_code,
+          reasons_json,
+          created_at
+        from familiar_evidence_judgments_before_0008
+        """
+    )
+    connection.execute("drop table familiar_evidence_judgments_before_0008")
+
+
+def drop_familiar_research_indexes(connection: sqlite3.Connection) -> None:
+    for index_name in (
+        "ix_familiar_research_runs_model_run",
+        "ix_familiar_research_runs_thread",
+        "ux_familiar_research_plans_run_revision",
+        "ux_familiar_research_plans_accepted_run",
+        "ix_familiar_research_plans_run_status",
+        "ix_familiar_tool_calls_run",
+        "ux_familiar_tool_calls_step_call",
+        "ux_familiar_tool_calls_provider_call",
+        "ix_familiar_tool_calls_retrieval",
+        "ix_familiar_tool_calls_plan_requirement",
+        "ix_familiar_evidence_judgments_run",
+        "ix_familiar_evidence_judgments_hit",
+        "ix_familiar_evidence_judgments_requirement",
+    ):
+        connection.execute(f"drop index if exists {index_name}")
+
+
+def create_familiar_research_plan_indexes(connection: sqlite3.Connection) -> None:
+    for statement in FAMILIAR_RESEARCH_INDEX_SQL:
+        connection.execute(statement)
 
 
 def create_phase_7_indexes(connection: sqlite3.Connection) -> None:
@@ -899,6 +1096,103 @@ create table retrieval_hits (
 """
 
 
+FAMILIAR_RESEARCH_RUNS_TABLE_SQL = """
+create table familiar_research_runs (
+  id text primary key,
+  model_run_id text not null unique references model_runs(id) on delete cascade,
+  thread_id text not null references chat_threads(id) on delete cascade,
+  user_message_id text not null references chat_messages(id) on delete cascade,
+  source_set_id text references source_sets(id) on delete set null,
+  raw_query text not null,
+  resolved_query text not null,
+  intent text not null,
+  status text not null,
+  max_tool_rounds integer not null,
+  tool_rounds_used integer not null default 0,
+  evidence_status text not null,
+  final_retrieval_run_id text references retrieval_runs(id) on delete set null,
+  metadata_json text not null default '{}',
+  created_at text not null,
+  updated_at text not null,
+  completed_at text,
+  check(status in (
+    'planning',
+    'tool_calling',
+    'validating',
+    'deciding',
+    'finalizing',
+    'completed',
+    'insufficient',
+    'failed'
+  )),
+  check(evidence_status in (
+    'not_evaluated',
+    'sufficient',
+    'partial',
+    'insufficient'
+  )),
+  check(max_tool_rounds > 0),
+  check(tool_rounds_used >= 0),
+  check(tool_rounds_used <= max_tool_rounds)
+)
+"""
+
+
+FAMILIAR_TOOL_CALLS_TABLE_SQL = """
+create table familiar_tool_calls (
+  id text primary key,
+  research_run_id text not null references familiar_research_runs(id) on delete cascade,
+  research_plan_id text references familiar_research_plans(id) on delete set null,
+  requirement_id text,
+  purpose text,
+  step_number integer not null,
+  call_index integer not null default 0,
+  provider_call_id text,
+  tool_name text not null,
+  arguments_json text not null,
+  argument_hash text not null,
+  status text not null,
+  retrieval_run_id text references retrieval_runs(id) on delete set null,
+  output_summary_json text not null default '{}',
+  error_code text,
+  error_message text,
+  created_at text not null,
+  updated_at text not null,
+  completed_at text,
+  check(status in ('requested', 'running', 'succeeded', 'failed', 'rejected')),
+  check(step_number >= 1),
+  check(call_index >= 0),
+  check(length(tool_name) > 0),
+  check(length(argument_hash) > 0)
+)
+"""
+
+
+FAMILIAR_EVIDENCE_JUDGMENTS_TABLE_SQL = """
+create table familiar_evidence_judgments (
+  id text primary key,
+  research_run_id text not null references familiar_research_runs(id) on delete cascade,
+  research_plan_id text references familiar_research_plans(id) on delete set null,
+  requirement_id text,
+  retrieval_run_id text references retrieval_runs(id) on delete set null,
+  retrieval_hit_id text references retrieval_hits(id) on delete set null,
+  source_object_id text references source_objects(id) on delete set null,
+  book_id text references books(id) on delete set null,
+  printed_page_label text,
+  requirement_type text not null,
+  status text not null,
+  reason_code text not null,
+  reasons_json text not null default '[]',
+  subject_constraint_json text not null default '{}',
+  constraint_status text,
+  created_at text not null,
+  check(status in ('accepted', 'rejected', 'partial')),
+  check(length(requirement_type) > 0),
+  check(length(reason_code) > 0)
+)
+"""
+
+
 INDEX_SQL: tuple[str, ...] = (
     """
     create index if not exists ix_ingest_jobs_status
@@ -935,5 +1229,63 @@ INDEX_SQL: tuple[str, ...] = (
     """
     create unique index if not exists ux_retrieval_hits_run_rank
     on retrieval_hits(retrieval_run_id, rank)
+    """,
+)
+
+
+FAMILIAR_RESEARCH_INDEX_SQL: tuple[str, ...] = (
+    """
+    create index if not exists ix_familiar_research_runs_model_run
+    on familiar_research_runs(model_run_id)
+    """,
+    """
+    create index if not exists ix_familiar_research_runs_thread
+    on familiar_research_runs(thread_id, created_at)
+    """,
+    """
+    create unique index if not exists ux_familiar_research_plans_run_revision
+    on familiar_research_plans(research_run_id, revision)
+    """,
+    """
+    create unique index if not exists ux_familiar_research_plans_accepted_run
+    on familiar_research_plans(research_run_id)
+    where status = 'accepted'
+    """,
+    """
+    create index if not exists ix_familiar_research_plans_run_status
+    on familiar_research_plans(research_run_id, status)
+    """,
+    """
+    create index if not exists ix_familiar_tool_calls_run
+    on familiar_tool_calls(research_run_id, step_number)
+    """,
+    """
+    create unique index if not exists ux_familiar_tool_calls_step_call
+    on familiar_tool_calls(research_run_id, step_number, call_index)
+    """,
+    """
+    create unique index if not exists ux_familiar_tool_calls_provider_call
+    on familiar_tool_calls(research_run_id, provider_call_id)
+    where provider_call_id is not null
+    """,
+    """
+    create index if not exists ix_familiar_tool_calls_retrieval
+    on familiar_tool_calls(retrieval_run_id)
+    """,
+    """
+    create index if not exists ix_familiar_tool_calls_plan_requirement
+    on familiar_tool_calls(research_plan_id, requirement_id, step_number)
+    """,
+    """
+    create index if not exists ix_familiar_evidence_judgments_run
+    on familiar_evidence_judgments(research_run_id, status)
+    """,
+    """
+    create index if not exists ix_familiar_evidence_judgments_hit
+    on familiar_evidence_judgments(retrieval_hit_id)
+    """,
+    """
+    create index if not exists ix_familiar_evidence_judgments_requirement
+    on familiar_evidence_judgments(research_plan_id, requirement_id, status)
     """,
 )

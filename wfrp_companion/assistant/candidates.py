@@ -20,6 +20,7 @@ from wfrp_companion.library.page_labels import load_calibrated_printed_page_labe
 from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
 from wfrp_companion.search.fts import build_fts_query, search_exact
 from wfrp_companion.source_objects.embeddings import cosine_similarity
+from wfrp_companion.source_objects.embeddings import embedding_source_snapshot_sha256
 from wfrp_companion.source_objects.embeddings import source_object_embeddings_current
 from wfrp_companion.source_objects.embeddings import vector_from_blob
 from wfrp_companion.source_objects.embedding_providers import (
@@ -44,6 +45,12 @@ class LinkedEvidenceTarget:
 class CandidateCollectionResult:
     candidates: tuple[EvidenceCandidate, ...]
     diagnostics: research.RetrievalDiagnostics
+
+
+@dataclass(frozen=True)
+class VectorSearchResult:
+    candidates: tuple[EvidenceCandidate, ...]
+    status: str
 
 
 def collect_evidence_candidates(
@@ -129,18 +136,16 @@ def collect_evidence_candidates_with_diagnostics(
             for candidate in source_object_candidates:
                 candidates.append(candidate)
         vector_query = " ".join((*query_plan.terms, *query_plan.expanded_terms))
-        vector_candidates = search_vector_candidates(
+        vector_result = search_vector_candidates_with_status(
             connection,
             vector_query,
             book_ids=source_book_ids,
             limit=per_candidate_limit,
             config=config,
         )
+        vector_candidates = vector_result.candidates
         channel_counts["vector"] = len(vector_candidates)
-        vector_status = vector_channel_status(
-            config,
-            candidate_count=len(vector_candidates),
-        )
+        vector_status = vector_result.status
         if vector_status != "ran":
             channel_skip_reasons["vector"] = vector_status
         for candidate in vector_candidates:
@@ -411,28 +416,54 @@ def search_vector_candidates(
     limit: int,
     config: AppConfig,
 ) -> tuple[EvidenceCandidate, ...]:
+    return search_vector_candidates_with_status(
+        connection,
+        query_text,
+        book_ids=book_ids,
+        limit=limit,
+        config=config,
+    ).candidates
+
+
+def search_vector_candidates_with_status(
+    connection: sqlite3.Connection,
+    query_text: str,
+    *,
+    book_ids: Collection[str],
+    limit: int,
+    config: AppConfig,
+) -> VectorSearchResult:
     selected_book_ids = tuple(book_ids)
     if not selected_book_ids:
-        return ()
+        return VectorSearchResult(candidates=(), status=vector_status_for_empty_scope(config))
     try:
         provider = resolve_embedding_provider(config)
     except UnsupportedEmbeddingProviderError:
-        return ()
+        return VectorSearchResult(candidates=(), status="provider_error")
     if provider is None:
-        return ()
+        return VectorSearchResult(candidates=(), status="disabled")
     current_book_ids = tuple(
         book_id
         for book_id in selected_book_ids
         if source_object_embeddings_current(connection, book_id, config=config)
     )
     if not current_book_ids:
-        return ()
+        return VectorSearchResult(
+            candidates=(),
+            status=vector_unavailable_status(
+                connection,
+                selected_book_ids,
+                provider_name=provider.provider_name,
+                model_name=provider.model_name,
+                dimensions=provider.dimensions,
+            ),
+        )
     try:
         query_vector = provider.embed_query(query_text)
     except (EmbeddingProviderError, EmbeddingDimensionError):
-        return ()
+        return VectorSearchResult(candidates=(), status="provider_error")
     if not any(query_vector):
-        return ()
+        return VectorSearchResult(candidates=(), status="ran_no_candidates")
     placeholders = ",".join("?" for _ in current_book_ids)
     rows = connection.execute(
         f"""
@@ -513,7 +544,52 @@ def search_vector_candidates(
                 ),
             )
         )
-    return tuple(candidates)
+    status = "ran" if candidates else "ran_no_candidates"
+    return VectorSearchResult(candidates=tuple(candidates), status=status)
+
+
+def vector_unavailable_status(
+    connection: sqlite3.Connection,
+    book_ids: tuple[str, ...],
+    *,
+    provider_name: str,
+    model_name: str,
+    dimensions: int,
+) -> str:
+    placeholders = ",".join("?" for _ in book_ids)
+    rows = connection.execute(
+        f"""
+        select book_id,
+               vector_status,
+               vector_snapshot_sha256,
+               embedding_provider,
+               embedding_model,
+               embedding_dimensions
+        from book_retrieval_status
+        where book_id in ({placeholders})
+        """,
+        book_ids,
+    ).fetchall()
+    if not rows:
+        return "missing_embeddings"
+    for row in rows:
+        if row["vector_status"] == "failed":
+            return "provider_error"
+    for row in rows:
+        if row["vector_status"] != "indexed":
+            return "stale_embeddings"
+        if row["vector_snapshot_sha256"] != embedding_source_snapshot_sha256(
+            connection,
+            row["book_id"],
+        ):
+            return "stale_embeddings"
+        if row["embedding_provider"] != provider_name:
+            return "stale_embeddings"
+        if row["embedding_model"] != model_name:
+            return "stale_embeddings"
+        if int(row["embedding_dimensions"] or 0) != dimensions:
+            return "stale_embeddings"
+    return "missing_embeddings"
 
 
 def evidence_candidate_from_source_object_row(

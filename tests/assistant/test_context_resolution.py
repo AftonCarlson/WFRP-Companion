@@ -119,6 +119,25 @@ def test_resolve_statline_for_subject_and_generic_queries() -> None:
     assert fallback.resolved_query == "what is it"
 
 
+def test_resolve_dungeon_crawl_recommendation_as_broad_research_query() -> None:
+    queries = (
+        "tell me what the best setting to run a dungeon crawl",
+        "recommend a good dungeon-crawl adventure site",
+    )
+    for query in queries:
+        resolved = context_resolution.resolve_research_request(
+            query,
+            active_context=None,
+        )
+
+        assert resolved.intent == "rules_lookup"
+        assert resolved.subject is None
+        assert (
+            resolved.resolved_query
+            == "dungeon crawl adventure setting underground ruins sewer mine"
+        )
+
+
 def test_same_page_without_active_context_keeps_query_without_page_label() -> None:
     resolved = context_resolution.resolve_research_request(
         "same page",

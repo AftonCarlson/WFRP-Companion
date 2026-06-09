@@ -458,7 +458,7 @@ function turnResponseToTranscriptTurn(turn: ChatTurnResponse): TranscriptTurn {
         ? "Familiar could not complete the response."
         : null),
     modelRun: turn.model_run,
-    researchTrace: [],
+    researchTrace: (turn.research_events ?? []).map((event) => event.label),
   };
 }
 
@@ -492,8 +492,10 @@ function lastTraceLabel(trace: string[]): string {
 function researchTraceLabel(event: ChatStreamEvent): string | null {
   const metadata = event.metadata ?? {};
   if (event.type === "research_started") {
-    const query = stringValue(metadata.resolved_query);
-    return query ? `Researching "${shortLabel(query)}"` : "Research started";
+    return "Research started";
+  }
+  if (event.type === "research_plan") {
+    return "Research plan accepted";
   }
   if (event.type === "tool_call") {
     return toolCallTraceLabel(metadata);
@@ -518,6 +520,9 @@ function researchTraceLabel(event: ChatStreamEvent): string | null {
       ? `Evidence ${status}`
       : `Evidence ${status}; ${accepted} accepted`;
   }
+  if (event.type === "finalizing") {
+    return "Answering from evidence";
+  }
   if (event.type === "failed") {
     return "Research failed";
   }
@@ -534,10 +539,7 @@ function toolCallTraceLabel(metadata: Record<string, unknown>): string {
     return page ? `Opening page ${shortLabel(page)}` : "Opening source page";
   }
   if (toolName === "search_library") {
-    const query = stringValue(argumentsRecord?.query);
-    return query
-      ? `Running hybrid search for "${shortLabel(query)}"`
-      : "Running hybrid search";
+    return "Running hybrid search";
   }
   if (toolName === "lookup_source_object") {
     return "Inspecting source object";

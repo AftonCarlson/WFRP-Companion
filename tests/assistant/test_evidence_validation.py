@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from wfrp_companion.assistant import agent_planning
 from wfrp_companion.assistant import chat_store
 from wfrp_companion.assistant import evidence_validation
 from wfrp_companion.assistant.evidence import RetrievedHit
@@ -140,6 +141,40 @@ def hit(
     )
 
 
+def subject_constraint(
+    *,
+    canonical: str | None,
+    include_terms: tuple[str, ...] = (),
+    exclude_terms: tuple[str, ...] = (),
+) -> agent_planning.SubjectConstraint:
+    return agent_planning.SubjectConstraint(
+        canonical=canonical,
+        surface=canonical,
+        include_terms=include_terms,
+        exclude_terms=exclude_terms,
+    )
+
+
+def requirement(
+    *,
+    requirement_type: agent_planning.RequirementType,
+    subject: agent_planning.SubjectConstraint,
+    required_terms: tuple[str, ...] = (),
+    excluded_terms: tuple[str, ...] = (),
+    object_type_hints: tuple[str, ...] = (),
+) -> agent_planning.EvidenceRequirement:
+    return agent_planning.EvidenceRequirement(
+        id="evidence_requirement",
+        requirement_type=requirement_type,
+        subject=subject,
+        required_terms=required_terms,
+        excluded_terms=excluded_terms,
+        object_type_hints=object_type_hints,
+        min_accepted_hits=1,
+        required=True,
+    )
+
+
 def create_research_run(config: AppConfig) -> tuple[str, str, str, str, str]:
     seed_book(config)
     thread = chat_store.create_thread(config)
@@ -261,6 +296,95 @@ def test_validate_partial_page_and_topical_evidence_paths() -> None:
     assert topical_result.status == "sufficient"
     assert topical_result.judgments[0].reason_code == "topical_evidence"
     assert evidence_validation.hit_mentions_subject(topical, "the") is True
+
+
+def test_validate_requirement_rejects_excluded_subject_match() -> None:
+    regular_ogre = hit(
+        context_text="Ogre stat_block: M 6 WS 33 S 45.",
+        object_title="Ogre",
+    )
+    rat_ogre = hit(
+        context_text="Rat Ogre stat_block: M 6 WS 33 S 45.",
+        object_title="Rat Ogre",
+    )
+    evidence_requirement = requirement(
+        requirement_type="statline_evidence",
+        subject=subject_constraint(
+            canonical="ogre",
+            include_terms=("ogre", "ogres"),
+            exclude_terms=("rat ogre", "rat ogres"),
+        ),
+        required_terms=("ogre",),
+        excluded_terms=("rat ogre", "rat ogres"),
+        object_type_hints=("stat_block",),
+    )
+
+    result = evidence_validation.validate_hits_for_requirement(
+        (regular_ogre, rat_ogre),
+        requirement=evidence_requirement,
+        source_book_ids=("bestiary",),
+    )
+
+    assert result.status == "sufficient"
+    assert [judgment.status for judgment in result.judgments] == [
+        "accepted",
+        "rejected",
+    ]
+    assert [judgment.reason_code for judgment in result.judgments] == [
+        "statline_evidence",
+        "excluded_subject",
+    ]
+    assert result.accepted_hits == (regular_ogre,)
+
+
+def test_validate_requirement_accepts_broad_recommendation_evidence() -> None:
+    karak_azgal = hit(
+        title="Karak Azgal",
+        context_text="Karak Azgal has mines, tombs, and underground adventure sites.",
+        object_type="rule_section",
+        object_title="Using Karak Azgal",
+        source_object_id="karak-azgal-sites",
+    )
+    evidence_requirement = requirement(
+        requirement_type="topical_evidence",
+        subject=subject_constraint(canonical=None),
+        required_terms=("underground", "adventure"),
+    )
+
+    result = evidence_validation.validate_hits_for_requirement(
+        (karak_azgal,),
+        requirement=evidence_requirement,
+        source_book_ids=("bestiary",),
+    )
+
+    assert result.status == "sufficient"
+    assert result.judgments[0].status == "accepted"
+    assert result.judgments[0].reason_code == "topical_evidence"
+
+
+def test_validate_hit_compatibility_and_empty_term_helpers() -> None:
+    accepted = hit(context_text="Harpy stat_block: M 4 WS 31 BS 0 S 31.")
+
+    judgment = evidence_validation.validate_hit(
+        accepted,
+        subject="harpy",
+        intent="statline_lookup",
+        source_book_ids={"bestiary"},
+    )
+    unconstrained = evidence_validation.validate_hits_for_requirement(
+        (accepted,),
+        requirement=requirement(
+            requirement_type="topical_evidence",
+            subject=subject_constraint(canonical=None),
+        ),
+        source_book_ids=("bestiary",),
+    )
+
+    assert judgment.status == "accepted"
+    assert evidence_validation.hit_mentions_subject(accepted, "the") is True
+    assert evidence_validation.hit_mentions_subject(accepted, "harpy") is True
+    assert unconstrained.status == "sufficient"
+    assert evidence_validation.text_contains_term("harpy", "") is False
 
 
 def test_record_validation_persists_judgments_and_updates_thread_context(

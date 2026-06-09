@@ -1,5 +1,42 @@
 # Wiki Compile Log
 
+## 2026-06-09 Familiar Reasoning-Led Research Agent Phase
+
+- Implemented provider-first Familiar research planning: no local retrieval
+  tool runs until the provider returns one accepted strict public plan.
+- Added durable `familiar_research_plans` storage plus plan/requirement links
+  on tool calls and evidence judgments. Public trace reload now synthesizes
+  research start, accepted plan, tool actions, evidence status, finalizing, and
+  failures from persisted research rows.
+- Replaced recovery-only behavior with a bounded provider-directed action loop.
+  Every later tool action must name a known plan requirement, and
+  `finish_research` can stop without another retrieval while preserving the
+  accepted-evidence-only final answer contract. Review hardening now rejects
+  multiple recovery tool calls, includes the accepted public plan/requirement
+  ledger plus bounded requirement constraints in recovery prompts, and prevents
+  `requirements_satisfied` from stopping a run when required plan requirements
+  remain unsatisfied.
+- Added requirement-aware evidence validation for included/excluded subject
+  terms, statline evidence, broad topical/recommendation evidence, and
+  requirement-linked judgment persistence. Required requirements are satisfied
+  per requirement id and `min_accepted_hits`, not by aggregate evidence alone.
+- Hardened hybrid diagnostics so vector status distinguishes `ran`,
+  `ran_no_candidates`, `disabled`, `missing_embeddings`, `stale_embeddings`,
+  and provider errors.
+- Updated Familiar final prompts to include the public plan, requirement
+  status, answer policy, accepted evidence, and insufficiency guidance without
+  exposing hidden reasoning.
+- Updated the Familiar UI/API surface so live streams and reloaded chat
+  history show compact public research traces. Public metadata is now
+  enum/count/id/status based before API/UI exposure, so resolved queries, plan
+  summaries, tool purposes, local paths, PDF filenames, unknown raw tool
+  arguments, and copied source text are not surfaced in trace metadata.
+- Verification completed: `ruff check .`; backend 100% coverage gate with
+  632 tests at 100.00%; frontend Vitest coverage above configured thresholds;
+  frontend production build; Playwright e2e with 2 passing tests. Retrieval
+  status curl against `127.0.0.1:8000` did not return JSON because no local API
+  server was listening during verification.
+
 ## 2026-06-09 Familiar Tool-Calling Hybrid RAG
 
 - Repaired a live Familiar follow-up failure where `give me there stats`

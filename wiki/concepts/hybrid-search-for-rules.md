@@ -70,6 +70,14 @@ trace should show whether the vector channel ran, which candidates it produced
 or why it was skipped, how candidates were reranked, and why the final evidence
 was accepted or rejected.
 
+Current diagnostics distinguish a ready vector channel that found no selected
+candidate (`ran_no_candidates`) from disabled embeddings, missing embeddings,
+**stale embeddings**, and provider errors. Staleness includes non-indexed
+status, source snapshot mismatch, provider/model mismatch, or embedding
+dimension mismatch. This matters because a no-candidate result is different
+from a broken or stale semantic index: lexical/source-object channels can still
+complete the run, but the trace should say exactly what happened.
+
 ## Sources
 
 - `wiki/topics/ai-rag-system.md`

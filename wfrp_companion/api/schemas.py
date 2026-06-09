@@ -172,6 +172,12 @@ class ChatCitationResponse(BaseModel):
     page_range_label: str | None = None
 
 
+class ChatResearchEventResponse(BaseModel):
+    type: str
+    label: str
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
 class ReaderContextRequest(BaseModel):
     active_book_id: str | None = None
     active_pdf_page_number: int | None = Field(default=None, ge=1)
@@ -220,6 +226,7 @@ class ChatTurnResponse(BaseModel):
     assistant_message: ChatMessageResponse | None
     model_run: ModelRunResponse
     citations: list[ChatCitationResponse]
+    research_events: list[ChatResearchEventResponse] = Field(default_factory=list)
 
 
 class ChatThreadDetailResponse(BaseModel):

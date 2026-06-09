@@ -4,7 +4,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from wfrp_companion.config import AppConfig
@@ -12,6 +12,7 @@ from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.library.page_labels import load_calibrated_printed_page_label
 from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
 from wfrp_companion.library import source_sets
+from wfrp_companion.assistant import agent_planning
 from wfrp_companion.assistant import research
 
 
@@ -920,10 +921,77 @@ def transition_familiar_research_run(
         )
 
 
+def record_familiar_research_plan(
+    config: AppConfig,
+    plan: agent_planning.ResearchPlan,
+) -> agent_planning.ResearchPlan:
+    now = utc_timestamp()
+    with initialize_database(config.db_path) as connection:
+        existing = familiar_research_plan_row_or_none(connection, plan.id)
+        if existing is not None:
+            return familiar_research_plan_from_row(existing)
+        with connection:
+            connection.execute(
+                """
+                insert into familiar_research_plans (
+                  id,
+                  research_run_id,
+                  revision,
+                  status,
+                  intent,
+                  plan_summary,
+                  subject_json,
+                  requirements_json,
+                  planned_actions_json,
+                  provider_call_id,
+                  validation_errors_json,
+                  created_at,
+                  updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan.id,
+                    plan.research_run_id,
+                    plan.revision,
+                    plan.status,
+                    plan.intent,
+                    plan.plan_summary,
+                    research.normalized_json(plan.subject.to_json()),
+                    research.normalized_json(
+                        [requirement.to_json() for requirement in plan.requirements]
+                    ),
+                    research.normalized_json(
+                        [action.to_json() for action in plan.planned_actions]
+                    ),
+                    plan.provider_call_id,
+                    research.normalized_json(list(plan.validation_errors)),
+                    now,
+                    now,
+                ),
+            )
+        return familiar_research_plan_from_row(
+            familiar_research_plan_row(connection, plan.id)
+        )
+
+
+def get_familiar_research_plan(
+    config: AppConfig,
+    plan_id: str,
+) -> agent_planning.ResearchPlan:
+    with initialize_database(config.db_path) as connection:
+        return familiar_research_plan_from_row(
+            familiar_research_plan_row(connection, plan_id)
+        )
+
+
 def record_familiar_tool_call(
     config: AppConfig,
     research_run_id: str,
     *,
+    research_plan_id: str | None = None,
+    requirement_id: str | None = None,
+    purpose: str | None = None,
     step_number: int,
     call_index: int = 0,
     provider_call_id: str | None,
@@ -948,6 +1016,9 @@ def record_familiar_tool_call(
                 insert into familiar_tool_calls (
                   id,
                   research_run_id,
+                  research_plan_id,
+                  requirement_id,
+                  purpose,
                   step_number,
                   call_index,
                   provider_call_id,
@@ -958,11 +1029,14 @@ def record_familiar_tool_call(
                   created_at,
                   updated_at
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)
                 """,
                 (
                     tool_call_id,
                     research_run_id,
+                    research_plan_id,
+                    requirement_id,
+                    purpose,
                     step_number,
                     call_index,
                     provider_call_id,
@@ -1029,6 +1103,8 @@ def record_familiar_evidence_judgment(
     config: AppConfig,
     *,
     research_run_id: str,
+    research_plan_id: str | None = None,
+    requirement_id: str | None = None,
     requirement_type: str,
     status: str,
     reason_code: str,
@@ -1038,6 +1114,8 @@ def record_familiar_evidence_judgment(
     source_object_id: str | None = None,
     book_id: str | None = None,
     printed_page_label: str | None = None,
+    subject_constraint: dict[str, object] | None = None,
+    constraint_status: str | None = None,
 ) -> research.FamiliarEvidenceJudgment:
     judgment_id = new_id("evidence-judgment")
     now = utc_timestamp()
@@ -1048,6 +1126,8 @@ def record_familiar_evidence_judgment(
                 insert into familiar_evidence_judgments (
                   id,
                   research_run_id,
+                  research_plan_id,
+                  requirement_id,
                   retrieval_run_id,
                   retrieval_hit_id,
                   source_object_id,
@@ -1057,13 +1137,17 @@ def record_familiar_evidence_judgment(
                   status,
                   reason_code,
                   reasons_json,
+                  subject_constraint_json,
+                  constraint_status,
                   created_at
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     judgment_id,
                     research_run_id,
+                    research_plan_id,
+                    requirement_id,
                     retrieval_run_id,
                     retrieval_hit_id,
                     source_object_id,
@@ -1073,6 +1157,8 @@ def record_familiar_evidence_judgment(
                     status,
                     reason_code,
                     research.normalized_json(list(reasons)),
+                    research.normalized_json(subject_constraint or {}),
+                    constraint_status,
                     now,
                 ),
             )
@@ -1096,6 +1182,120 @@ def list_familiar_evidence_judgments(
             (research_run_id,),
         ).fetchall()
     return tuple(familiar_evidence_judgment_from_row(row) for row in rows)
+
+
+def list_public_research_events(
+    config: AppConfig,
+    model_run_id: str,
+) -> tuple[dict[str, object], ...]:
+    with initialize_database(config.db_path) as connection:
+        research_run = familiar_research_run_by_model_run_id(
+            connection,
+            model_run_id,
+        )
+        if research_run is None:
+            return ()
+        plan = connection.execute(
+            """
+            select *
+            from familiar_research_plans
+            where research_run_id = ?
+              and status = 'accepted'
+            order by revision desc
+            limit 1
+            """,
+            (research_run["id"],),
+        ).fetchone()
+        tool_rows = connection.execute(
+            """
+            select tool_name, requirement_id, purpose, status, step_number
+            from familiar_tool_calls
+            where research_run_id = ?
+            order by step_number, call_index, created_at, id
+            """,
+            (research_run["id"],),
+        ).fetchall()
+        judgment_rows = connection.execute(
+            """
+            select status
+            from familiar_evidence_judgments
+            where research_run_id = ?
+            """,
+            (research_run["id"],),
+        ).fetchall()
+
+    events: list[dict[str, object]] = [
+        {
+            "type": "research_started",
+            "label": "Research started",
+            "metadata": {
+                "research_run_id": research_run["id"],
+                "intent": research_run["intent"],
+            },
+        }
+    ]
+    if plan is not None:
+        events.append(
+            {
+                "type": "research_plan",
+                "label": "Research plan accepted",
+                "metadata": {
+                    "research_run_id": research_run["id"],
+                    "research_plan_id": plan["id"],
+                    "intent": plan["intent"],
+                },
+            }
+        )
+    for row in tool_rows:
+        events.append(
+            {
+                "type": "tool_call",
+                "label": tool_trace_label(row),
+                "metadata": {
+                    "tool_name": row["tool_name"],
+                    "requirement_id": row["requirement_id"],
+                    "status": row["status"],
+                    "step_number": row["step_number"],
+                },
+            }
+        )
+    if judgment_rows:
+        accepted = sum(1 for row in judgment_rows if row["status"] == "accepted")
+        partial = sum(1 for row in judgment_rows if row["status"] == "partial")
+        events.append(
+            {
+                "type": "evidence_validation",
+                "label": (
+                    f"Evidence {research_run['evidence_status']}; "
+                    f"{accepted} accepted, {partial} partial"
+                ),
+                "metadata": {
+                    "evidence_status": research_run["evidence_status"],
+                    "accepted_hit_count": accepted,
+                    "partial_hit_count": partial,
+                },
+            }
+        )
+    elif research_run["status"] == "failed":
+        events.append(
+            {
+                "type": "failed",
+                "label": "Research failed before evidence was accepted",
+                "metadata": {"evidence_status": research_run["evidence_status"]},
+            }
+        )
+    return tuple(events)
+
+
+def tool_trace_label(row: sqlite3.Row) -> str:
+    tool_name = row["tool_name"]
+    if tool_name == "search_library":
+        return "Searched enabled books"
+    if tool_name == "open_page":
+        return "Opened source page"
+    if tool_name == "lookup_source_object":
+        return "Inspected source object"
+    return f"Ran {tool_name}"
 
 
 def upsert_chat_thread_context(
@@ -1309,6 +1509,30 @@ def familiar_tool_call_row(
     if row is None:
         raise ModelRunNotFoundError(f"Familiar tool call not found: {tool_call_id}")
     return row
+
+
+def familiar_research_plan_row(
+    connection: sqlite3.Connection,
+    plan_id: str,
+) -> sqlite3.Row:
+    row = familiar_research_plan_row_or_none(connection, plan_id)
+    if row is None:
+        raise ModelRunNotFoundError(f"Familiar research plan not found: {plan_id}")
+    return row
+
+
+def familiar_research_plan_row_or_none(
+    connection: sqlite3.Connection,
+    plan_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        select *
+        from familiar_research_plans
+        where id = ?
+        """,
+        (plan_id,),
+    ).fetchone()
 
 
 def familiar_tool_call_by_provider_call_id(
@@ -1785,6 +2009,9 @@ def familiar_tool_call_from_row(row: sqlite3.Row) -> research.FamiliarToolCall:
     return research.FamiliarToolCall(
         id=row["id"],
         research_run_id=row["research_run_id"],
+        research_plan_id=row["research_plan_id"],
+        requirement_id=row["requirement_id"],
+        purpose=row["purpose"],
         step_number=int(row["step_number"]),
         call_index=int(row["call_index"]),
         provider_call_id=row["provider_call_id"],
@@ -1802,12 +2029,40 @@ def familiar_tool_call_from_row(row: sqlite3.Row) -> research.FamiliarToolCall:
     )
 
 
+def familiar_research_plan_from_row(row: sqlite3.Row) -> agent_planning.ResearchPlan:
+    subject = research.object_from_json(row["subject_json"])
+    requirements = json_list_from_string(row["requirements_json"])
+    planned_actions = json_list_from_string(row["planned_actions_json"])
+    plan = agent_planning.parse_research_plan(
+        {
+            "intent": row["intent"],
+            "plan_summary": row["plan_summary"],
+            "subject": subject,
+            "requirements": requirements,
+            "planned_actions": planned_actions,
+        },
+        research_run_id=row["research_run_id"],
+        plan_id=row["id"],
+        revision=int(row["revision"]),
+        provider_call_id=row["provider_call_id"],
+        status=row["status"],
+    )
+    return replace(
+        plan,
+        validation_errors=research.string_tuple_from_json(
+            row["validation_errors_json"]
+        ),
+    )
+
+
 def familiar_evidence_judgment_from_row(
     row: sqlite3.Row,
 ) -> research.FamiliarEvidenceJudgment:
     return research.FamiliarEvidenceJudgment(
         id=row["id"],
         research_run_id=row["research_run_id"],
+        research_plan_id=row["research_plan_id"],
+        requirement_id=row["requirement_id"],
         retrieval_run_id=row["retrieval_run_id"],
         retrieval_hit_id=row["retrieval_hit_id"],
         source_object_id=row["source_object_id"],
@@ -1817,6 +2072,8 @@ def familiar_evidence_judgment_from_row(
         status=row["status"],
         reason_code=row["reason_code"],
         reasons=research.string_tuple_from_json(row["reasons_json"]),
+        subject_constraint=research.object_from_json(row["subject_constraint_json"]),
+        constraint_status=row["constraint_status"],
         created_at=row["created_at"],
     )
 
@@ -1835,6 +2092,16 @@ def chat_thread_context_from_row(row: sqlite3.Row) -> research.ChatThreadContext
         metadata=research.object_from_json(row["metadata_json"]),
         updated_at=row["updated_at"],
     )
+
+
+def json_list_from_string(value: str | None) -> list[object]:
+    if not value:
+        return []
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return decoded if isinstance(decoded, list) else []
 
 
 def is_model_run_retryable(connection: sqlite3.Connection, row: sqlite3.Row) -> bool:

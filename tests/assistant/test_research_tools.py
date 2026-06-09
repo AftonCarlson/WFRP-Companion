@@ -570,6 +570,14 @@ def test_candidate_helpers_report_missing_vectors_and_scan_fallback(
         candidate_module.vector_channel_status(config, candidate_count=0)
         == "missing_embeddings"
     )
+    assert (
+        candidate_module.vector_channel_status(
+            replace(config, embedding_provider="disabled"),
+            candidate_count=0,
+        )
+        == "disabled"
+    )
+    assert candidate_module.vector_channel_status(config, candidate_count=2) == "ran"
 
     def no_fts_candidates(
         connection: sqlite3.Connection,

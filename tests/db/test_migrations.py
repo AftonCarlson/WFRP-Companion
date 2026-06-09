@@ -296,6 +296,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
         "0007_familiar_agent_research",
+        "0008_familiar_research_plans",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -371,9 +372,17 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0008_familiar_research_plans",),
+            ).fetchone()
+            is not None
+        )
         assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
         assert migrations.table_exists(connection, "familiar_research_runs")
+        assert migrations.table_exists(connection, "familiar_research_plans")
         assert migrations.table_exists(connection, "familiar_tool_calls")
         assert migrations.table_exists(connection, "familiar_evidence_judgments")
         assert migrations.table_exists(connection, "chat_thread_context")
@@ -403,6 +412,120 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         assert run_source["source_set_id"] == "rules-core"
         assert run_source["book_id"] == "core-rules"
         assert run_source["book_title_snapshot"] == "Core Rules"
+
+
+def test_familiar_research_plans_migration_rebuilds_agent_tables(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-agent.sqlite"
+    create_legacy_phase6_database(db_path)
+    with open_connection(db_path) as connection:
+        for migration_id in (
+            "0001_phase_7_source_objects",
+            "0002_source_map_retrieval",
+            "0003_vector_retrieval",
+            "0004_structured_evidence",
+            "0005_page_label_calibration",
+            "0006_embedding_provider_identity",
+            "0007_familiar_agent_research",
+        ):
+            apply_migration(connection, migration_id)
+        connection.execute(
+            """
+            insert into familiar_research_runs (
+              id,
+              model_run_id,
+              thread_id,
+              user_message_id,
+              source_set_id,
+              raw_query,
+              resolved_query,
+              intent,
+              status,
+              max_tool_rounds,
+              evidence_status,
+              created_at,
+              updated_at
+            )
+            values ('research-1', 'model-1', 'thread-1', 'message-1',
+                    'rules-core', 'stats?', 'harpy stats', 'statline_lookup',
+                    'planning', 4, 'not_evaluated',
+                    '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into familiar_tool_calls (
+              id,
+              research_run_id,
+              step_number,
+              call_index,
+              provider_call_id,
+              tool_name,
+              arguments_json,
+              argument_hash,
+              status,
+              created_at,
+              updated_at
+            )
+            values ('tool-1', 'research-1', 1, 0, 'call-1',
+                    'search_library', '{}', 'hash-1', 'requested',
+                    '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into familiar_evidence_judgments (
+              id,
+              research_run_id,
+              requirement_type,
+              status,
+              reason_code,
+              reasons_json,
+              created_at
+            )
+            values ('judgment-1', 'research-1', 'statline_lookup', 'partial',
+                    'subject_only_page', '["page mention only"]',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.commit()
+
+        apply_migration(connection, "0008_familiar_research_plans")
+
+        run_sql = migrations.table_sql(connection, "familiar_research_runs")
+        assert "deciding" in run_sql
+        assert migrations.table_exists(connection, "familiar_research_plans")
+        assert "research_plan_id" in migrations.column_names(
+            connection,
+            "familiar_tool_calls",
+        )
+        assert "purpose" in migrations.column_names(connection, "familiar_tool_calls")
+        assert "subject_constraint_json" in migrations.column_names(
+            connection,
+            "familiar_evidence_judgments",
+        )
+        assert (
+            connection.execute("select count(*) from familiar_research_runs").fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute("select count(*) from familiar_tool_calls").fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "select count(*) from familiar_evidence_judgments"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0008_familiar_research_plans",),
+            ).fetchone()
+            is not None
+        )
 
 
 def test_embedding_provider_identity_migration_backfills_legacy_vectors(
@@ -859,6 +982,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
         "0007_familiar_agent_research",
+        "0008_familiar_research_plans",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -869,6 +993,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
         "0007_familiar_agent_research",
+        "0008_familiar_research_plans",
     )
 
 
@@ -888,6 +1013,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
         "0007_familiar_agent_research",
+        "0008_familiar_research_plans",
     )
     with open_connection(db_path) as connection:
         assert (

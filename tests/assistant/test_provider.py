@@ -121,6 +121,7 @@ def test_openai_provider_sends_tools_tool_results_and_previous_response_id() -> 
             ),
             previous_response_id="resp-prev",
             tool_choice="none",
+            parallel_tool_calls=False,
         )
     )
 
@@ -128,6 +129,7 @@ def test_openai_provider_sends_tools_tool_results_and_previous_response_id() -> 
     assert fake_client.responses.kwargs is not None
     assert fake_client.responses.kwargs["previous_response_id"] == "resp-prev"
     assert fake_client.responses.kwargs["tool_choice"] == "none"
+    assert fake_client.responses.kwargs["parallel_tool_calls"] is False
     assert fake_client.responses.kwargs["input"] == [
         {
             "type": "function_call_output",

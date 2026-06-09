@@ -79,6 +79,7 @@ class OpenAIProvider:
         tool_results: Sequence[ProviderToolResult] = (),
         previous_response_id: str | None = None,
         tool_choice: object | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> Iterable[ProviderStreamEvent]:
         create_kwargs: dict[str, object] = {
             "model": self.model,
@@ -93,6 +94,8 @@ class OpenAIProvider:
             create_kwargs["previous_response_id"] = previous_response_id
         if tool_choice is not None:
             create_kwargs["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            create_kwargs["parallel_tool_calls"] = parallel_tool_calls
 
         stream = self.client.responses.create(
             **create_kwargs,

@@ -20,7 +20,11 @@ Current Familiar implementation:
   call chained directly to one model answer.
 - Each run resolves the user's request, preserves active follow-up context
   such as the current subject, records a `familiar_research_runs` row, and
-  starts with a backend-selected tool.
+  must accept a provider-submitted public research plan before any retrieval
+  tool runs.
+- Accepted plans are stored in `familiar_research_plans`; tool calls and
+  evidence judgments carry `research_plan_id` and `requirement_id` so the app
+  can audit which requirement each retrieval attempt served.
 - Chat requests may include `reader_context` from the active Grimoire tab:
   active book id, active PDF page number, optional printed page label, and open
   book ids. Familiar treats this only as a routing hint for page-aware
@@ -39,28 +43,50 @@ Current Familiar implementation:
 - Evidence validation runs after every tool call. Only accepted evidence can
   feed the final answer prompt and final citation run; partial or rejected
   evidence remains in the research trace for debugging.
-- Weak or empty evidence can trigger bounded recovery tool calls through the
-  provider. The backend still validates tool names, arguments, scope, evidence
-  status, and max tool rounds.
+- **A Familiar run is not sufficient until every required plan requirement has
+  met its own `min_accepted_hits`.** Accepted evidence is tracked per
+  requirement, so one successful retrieval cannot prematurely satisfy a
+  multi-requirement plan.
+- Weak or empty evidence can trigger bounded provider-directed tool actions.
+  The backend validates tool names, requirement ids, argument/requirement
+  equality, scope, evidence status, and max tool rounds before any local side
+  effect. A `finish_research` action can stop without running another
+  retrieval, but `requirements_satisfied` is accepted only when the backend's
+  per-requirement ledger is satisfied. The final answer still uses only
+  accepted evidence or an honest insufficiency.
 - Recovery planning is stateless with respect to OpenAI response storage:
   provider calls do not rely on `previous_response_id` or hosted tool-result
   chaining. Prior local tool outputs are summarized in the next research prompt
-  instead, preserving local-first/private behavior while avoiding stale
-  provider response ids.
+  instead, and the prompt includes the accepted public plan plus requirement
+  ids/status/counts and bounded requirement constraints such as subject terms,
+  required/excluded terms, object hints, and page/book hints so recovery
+  actions stay anchored to the plan while preserving local-first/private
+  behavior and avoiding stale provider response ids.
+- Requirement-aware validation now checks plan constraints rather than only a
+  literal normalized subject. This lets Familiar reject excluded evidence such
+  as Rat Ogre hits for regular Ogre requirements while accepting broad cited
+  recommendation evidence when the plan does not require a fake subject phrase.
 - Active stat follow-ups such as "give me the stats",
   "give me their stats", and common typo forms such as "give me there stats"
   resolve to the current thread subject before retrieval.
 - Retrieval diagnostics record which channels ran, vector status/failures,
   selected candidates, reranker outcomes, page lookup attempts, table/stat
-  lookups, skip reasons, and accepted/rejected evidence judgments.
+  lookups, skip reasons, and accepted/rejected evidence judgments. Vector
+  status distinguishes `ran`, `ran_no_candidates`, `disabled`,
+  `missing_embeddings`, `stale_embeddings`, and provider failures.
 - The UI can surface aggregate retrieval readiness through
   `/api/retrieval/status`: copied books, enabled books, page-text indexed
   books, source-object indexed books, table/stat indexed books, current
   vectorized books, vectorized enabled books, provider, dimensions, and
   aggregate vector status.
-- Familiar chat turns surface a compact expandable research trace from stream
-  events: research start, tool call, retrieval/candidate counts, vector status
-  when reported, evidence validation status, and failures.
+- Familiar chat turns surface a compact expandable public research trace from
+  stream events and persisted chat history: research start, accepted plan,
+  tool call, retrieval/candidate counts, vector status when reported,
+  evidence validation status, finalizing decisions, and failures. **Public trace
+  metadata is intentionally enum/count/id/status based** before it reaches the
+  API/UI; resolved queries, plan summaries, tool purposes, raw provider tool
+  arguments, local paths, PDF filenames, and copied source text are not exposed
+  through progress metadata.
 
 Historical phase notes below describe how the current system was assembled.
 

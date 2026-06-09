@@ -23,6 +23,7 @@ class RetrievalDiagnostics:
     channel_skip_reasons: dict[str, str]
     vector_status: Literal[
         "ran",
+        "ran_no_candidates",
         "disabled",
         "missing_embeddings",
         "stale_embeddings",
@@ -66,6 +67,9 @@ class FamiliarResearchRun:
 class FamiliarToolCall:
     id: str
     research_run_id: str
+    research_plan_id: str | None
+    requirement_id: str | None
+    purpose: str | None
     step_number: int
     call_index: int
     provider_call_id: str | None
@@ -86,6 +90,8 @@ class FamiliarToolCall:
 class FamiliarEvidenceJudgment:
     id: str
     research_run_id: str
+    research_plan_id: str | None
+    requirement_id: str | None
     retrieval_run_id: str | None
     retrieval_hit_id: str | None
     source_object_id: str | None
@@ -95,6 +101,8 @@ class FamiliarEvidenceJudgment:
     status: str
     reason_code: str
     reasons: tuple[str, ...]
+    subject_constraint: JsonObject
+    constraint_status: str | None
     created_at: str
 
 
