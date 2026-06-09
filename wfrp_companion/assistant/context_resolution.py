@@ -19,6 +19,35 @@ STATLINE_TERMS = {
     "statline",
     "statlines",
 }
+ACTIVE_SUBJECT_STAT_FOLLOWUP_TERMS = {
+    "are",
+    "can",
+    "could",
+    "get",
+    "give",
+    "have",
+    "i",
+    "it",
+    "its",
+    "line",
+    "me",
+    "need",
+    "please",
+    "show",
+    "that",
+    "the",
+    "their",
+    "them",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "want",
+    "what",
+    "would",
+    "you",
+}
 SHORT_STAT_FOLLOWUPS = {
     "i want the stats",
     "i want stats",
@@ -77,7 +106,11 @@ def resolve_research_request(
     else:
         intent = classify_intent(normalized, active_intent=active_intent)
         used_active_subject = False
-        if should_use_active_subject(normalized, page_reference):
+        if should_use_active_subject(
+            normalized,
+            page_reference,
+            intent=intent,
+        ):
             subject = active_subject
             used_active_subject = subject is not None
         else:
@@ -181,8 +214,21 @@ def subject_from_query(normalized_query: str, *, intent: str) -> str | None:
 def should_use_active_subject(
     normalized_query: str,
     page_reference: PageReference | None,
+    *,
+    intent: str,
 ) -> bool:
-    return normalized_query in SHORT_STAT_FOLLOWUPS or page_reference is not None
+    if page_reference is not None or normalized_query in SHORT_STAT_FOLLOWUPS:
+        return True
+    if intent != STATLINE_INTENT or not is_statline_query(normalized_query):
+        return False
+    tokens = re.findall(r"(?u)\b[\w'-]+\b", normalized_query)
+    non_reference_tokens = [
+        token
+        for token in tokens
+        if token not in STATLINE_TERMS
+        and token not in ACTIVE_SUBJECT_STAT_FOLLOWUP_TERMS
+    ]
+    return not non_reference_tokens
 
 
 def build_resolved_query(

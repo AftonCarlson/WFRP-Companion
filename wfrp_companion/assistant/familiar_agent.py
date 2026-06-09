@@ -123,19 +123,14 @@ def run_research(
     last_validation_status = outcome.validation.status
 
     prior_tool_outputs: list[dict[str, object]] = [outcome.tool_output]
-    previous_response_id: str | None = None
-    pending_tool_results: tuple[provider.ProviderToolResult, ...] = ()
     while not accepted_hits and tool_rounds_used < MAX_TOOL_ROUNDS:
         planning = request_recovery_tool(
             response_provider,
             request_id=result.model_run.id,
             resolved=resolved,
             conversation=conversation,
-            previous_response_id=previous_response_id,
-            tool_results=pending_tool_results,
             prior_tool_outputs=tuple(prior_tool_outputs),
         )
-        previous_response_id = planning.provider_response_id
         if planning.tool_call is None:
             break
         tool_call = planning.tool_call
@@ -160,12 +155,6 @@ def run_research(
         final_diagnostics = outcome.tool_result.diagnostics
         last_validation_status = outcome.validation.status
         prior_tool_outputs.append(outcome.tool_output)
-        pending_tool_results = (
-            provider.ProviderToolResult(
-                tool_call_id=tool_call.tool_call_id or outcome.tool_call.id,
-                output_json=json.dumps(outcome.tool_output, sort_keys=True),
-            ),
-        )
 
     evidence_status = aggregate_evidence_status(
         accepted_hits=accepted_hits,
@@ -519,8 +508,6 @@ def request_recovery_tool(
     request_id: str,
     resolved: context_resolution.ResolvedResearchRequest,
     conversation: ConversationContext,
-    previous_response_id: str | None,
-    tool_results: Sequence[provider.ProviderToolResult],
     prior_tool_outputs: Sequence[dict[str, object]] = (),
 ) -> ProviderPlanningResult:
     messages = prompts.build_research_prompt_messages(
@@ -545,8 +532,8 @@ def request_recovery_tool(
         messages=provider_messages,
         request_id=request_id,
         tools=tool_definitions(),
-        tool_results=tool_results,
-        previous_response_id=previous_response_id,
+        tool_results=(),
+        previous_response_id=None,
     ):
         if event.type == "tool_call":
             tool_call = ProviderToolRequest(

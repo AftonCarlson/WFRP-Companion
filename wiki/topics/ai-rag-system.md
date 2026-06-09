@@ -42,6 +42,14 @@ Current Familiar implementation:
 - Weak or empty evidence can trigger bounded recovery tool calls through the
   provider. The backend still validates tool names, arguments, scope, evidence
   status, and max tool rounds.
+- Recovery planning is stateless with respect to OpenAI response storage:
+  provider calls do not rely on `previous_response_id` or hosted tool-result
+  chaining. Prior local tool outputs are summarized in the next research prompt
+  instead, preserving local-first/private behavior while avoiding stale
+  provider response ids.
+- Active stat follow-ups such as "give me the stats",
+  "give me their stats", and common typo forms such as "give me there stats"
+  resolve to the current thread subject before retrieval.
 - Retrieval diagnostics record which channels ran, vector status/failures,
   selected candidates, reranker outcomes, page lookup attempts, table/stat
   lookups, skip reasons, and accepted/rejected evidence judgments.

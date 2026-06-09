@@ -21,16 +21,24 @@ def active_context() -> research.ChatThreadContext:
 
 
 def test_resolve_short_stat_followup_uses_active_subject() -> None:
-    resolved = context_resolution.resolve_research_request(
+    for query in (
         "I want the stats",
-        active_context=active_context(),
-    )
+        "give me the stats",
+        "give me their stats",
+        "give me there stats",
+        "their stats",
+        "there stats",
+    ):
+        resolved = context_resolution.resolve_research_request(
+            query,
+            active_context=active_context(),
+        )
 
-    assert resolved.subject == "harpy"
-    assert resolved.intent == "statline_lookup"
-    assert resolved.resolved_query == "harpy statline"
-    assert resolved.used_active_subject is True
-    assert resolved.page_reference is None
+        assert resolved.subject == "harpy"
+        assert resolved.intent == "statline_lookup"
+        assert resolved.resolved_query == "harpy statline"
+        assert resolved.used_active_subject is True
+        assert resolved.page_reference is None
 
 
 def test_resolve_same_for_replaces_subject_and_preserves_intent() -> None:

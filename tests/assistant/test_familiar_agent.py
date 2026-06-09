@@ -139,6 +139,7 @@ class NoToolThenFinalProvider:
 class PartialOpenPageThenFinalProvider:
     def __init__(self) -> None:
         self.planning_calls = 0
+        self.calls: list[dict[str, object]] = []
 
     def stream_response(
         self,
@@ -150,6 +151,15 @@ class PartialOpenPageThenFinalProvider:
         previous_response_id: str | None = None,
         tool_choice: object | None = None,
     ):
+        self.calls.append(
+            {
+                "messages": tuple(messages),
+                "tools": tuple(tools),
+                "tool_results": tuple(tool_results),
+                "previous_response_id": previous_response_id,
+                "tool_choice": tool_choice,
+            }
+        )
         if tools:
             self.planning_calls += 1
             if self.planning_calls == 1:
@@ -760,6 +770,8 @@ def test_familiar_tracks_partial_page_evidence_from_provider_tool(
     )
 
     assert provider_instance.planning_calls == 2
+    assert all(call["previous_response_id"] is None for call in provider_instance.calls)
+    assert all(call["tool_results"] == () for call in provider_instance.calls)
     assert events[-1].assistant_message is not None
     with open_connection(config.db_path) as connection:
         row = connection.execute(

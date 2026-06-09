@@ -2,6 +2,15 @@
 
 ## 2026-06-09 Familiar Tool-Calling Hybrid RAG
 
+- Repaired a live Familiar follow-up failure where `give me there stats`
+  could lose the active subject and, on weak evidence, surface a provider
+  `previous_response_id` recovery error as generic research failure. Active
+  stat follow-ups such as `give me the/their/there stats` now resolve to the
+  current subject, and recovery planning stays stateless against OpenAI while
+  carrying prior local tool outputs in the prompt. Verification for this repair:
+  targeted regressions passed, assistant tests reported 161 passing, `ruff
+  check .` passed, and the full backend coverage gate reported 563 passing with
+  100.00% coverage.
 - Overhauled Familiar from a one-shot retrieval answer path into a bounded
   tool-calling research agent. Runs now record research state, tool calls,
   retrieval attempts, diagnostics, evidence judgments, and accepted-evidence
