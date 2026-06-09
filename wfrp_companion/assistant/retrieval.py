@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from wfrp_companion.assistant.candidates import collect_evidence_candidates as collect_evidence_candidates
+from wfrp_companion.assistant.candidates import collect_evidence_candidates_with_diagnostics as collect_evidence_candidates_with_diagnostics
 from wfrp_companion.assistant.candidates import evidence_candidate_from_page_hit as evidence_candidate_from_page_hit
 from wfrp_companion.assistant.candidates import evidence_candidate_from_source_object_row as evidence_candidate_from_source_object_row
 from wfrp_companion.assistant.candidates import keep_best_candidate as keep_best_candidate
@@ -51,6 +54,7 @@ from wfrp_companion.assistant.source_map import source_map_chapters as source_ma
 from wfrp_companion.assistant.source_map import source_map_entry_from_book_row as source_map_entry_from_book_row
 from wfrp_companion.assistant.source_map import source_vocabulary as source_vocabulary
 from wfrp_companion.config import AppConfig
+from wfrp_companion.assistant.research import RetrievalDiagnostics
 
 
 def retrieve_context(
@@ -63,6 +67,25 @@ def retrieve_context(
     window_chars: int,
 ) -> RetrievalContext:
     source_scope = current_thread_source_scope(config, thread_id)
+    return retrieve_context_for_source_scope(
+        config,
+        source_scope,
+        query,
+        hit_limit=hit_limit,
+        total_char_limit=total_char_limit,
+        window_chars=window_chars,
+    )
+
+
+def retrieve_context_for_source_scope(
+    config: AppConfig,
+    source_scope: SourceScope,
+    query: str,
+    *,
+    hit_limit: int,
+    total_char_limit: int,
+    window_chars: int,
+) -> RetrievalContext:
     source_map = build_enabled_source_map(
         config,
         source_scope.book_ids,
@@ -77,14 +100,16 @@ def retrieve_context(
             source_set_id=source_scope.source_set_id,
             source_book_ids=source_scope.book_ids,
             source_map=source_map,
+            diagnostics=empty_diagnostics(config),
         )
 
-    evidence_pool = collect_evidence_candidates(
+    candidate_result = collect_evidence_candidates_with_diagnostics(
         config,
         source_book_ids=source_scope.book_ids,
         query_plan=query_plan,
         per_candidate_limit=max(8, hit_limit * 4),
     )
+    evidence_pool = candidate_result.candidates
     ranked_candidates = rerank_candidates(evidence_pool, query_plan)
     selected_hits: list[RetrievedHit] = []
     remaining_chars = total_char_limit
@@ -137,4 +162,31 @@ def retrieve_context(
         source_set_id=source_scope.source_set_id,
         source_book_ids=source_scope.book_ids,
         source_map=source_map,
+        diagnostics=replace(
+            candidate_result.diagnostics,
+            reranked_count=len(ranked_candidates),
+            selected_count=len(selected_hits),
+        ),
+    )
+
+
+def empty_diagnostics(config: AppConfig) -> RetrievalDiagnostics:
+    vector_status = "disabled" if config.embedding_provider == "disabled" else "missing_embeddings"
+    return RetrievalDiagnostics(
+        channel_counts={
+            "page_fts": 0,
+            "source_object_fts": 0,
+            "source_object_scan": 0,
+            "vector": 0,
+            "page_lookup": 0,
+            "table_stat_lookup": 0,
+        },
+        channel_skip_reasons={"retrieval": "disabled_by_limits"},
+        vector_status=vector_status,
+        candidate_count_before_fusion=0,
+        candidate_count_after_fusion=0,
+        reranked_count=0,
+        selected_count=0,
+        page_lookup_attempted=False,
+        validation_status="not_evaluated",
     )

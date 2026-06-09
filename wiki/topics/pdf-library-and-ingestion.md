@@ -200,10 +200,12 @@ book into 738 source objects, then skipped the same book as current on rerun.
 This proves the extractor, status row, job idempotency, and snapshot-drift
 checks work against the live private database without committing private text.
 
-Current boundary: source objects can now be populated, but object FTS,
-table/stat/location extraction, and Familiar object-aware ranking remain later
-Phase 7 PRs. Page-level `page_text` plus `page_search_fts` still remain the
-active retrieval surface for Familiar and exact search.
+Historical boundary: at Phase 7 PR2, source objects could be populated but
+object FTS, table/stat extraction, vectorization, and Familiar object-aware
+ranking were still later work. Current Familiar retrieval now uses page FTS,
+source-object FTS, source-object fallback scan, structured table/stat evidence,
+source-object links, local vector candidates when embeddings are enabled and
+current, rank fusion, reranking, and evidence validation.
 
 Phase 7 PR10 adds printed page-label calibration/backfill:
 
@@ -223,6 +225,33 @@ Phase 7 PR10 adds printed page-label calibration/backfill:
   printed-page citations.
 - Exact search, Familiar prompt context, and reloaded chat citations prefer
   current calibrated labels/ranges. The PDF page number remains the jump target.
+
+## Retrieval Asset Rebuild
+
+[coverage: high]
+
+The local retrieval assets are rebuildable from private imported library data:
+
+- `tools/rebuild_retrieval_assets.py` runs the retrieval maintenance pipeline:
+  global page FTS, source-object extraction, source-object FTS projection,
+  durable source maps, page-label backfill, and embeddings when the embedding
+  provider is enabled.
+- `tools/rebuild_embeddings.py` stores local vectors in
+  `source_object_embeddings` for current source objects under the configured
+  provider/model/dimensions identity.
+- Embedding rebuild failures close the matching ingest job and mark vector
+  status failed with bounded failure text, so retry behavior does not depend
+  on stale running jobs.
+- Query-time vector provider failures are treated as a missing vector channel
+  for that retrieval run. Exact page/object retrieval still runs.
+- `/api/retrieval/status` reports count-only readiness: total copied books,
+  enabled books, page-text indexed books, source-object indexed books,
+  table/stat indexed books, current vectorized books, current vectorized
+  enabled books, embedding provider, embedding dimensions, and aggregate vector
+  status.
+- API and CLI surfaces must not print raw extracted book text, local embedding
+  model paths, or private PDF paths. The UI should show useful aggregate search
+  and vector readiness without exposing private internals.
 
 ## OCR
 

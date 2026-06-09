@@ -70,6 +70,7 @@ export default function App() {
           onSetLeftTab={context.setLeftTab}
           onSourceSetBookUpdated={handleSourceSetBookUpdated}
           onToggleCategory={context.toggleLibraryCategory}
+          retrievalStatus={data?.retrievalStatus ?? null}
           sourceSetBooks={sourceSetBooks}
         />
       )}

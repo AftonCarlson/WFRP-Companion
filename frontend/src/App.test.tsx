@@ -55,6 +55,18 @@ beforeEach(() => {
       },
     ],
   });
+  vi.spyOn(apiClient, "getRetrievalStatus").mockResolvedValue({
+    books_total: 2,
+    books_enabled: 1,
+    page_text_indexed: 2,
+    source_objects_indexed: 2,
+    table_or_stat_indexed: 1,
+    vectorized_current: 1,
+    vectorized_enabled: 1,
+    embedding_provider: "sentence-transformers",
+    embedding_dimensions: 1024,
+    vector_status: "ready",
+  });
   vi.spyOn(apiClient, "listSourceSets").mockResolvedValue({
     active_source_set_id: "rules-core",
     source_sets: [

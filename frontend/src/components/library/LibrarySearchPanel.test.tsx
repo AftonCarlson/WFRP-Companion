@@ -38,6 +38,7 @@ function client(): ApiClient {
   return {
     getHealth: vi.fn(),
     listBooks: vi.fn(),
+    getRetrievalStatus: vi.fn(),
     listSourceSets: vi.fn(),
     listSourceSetBooks: vi.fn(),
     setSourceSetBook: vi.fn(),
@@ -89,6 +90,7 @@ it("maps library book opens to page-one PDF requests", async () => {
       onSetLeftTab={vi.fn()}
       onSourceSetBookUpdated={vi.fn()}
       onToggleCategory={vi.fn()}
+      retrievalStatus={null}
       sourceSetBooks={[sourceSetBook]}
     />,
   );
@@ -117,6 +119,7 @@ it("maps search result opens to exact page PDF requests", async () => {
       onSetLeftTab={vi.fn()}
       onSourceSetBookUpdated={vi.fn()}
       onToggleCategory={vi.fn()}
+      retrievalStatus={null}
       sourceSetBooks={[sourceSetBook]}
     />,
   );
@@ -150,6 +153,7 @@ it("requests tab changes from the tab buttons", async () => {
       onSetLeftTab={onSetLeftTab}
       onSourceSetBookUpdated={vi.fn()}
       onToggleCategory={vi.fn()}
+      retrievalStatus={null}
       sourceSetBooks={[sourceSetBook]}
     />,
   );
@@ -174,6 +178,7 @@ it("requests a return to the library tab from search", async () => {
       onSetLeftTab={onSetLeftTab}
       onSourceSetBookUpdated={vi.fn()}
       onToggleCategory={vi.fn()}
+      retrievalStatus={null}
       sourceSetBooks={[sourceSetBook]}
     />,
   );

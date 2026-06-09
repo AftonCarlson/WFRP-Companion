@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from wfrp_companion.assistant import prompts
 from wfrp_companion.assistant.retrieval import RetrievedHit, SourceMapEntry
 
@@ -34,6 +36,118 @@ def test_build_prompt_requires_citations_and_insufficient_context_honesty() -> N
     assert "Do not treat chat history as retrieved rules" in system_text
     assert "Core Rules p. 1" in user_text
     assert "Critical hit rules explain" in user_text
+
+
+def test_system_prompt_describes_tool_calling_agent_contract() -> None:
+    system_text = prompts.SYSTEM_INSTRUCTIONS
+
+    assert "bounded tool-calling research agent" in system_text
+    assert "Hybrid retrieval is backend policy" in system_text
+    assert "accepted retrieved evidence" in system_text
+    assert "Do not answer factual WFRP claims from memory" in system_text
+    assert "Do not dump long copyrighted passages" in system_text
+
+
+def test_build_research_prompt_names_tools_and_active_context() -> None:
+    messages = prompts.build_research_prompt_messages(
+        raw_query="I want the stats",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        subject="harpy",
+        active_book_id="bestiary",
+        active_printed_page_label="99",
+        recent_messages=(),
+    )
+
+    assert messages[0].role == "system"
+    assert messages[-1].role == "user"
+    assert "search_library" in messages[-1].content
+    assert "open_page" in messages[-1].content
+    assert "lookup_source_object" in messages[-1].content
+    assert "Active book: bestiary" in messages[-1].content
+    assert "Active printed page: 99" in messages[-1].content
+
+
+def test_build_research_prompt_includes_scrubbed_prior_tool_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages = prompts.build_research_prompt_messages(
+        raw_query="I want the stats",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        subject="harpy",
+        active_book_id="bestiary",
+        active_printed_page_label="99",
+        recent_messages=(),
+        prior_tool_outputs=(
+            {
+                "query": "/Users/aftoncarlson/private.pdf",
+                "hit_count": 0,
+                "validation": {"status": "insufficient"},
+            },
+        ),
+    )
+
+    user_text = messages[-1].content
+
+    assert "Prior local tool results:" in user_text
+    assert '"hit_count": 0' in user_text
+    assert "[local path removed]" in user_text
+    assert "private.pdf" not in user_text
+    assert prompts.build_prior_tool_outputs_block(
+        ({"long": "x" * 30},),
+        max_chars=12,
+    ).startswith("[1] {")
+    assert prompts.build_prior_tool_outputs_block(
+        ({"ignored": "x"},),
+        max_chars=0,
+    ) == ""
+    monkeypatch.setattr(prompts, "scrub_private_paths", lambda _text: "")
+    assert prompts.build_prior_tool_outputs_block(({"blank": "after scrub"},)) == ""
+
+
+def test_build_final_answer_prompt_uses_only_accepted_evidence() -> None:
+    accepted = RetrievedHit(
+        book_id="bestiary",
+        title="Old World Bestiary",
+        category="Rules and Mechanics Toolkits",
+        page_id="bestiary:101",
+        page_number=101,
+        pdf_page_number=101,
+        page_label="99",
+        snippet="Harpy stat_block",
+        score=1,
+        rank=1,
+        context_text="Synthetic Harpy stat_block: M 4 WS 31.",
+        object_title="Harpy",
+        object_type="stat_block",
+        page_range_label="99",
+    )
+
+    messages = prompts.build_final_answer_prompt_messages(
+        question="harpy statline",
+        accepted_hits=(accepted,),
+        evidence_status="sufficient",
+        recent_messages=(),
+    )
+
+    user_text = messages[-1].content
+    assert "Accepted evidence:" in user_text
+    assert "Synthetic Harpy stat_block" in user_text
+    assert "Answer only from accepted evidence" in user_text
+
+
+def test_build_final_answer_prompt_for_insufficient_evidence() -> None:
+    messages = prompts.build_final_answer_prompt_messages(
+        question="harpy statline",
+        accepted_hits=(),
+        evidence_status="insufficient",
+        recent_messages=(),
+    )
+
+    user_text = messages[-1].content
+    assert "No accepted evidence was found" in user_text
+    assert "do not reconstruct the WFRP facts from memory" in user_text
 
 
 def test_build_prompt_includes_recent_messages_before_current_user_prompt() -> None:

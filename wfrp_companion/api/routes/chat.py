@@ -223,6 +223,7 @@ def stream_event_response(event: chat_service.ChatStreamEvent) -> dict[str, obje
         ],
         "text_delta": event.text_delta,
         "error_message": event.error_message,
+        "metadata": event.metadata,
     }
 
 

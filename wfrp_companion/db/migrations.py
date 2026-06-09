@@ -16,6 +16,7 @@ VECTOR_RETRIEVAL_MIGRATION_ID = "0003_vector_retrieval"
 STRUCTURED_EVIDENCE_MIGRATION_ID = "0004_structured_evidence"
 PAGE_LABEL_CALIBRATION_MIGRATION_ID = "0005_page_label_calibration"
 EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID = "0006_embedding_provider_identity"
+FAMILIAR_AGENT_RESEARCH_MIGRATION_ID = "0007_familiar_agent_research"
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
@@ -23,6 +24,7 @@ MIGRATION_IDS: tuple[str, ...] = (
     STRUCTURED_EVIDENCE_MIGRATION_ID,
     PAGE_LABEL_CALIBRATION_MIGRATION_ID,
     EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID,
+    FAMILIAR_AGENT_RESEARCH_MIGRATION_ID,
 )
 
 
@@ -132,6 +134,8 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         migration_function = apply_page_label_calibration
     elif migration_id == EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID:
         migration_function = apply_embedding_provider_identity
+    elif migration_id == FAMILIAR_AGENT_RESEARCH_MIGRATION_ID:
+        migration_function = apply_familiar_agent_research
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -254,6 +258,15 @@ def apply_embedding_provider_identity(connection: sqlite3.Connection) -> None:
     )
 
 
+def apply_familiar_agent_research(connection: sqlite3.Connection) -> None:
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{FAMILIAR_AGENT_RESEARCH_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+
+
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
     for statement in sql.split(";"):
         statement = statement.strip()
@@ -298,6 +311,10 @@ def collect_table_counts(connection: sqlite3.Connection) -> tuple[tuple[str, int
         "retrieval_run_source_books",
         "retrieval_hits",
         "model_runs",
+        "chat_thread_context",
+        "familiar_research_runs",
+        "familiar_tool_calls",
+        "familiar_evidence_judgments",
         "ingest_jobs",
     )
     return tuple(

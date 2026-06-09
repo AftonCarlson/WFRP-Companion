@@ -38,6 +38,23 @@ async function mockApi(page: Page) {
       body: JSON.stringify({ books: [coreBook] }),
     });
   });
+  await page.route("**/api/retrieval/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        books_total: 1,
+        books_enabled: 1,
+        page_text_indexed: 1,
+        source_objects_indexed: 1,
+        table_or_stat_indexed: 0,
+        vectorized_current: 0,
+        vectorized_enabled: 0,
+        embedding_provider: "disabled",
+        embedding_dimensions: null,
+        vector_status: "disabled",
+      }),
+    });
+  });
   await page.route("**/api/source-sets", async (route) => {
     await route.fulfill({
       contentType: "application/json",

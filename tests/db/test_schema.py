@@ -39,11 +39,15 @@ REQUIRED_TABLES = {
     "source_object_embeddings",
     "chat_threads",
     "chat_thread_source_books",
+    "chat_thread_context",
     "chat_messages",
     "retrieval_runs",
     "retrieval_run_source_books",
     "retrieval_hits",
     "model_runs",
+    "familiar_research_runs",
+    "familiar_tool_calls",
+    "familiar_evidence_judgments",
 }
 
 
@@ -1126,6 +1130,269 @@ def test_source_object_schema_constraints_and_retrieval_hit_snapshots(
                 )
                 values ('duplicate-rank', 'retrieval-1', 'core-rules:1', 0.6, 3,
                         'page_fallback')
+                """
+            )
+
+
+def test_familiar_research_schema_tracks_agent_workflow(tmp_path: Path) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        assert column_names(connection, "chat_thread_context") == (
+            "thread_id",
+            "active_subject",
+            "active_intent",
+            "active_book_id",
+            "active_printed_page_label",
+            "active_pdf_page_number",
+            "active_source_object_id",
+            "updated_from_message_id",
+            "updated_from_model_run_id",
+            "metadata_json",
+            "updated_at",
+        )
+        assert column_names(connection, "familiar_research_runs") == (
+            "id",
+            "model_run_id",
+            "thread_id",
+            "user_message_id",
+            "source_set_id",
+            "raw_query",
+            "resolved_query",
+            "intent",
+            "status",
+            "max_tool_rounds",
+            "tool_rounds_used",
+            "evidence_status",
+            "final_retrieval_run_id",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+            "completed_at",
+        )
+        assert column_names(connection, "familiar_tool_calls") == (
+            "id",
+            "research_run_id",
+            "step_number",
+            "call_index",
+            "provider_call_id",
+            "tool_name",
+            "arguments_json",
+            "argument_hash",
+            "status",
+            "retrieval_run_id",
+            "output_summary_json",
+            "error_code",
+            "error_message",
+            "created_at",
+            "updated_at",
+            "completed_at",
+        )
+        assert column_names(connection, "familiar_evidence_judgments") == (
+            "id",
+            "research_run_id",
+            "retrieval_run_id",
+            "retrieval_hit_id",
+            "source_object_id",
+            "book_id",
+            "printed_page_label",
+            "requirement_type",
+            "status",
+            "reason_code",
+            "reasons_json",
+            "created_at",
+        )
+        assert index_columns(
+            connection,
+            "ux_familiar_tool_calls_step_call",
+        ) == ("research_run_id", "step_number", "call_index")
+        assert index_columns(
+            connection,
+            "ux_familiar_tool_calls_provider_call",
+        ) == ("research_run_id", "provider_call_id")
+
+
+def test_familiar_research_schema_enforces_agent_workflow_constraints(
+    tmp_path: Path,
+) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        insert_folder(connection)
+        insert_book(connection)
+        insert_page(connection)
+        connection.execute(
+            """
+            insert into source_sets (id, name, created_at, updated_at)
+            values ('rules-core', 'Rules/Core', '2026-06-09T00:00:00Z',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into chat_threads (
+              id,
+              title,
+              active_source_set_id,
+              created_at,
+              updated_at
+            )
+            values ('thread-1', 'Rules', 'rules-core', '2026-06-09T00:00:00Z',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into chat_messages (id, thread_id, role, content, created_at)
+            values ('message-1', 'thread-1', 'user', 'statline?',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              user_message_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+              updated_at
+            )
+            values ('run-1', 'thread-1', 'message-1', 'openai', 'gpt-test',
+                    'retrieving', 'send-1', '2026-06-09T00:00:00Z',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into familiar_research_runs (
+              id,
+              model_run_id,
+              thread_id,
+              user_message_id,
+              source_set_id,
+              raw_query,
+              resolved_query,
+              intent,
+              status,
+              max_tool_rounds,
+              evidence_status,
+              created_at,
+              updated_at
+            )
+            values ('research-1', 'run-1', 'thread-1', 'message-1',
+                    'rules-core', 'stats?', 'harpy stats', 'statline_lookup',
+                    'planning', 4, 'not_evaluated',
+                    '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into familiar_tool_calls (
+              id,
+              research_run_id,
+              step_number,
+              call_index,
+              provider_call_id,
+              tool_name,
+              arguments_json,
+              argument_hash,
+              status,
+              created_at,
+              updated_at
+            )
+            values ('tool-1', 'research-1', 1, 0, 'call-1',
+                    'search_library', '{}', 'hash-1', 'requested',
+                    '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+            """
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into familiar_research_runs (
+                  id,
+                  model_run_id,
+                  thread_id,
+                  user_message_id,
+                  raw_query,
+                  resolved_query,
+                  intent,
+                  status,
+                  max_tool_rounds,
+                  evidence_status,
+                  created_at,
+                  updated_at
+                )
+                values ('research-duplicate', 'run-1', 'thread-1', 'message-1',
+                        'stats?', 'harpy stats', 'statline_lookup',
+                        'planning', 4, 'not_evaluated',
+                        '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into familiar_tool_calls (
+                  id,
+                  research_run_id,
+                  step_number,
+                  call_index,
+                  provider_call_id,
+                  tool_name,
+                  arguments_json,
+                  argument_hash,
+                  status,
+                  created_at,
+                  updated_at
+                )
+                values ('tool-duplicate-step', 'research-1', 1, 0, 'call-2',
+                        'search_library', '{}', 'hash-2', 'requested',
+                        '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into familiar_tool_calls (
+                  id,
+                  research_run_id,
+                  step_number,
+                  call_index,
+                  provider_call_id,
+                  tool_name,
+                  arguments_json,
+                  argument_hash,
+                  status,
+                  created_at,
+                  updated_at
+                )
+                values ('tool-duplicate-provider-call', 'research-1', 1, 1,
+                        'call-1', 'search_library', '{}', 'hash-3',
+                        'requested', '2026-06-09T00:00:00Z',
+                        '2026-06-09T00:00:00Z')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into familiar_research_runs (
+                  id,
+                  model_run_id,
+                  thread_id,
+                  user_message_id,
+                  raw_query,
+                  resolved_query,
+                  intent,
+                  status,
+                  max_tool_rounds,
+                  evidence_status,
+                  created_at,
+                  updated_at
+                )
+                values ('research-bad-status', 'run-missing', 'thread-1',
+                        'message-1', 'stats?', 'harpy stats',
+                        'statline_lookup', 'wandering', 4, 'not_evaluated',
+                        '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
                 """
             )
 

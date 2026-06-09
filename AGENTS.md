@@ -35,6 +35,10 @@
   semantic/vector search.
 - Do not call image-generation tools unless the user explicitly asks for image
   generation or image editing.
+- Do not use `multi_agent_v1.close_agent` in this repo. If subagent review
+  hits `agent thread limit reached`, use bounded `wait_agent` diagnostics and
+  report the platform lifecycle blocker; do not attempt parallel close calls or
+  retry cleanup loops.
 
 ## Engineering Guidelines
 

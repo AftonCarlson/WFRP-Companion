@@ -295,6 +295,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0004_structured_evidence",
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
+        "0007_familiar_agent_research",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -363,8 +364,19 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0007_familiar_agent_research",),
+            ).fetchone()
+            is not None
+        )
         assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
+        assert migrations.table_exists(connection, "familiar_research_runs")
+        assert migrations.table_exists(connection, "familiar_tool_calls")
+        assert migrations.table_exists(connection, "familiar_evidence_judgments")
+        assert migrations.table_exists(connection, "chat_thread_context")
         assert (
             connection.execute(
                 "select count(*) from book_retrieval_status"
@@ -846,6 +858,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0004_structured_evidence",
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
+        "0007_familiar_agent_research",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -855,6 +868,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0004_structured_evidence",
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
+        "0007_familiar_agent_research",
     )
 
 
@@ -873,6 +887,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0004_structured_evidence",
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
+        "0007_familiar_agent_research",
     )
     with open_connection(db_path) as connection:
         assert (

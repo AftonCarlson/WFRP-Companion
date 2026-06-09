@@ -39,18 +39,36 @@ the exact book phrasing.
 
 ## Implementation Implication
 
-[coverage: medium]
+[coverage: high]
 
 Retrieval should combine:
 
-- Full-text search candidate set.
-- Vector search candidate set.
-- Metadata filters by book, page range, or content type.
-- A ranking/reranking step.
-- Structured citations passed to the assistant.
+- Exact page full-text search for literal terms and page-level fallback.
+- Source-object full-text search for headings, table labels, stat/profile
+  titles, glossary entries, index entries, and linked evidence.
+- Source-object fallback scan for typed objects when FTS misses the relevant
+  structure.
+- Vector search over current local source-object embeddings when embeddings are
+  enabled and the book snapshot is current.
+- Direct page lookup for explicit PDF page or printed page references.
+- Direct source-object lookup for complete table/stat/source-object recovery.
+- Metadata filters by the thread's checked source-book snapshot, page range,
+  object type, and source-object links.
+- Rank fusion plus deterministic reranking so exact structured hits are not
+  buried by fuzzy semantic matches.
+- Evidence validation before prompt construction.
+- Structured citations passed to the assistant only for accepted evidence.
 
-The assistant should receive the final selected context, not query the raw PDF
-library directly.
+The backend owns this policy. Familiar can request bounded research tools, but
+it does not decide whether vector search runs and it does not query raw PDF
+files directly. The final assistant prompt receives accepted evidence packets,
+not the whole library.
+
+Operational vector search means the imported/enabled books have source objects
+and current embeddings in the local SQLite vector store. A useful retrieval
+trace should show whether the vector channel ran, which candidates it produced
+or why it was skipped, how candidates were reranked, and why the final evidence
+was accepted or rejected.
 
 ## Sources
 

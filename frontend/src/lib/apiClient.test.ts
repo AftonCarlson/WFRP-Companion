@@ -70,6 +70,7 @@ describe("apiClient", () => {
 
     await apiClient.getHealth({ signal });
     await apiClient.listBooks({ signal });
+    await apiClient.getRetrievalStatus({ signal });
     await apiClient.listSourceSets({ signal });
     await apiClient.listSourceSetBooks("rules/core", { signal });
     await apiClient.getPageText("core rules", 134, { signal });
@@ -86,16 +87,21 @@ describe("apiClient", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      "/api/source-sets",
+      "/api/retrieval/status",
       expect.objectContaining({ signal }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       4,
-      "/api/source-sets/rules%2Fcore/books",
+      "/api/source-sets",
       expect.objectContaining({ signal }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       5,
+      "/api/source-sets/rules%2Fcore/books",
+      expect.objectContaining({ signal }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
       "/api/books/core%20rules/pages/134/text",
       expect.objectContaining({ signal }),
     );

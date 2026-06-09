@@ -209,9 +209,10 @@ def test_stream_message_can_emit_model_deltas_and_completed_event(
     events = [line for line in response.text.splitlines() if line]
     assert response.status_code == 200
     assert '"type":"accepted"' in events[0]
-    assert '"type":"retrieval"' in events[1]
-    assert '"type":"delta"' in events[2]
-    assert '"text_delta":"Rules answer."' in events[2]
+    assert '"type":"research_started"' in events[1]
+    assert any('"type":"retrieval"' in event for event in events)
+    delta_event = next(event for event in events if '"type":"delta"' in event)
+    assert '"text_delta":"Rules answer."' in delta_event
     assert '"type":"completed"' in events[-1]
     assert '"assistant_message"' in events[-1]
     assert count_rows(config, "chat_messages") == 2
@@ -412,7 +413,7 @@ def test_response_helpers_include_citations(tmp_path: Path) -> None:
 
 
 class FakeProvider:
-    def stream_response(self, *, messages, request_id):
+    def stream_response(self, *, messages, request_id, **_kwargs):
         assert request_id.startswith("run-")
         assert messages[-1].role == "user"
         yield provider.ProviderStreamEvent(type="delta", text_delta="Rules answer.")

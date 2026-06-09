@@ -1,5 +1,32 @@
 # Wiki Compile Log
 
+## 2026-06-09 Familiar Tool-Calling Hybrid RAG
+
+- Overhauled Familiar from a one-shot retrieval answer path into a bounded
+  tool-calling research agent. Runs now record research state, tool calls,
+  retrieval attempts, diagnostics, evidence judgments, and accepted-evidence
+  final citation runs.
+- Familiar uses hybrid retrieval by default through backend tools: page FTS,
+  source-object FTS, source-object fallback scan, current local vector
+  candidates when embeddings are enabled, structured table/stat/source-object
+  evidence, direct page lookup, direct source-object lookup, RRF fusion,
+  deterministic reranking, and evidence validation.
+- Added page-aware recovery for explicit page references, follow-up subject
+  resolution through thread context, bounded retry/correction behavior when
+  evidence is weak, and a final prompt contract that receives accepted
+  evidence only.
+- Added retrieval readiness visibility through `/api/retrieval/status` and
+  `tools/rebuild_retrieval_assets.py`, keeping output count-only and avoiding
+  raw book text, local model paths, or private PDF paths.
+- Updated the wiki to reflect the current implementation and added a local
+  process rule: do not use `multi_agent_v1.close_agent` while the agent
+  lifecycle service is leaking completed threads. Fresh independent subagent
+  review for this phase was blocked by that platform issue, so recovered prior
+  reviewer findings were audited directly against the code with focused tests.
+- Verification target for this phase: `ruff check .`, the full backend 100%
+  coverage command including `tools.rebuild_retrieval_assets`, frontend
+  Vitest, frontend coverage, frontend production build, and Playwright e2e.
+
 ## 2026-06-08 Stat-Line Retrieval Follow-Up
 
 - Debugged the live `harpies stat line` failure. The previous sparse

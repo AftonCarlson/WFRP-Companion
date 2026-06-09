@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
+from wfrp_companion.assistant.research import RetrievalDiagnostics
 
 if TYPE_CHECKING:
     from wfrp_companion.assistant.source_map import SourceMapEntry
@@ -45,6 +46,7 @@ class RetrievalContext:
     source_set_id: str | None = None
     source_book_ids: tuple[str, ...] = field(default_factory=tuple)
     source_map: tuple[SourceMapEntry, ...] = field(default_factory=tuple)
+    diagnostics: RetrievalDiagnostics | None = None
 
 @dataclass(frozen=True)
 class EvidenceCandidate:

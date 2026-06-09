@@ -5,6 +5,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from dataclasses import replace
 
+from wfrp_companion.assistant import research
 from wfrp_companion.assistant.evidence import EvidenceCandidate
 from wfrp_companion.assistant.evidence import load_page_range_label
 from wfrp_companion.assistant.evidence import load_page_text_from_connection
@@ -39,6 +40,12 @@ class LinkedEvidenceTarget:
     page_row: sqlite3.Row | None = None
 
 
+@dataclass(frozen=True)
+class CandidateCollectionResult:
+    candidates: tuple[EvidenceCandidate, ...]
+    diagnostics: research.RetrievalDiagnostics
+
+
 def collect_evidence_candidates(
     config: AppConfig,
     *,
@@ -46,8 +53,45 @@ def collect_evidence_candidates(
     query_plan: QueryPlan,
     per_candidate_limit: int,
 ) -> tuple[EvidenceCandidate, ...]:
+    return collect_evidence_candidates_with_diagnostics(
+        config,
+        source_book_ids=source_book_ids,
+        query_plan=query_plan,
+        per_candidate_limit=per_candidate_limit,
+    ).candidates
+
+
+def collect_evidence_candidates_with_diagnostics(
+    config: AppConfig,
+    *,
+    source_book_ids: tuple[str, ...],
+    query_plan: QueryPlan,
+    per_candidate_limit: int,
+) -> CandidateCollectionResult:
+    channel_counts = {
+        "page_fts": 0,
+        "source_object_fts": 0,
+        "source_object_scan": 0,
+        "vector": 0,
+        "page_lookup": 0,
+        "table_stat_lookup": 0,
+    }
+    channel_skip_reasons: dict[str, str] = {}
     if not source_book_ids:
-        return ()
+        return CandidateCollectionResult(
+            candidates=(),
+            diagnostics=research.RetrievalDiagnostics(
+                channel_counts=channel_counts,
+                channel_skip_reasons={"scope": "no_source_books"},
+                vector_status=vector_status_for_empty_scope(config),
+                candidate_count_before_fusion=0,
+                candidate_count_after_fusion=0,
+                reranked_count=0,
+                selected_count=0,
+                page_lookup_attempted=False,
+                validation_status="not_evaluated",
+            ),
+        )
     candidates: list[EvidenceCandidate] = []
     with initialize_database(config.db_path) as connection:
         for candidate_query in query_plan.candidates:
@@ -64,23 +108,70 @@ def collect_evidence_candidates(
                 )
                 if candidate is not None:
                     candidates.append(candidate)
-            for candidate in search_source_object_candidates(
+                    channel_counts["page_fts"] += 1
+            source_object_fts_candidates = search_source_object_fts_candidates(
                 connection,
                 candidate_query,
                 book_ids=source_book_ids,
                 limit=per_candidate_limit,
-            ):
+            )
+            if source_object_fts_candidates:
+                source_object_candidates = source_object_fts_candidates
+                channel_counts["source_object_fts"] += len(source_object_candidates)
+            else:
+                source_object_candidates = search_source_object_like_candidates(
+                    connection,
+                    candidate_query,
+                    book_ids=source_book_ids,
+                    limit=per_candidate_limit,
+                )
+                channel_counts["source_object_scan"] += len(source_object_candidates)
+            for candidate in source_object_candidates:
                 candidates.append(candidate)
         vector_query = " ".join((*query_plan.terms, *query_plan.expanded_terms))
-        for candidate in search_vector_candidates(
+        vector_candidates = search_vector_candidates(
             connection,
             vector_query,
             book_ids=source_book_ids,
             limit=per_candidate_limit,
             config=config,
-        ):
+        )
+        channel_counts["vector"] = len(vector_candidates)
+        vector_status = vector_channel_status(
+            config,
+            candidate_count=len(vector_candidates),
+        )
+        if vector_status != "ran":
+            channel_skip_reasons["vector"] = vector_status
+        for candidate in vector_candidates:
             candidates.append(candidate)
-    return reciprocal_rank_fuse(candidates)
+    fused_candidates = reciprocal_rank_fuse(candidates)
+    return CandidateCollectionResult(
+        candidates=fused_candidates,
+        diagnostics=research.RetrievalDiagnostics(
+            channel_counts=channel_counts,
+            channel_skip_reasons=channel_skip_reasons,
+            vector_status=vector_status,
+            candidate_count_before_fusion=len(candidates),
+            candidate_count_after_fusion=len(fused_candidates),
+            reranked_count=0,
+            selected_count=0,
+            page_lookup_attempted=False,
+            validation_status="not_evaluated",
+        ),
+    )
+
+
+def vector_status_for_empty_scope(config: AppConfig) -> str:
+    return "disabled" if config.embedding_provider == "disabled" else "missing_embeddings"
+
+
+def vector_channel_status(config: AppConfig, *, candidate_count: int) -> str:
+    if config.embedding_provider == "disabled":
+        return "disabled"
+    if candidate_count > 0:
+        return "ran"
+    return "missing_embeddings"
 
 def keep_best_candidate(
     candidates: dict[str, EvidenceCandidate],

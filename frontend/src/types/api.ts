@@ -26,6 +26,19 @@ export type BooksResponse = {
   books: BookSummaryResponse[];
 };
 
+export type RetrievalStatusResponse = {
+  books_total: number;
+  books_enabled: number;
+  page_text_indexed: number;
+  source_objects_indexed: number;
+  table_or_stat_indexed: number;
+  vectorized_current: number;
+  vectorized_enabled: number;
+  embedding_provider: string;
+  embedding_dimensions: number | null;
+  vector_status: string;
+};
+
 export type SourceSetResponse = {
   id: string;
   name: string;
@@ -163,7 +176,16 @@ export type ChatThreadDetailResponse = {
 };
 
 export type ChatStreamEvent = {
-  type: "accepted" | "retrieval" | "delta" | "completed" | "failed";
+  type:
+    | "accepted"
+    | "research_started"
+    | "tool_call"
+    | "retrieval"
+    | "tool_result"
+    | "evidence_validation"
+    | "delta"
+    | "completed"
+    | "failed";
   thread?: ChatThreadResponse | null;
   user_message?: ChatMessageResponse | null;
   assistant_message?: ChatMessageResponse | null;
@@ -171,4 +193,5 @@ export type ChatStreamEvent = {
   citations?: ChatCitationResponse[];
   text_delta?: string | null;
   error_message?: string | null;
+  metadata?: Record<string, unknown> | null;
 };

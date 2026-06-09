@@ -8,6 +8,7 @@ import type {
   ExactSearchResponse,
   HealthResponse,
   PageTextResponse,
+  RetrievalStatusResponse,
   SendChatMessageResponse,
   SourceSetBookResponse,
   SourceSetBooksResponse,
@@ -74,6 +75,12 @@ export const apiClient = {
 
   listBooks(options?: RequestOptions): Promise<BooksResponse> {
     return requestJson<BooksResponse>("/api/books", {
+      signal: options?.signal,
+    });
+  },
+
+  getRetrievalStatus(options?: RequestOptions): Promise<RetrievalStatusResponse> {
+    return requestJson<RetrievalStatusResponse>("/api/retrieval/status", {
       signal: options?.signal,
     });
   },

@@ -35,6 +35,19 @@ class BooksResponse(BaseModel):
     books: list[BookSummaryResponse]
 
 
+class RetrievalStatusResponse(BaseModel):
+    books_total: int
+    books_enabled: int
+    page_text_indexed: int
+    source_objects_indexed: int
+    table_or_stat_indexed: int
+    vectorized_current: int
+    vectorized_enabled: int
+    embedding_provider: str
+    embedding_dimensions: int | None
+    vector_status: str
+
+
 class PageReferenceResponse(BaseModel):
     page_id: str
     book_id: str

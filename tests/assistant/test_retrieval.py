@@ -272,6 +272,35 @@ def test_query_candidates_drop_filler_words_and_keep_useful_phrases() -> None:
     assert "what happens when" not in candidates
 
 
+def test_retrieve_context_includes_hybrid_channel_diagnostics(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_store.create_thread(config)
+
+    context = retrieval.retrieve_context(
+        config,
+        thread.id,
+        "critical hit",
+        hit_limit=4,
+        total_char_limit=500,
+        window_chars=120,
+    )
+
+    assert context.hits
+    assert context.diagnostics is not None
+    assert context.diagnostics.channel_counts["page_fts"] > 0
+    assert context.diagnostics.channel_counts["source_object_fts"] == 0
+    assert context.diagnostics.channel_counts["source_object_scan"] == 0
+    assert context.diagnostics.channel_counts["vector"] == 0
+    assert context.diagnostics.vector_status == "disabled"
+    assert context.diagnostics.candidate_count_before_fusion >= 1
+    assert context.diagnostics.candidate_count_after_fusion >= 1
+    assert context.diagnostics.reranked_count >= len(context.hits)
+    assert context.diagnostics.selected_count == len(context.hits)
+
+
 def test_retrieval_keeps_thread_snapshot_for_history_but_uses_live_scope(
     tmp_path: Path,
 ) -> None:

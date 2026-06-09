@@ -19,6 +19,7 @@ class FakeProvider:
         *,
         messages: Sequence[provider.ProviderMessage],
         request_id: str,
+        **_kwargs,
     ):
         assert request_id.startswith("run-")
         assert messages[-1].role == "user"
@@ -42,6 +43,7 @@ class CapturingProvider:
         *,
         messages: Sequence[provider.ProviderMessage],
         request_id: str,
+        **_kwargs,
     ):
         self.messages = tuple(messages)
         yield provider.ProviderStreamEvent(type="delta", text_delta=self.answer)
@@ -49,20 +51,20 @@ class CapturingProvider:
 
 
 class EmptyDeltaProvider:
-    def stream_response(self, *, messages, request_id):
+    def stream_response(self, *, messages, request_id, **_kwargs):
         yield provider.ProviderStreamEvent(type="delta", text_delta="")
         yield provider.ProviderStreamEvent(type="delta", text_delta="Answer")
         yield provider.ProviderStreamEvent(type="completed")
 
 
 class ProviderUnavailableDuringStream:
-    def stream_response(self, *, messages, request_id):
+    def stream_response(self, *, messages, request_id, **_kwargs):
         raise provider.ProviderUnavailableError("provider dropped")
         yield provider.ProviderStreamEvent(type="completed")
 
 
 class BrokenProvider:
-    def stream_response(self, *, messages, request_id):
+    def stream_response(self, *, messages, request_id, **_kwargs):
         raise RuntimeError("provider exploded")
         yield provider.ProviderStreamEvent(type="completed")
 
@@ -197,7 +199,11 @@ def test_stream_chat_message_persists_completed_run_and_streams_deltas(
 
     assert [event.type for event in events] == [
         "accepted",
+        "research_started",
+        "tool_call",
         "retrieval",
+        "tool_result",
+        "evidence_validation",
         "delta",
         "delta",
         "completed",
@@ -229,7 +235,7 @@ def test_stream_chat_message_persists_completed_run_and_streams_deltas(
     assert model_run["input_tokens"] == 10
     assert model_run["output_tokens"] == 2
     assert assistant_message_count == 1
-    assert retrieval_hit_count == 1
+    assert retrieval_hit_count == 2
 
     duplicate_events = tuple(
         chat_service.stream_chat_message(
@@ -369,18 +375,23 @@ def test_stream_chat_message_uses_history_aware_query_for_followup_retrieval(
     assert retrieval_events
     assert retrieval_events[0].citations[0].title == "Core Rules"
     with open_connection(config.db_path) as connection:
-        row = connection.execute(
+        rows = connection.execute(
             """
             select query, metadata_json
             from retrieval_runs
             where message_id = ?
             """,
             (second_events[-1].user_message.id,),
-        ).fetchone()
+        ).fetchall()
+    row = next(
+        row
+        for row in rows
+        if json.loads(row["metadata_json"]).get("tool_name") == "search_library"
+    )
     metadata = json.loads(row["metadata_json"])
-    assert row["query"] == "What about it?"
-    assert metadata["retrieval_query"] != "What about it?"
-    assert "critical hits" in metadata["retrieval_query"].lower()
+    assert row["query"] != "What about it?"
+    assert "critical hits" in row["query"].lower()
+    assert metadata["retrieval_query"] == row["query"]
     assert metadata["history_strategy"] == "followup_contextualized"
     assert metadata["history_turn_count"] == 1
     assert metadata["history_message_ids"] == [
@@ -429,10 +440,14 @@ def test_stream_close_after_retrieval_marks_active_run_failed(
     )
 
     accepted_event = next(events)
+    research_event = next(events)
+    tool_event = next(events)
     retrieval_event = next(events)
     events.close()
 
     assert accepted_event.type == "accepted"
+    assert research_event.type == "research_started"
+    assert tool_event.type == "tool_call"
     assert retrieval_event.type == "retrieval"
     with open_connection(config.db_path) as connection:
         row = connection.execute(
@@ -503,7 +518,11 @@ def test_stream_chat_message_ignores_empty_deltas(tmp_path: Path) -> None:
 
     assert [event.type for event in events] == [
         "accepted",
+        "research_started",
+        "tool_call",
         "retrieval",
+        "tool_result",
+        "evidence_validation",
         "delta",
         "completed",
     ]
@@ -528,7 +547,9 @@ def test_stream_chat_message_marks_provider_unavailable_during_stream(
         )
     )
 
-    assert [event.type for event in events] == ["accepted", "retrieval", "failed"]
+    assert events[0].type == "accepted"
+    assert "retrieval" in [event.type for event in events]
+    assert events[-1].type == "failed"
     assert events[-1].model_run.status == "failed"
     assert events[-1].model_run.error_code == "provider_unavailable"
     assert events[-1].error_message == "provider dropped"
@@ -549,7 +570,9 @@ def test_stream_chat_message_marks_generic_provider_failure(tmp_path: Path) -> N
         )
     )
 
-    assert [event.type for event in events] == ["accepted", "retrieval", "failed"]
+    assert events[0].type == "accepted"
+    assert "retrieval" in [event.type for event in events]
+    assert events[-1].type == "failed"
     assert events[-1].model_run.status == "failed"
     assert events[-1].model_run.error_code == "provider_error"
     assert events[-1].error_message == "provider exploded"

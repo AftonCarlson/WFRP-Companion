@@ -15,8 +15,8 @@ source-map/profile ownership, Phase 7 PR6 source-object search backfill, and
 Phase 7 PR7 retrieval rank fusion/reranker protocol, Phase 7 PR8 local
 vector retrieval channel, Phase 7 PR9 structured source-object evidence, Phase
 7 PR10 printed page-label calibration/backfill, Phase 7 PR11 Familiar prompt
-history/history-aware retrieval planning, and the local semantic embeddings
-phase.
+history/history-aware retrieval planning, the local semantic embeddings phase,
+and the Familiar tool-calling hybrid RAG research-agent phase.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -66,7 +66,7 @@ Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.backfill_page_labels --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.rebuild_retrieval_assets --cov=tools.backfill_page_labels --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
 ```
 
 Current frontend verification commands:
@@ -97,8 +97,13 @@ Current focused test files:
 - `tests/assistant/test_chat_service.py`
 - `tests/assistant/test_chat_store.py`
 - `tests/assistant/test_conversation_context.py`
+- `tests/assistant/test_context_resolution.py`
+- `tests/assistant/test_evidence_validation.py`
+- `tests/assistant/test_familiar_agent.py`
 - `tests/assistant/test_prompts.py`
 - `tests/assistant/test_provider.py`
+- `tests/assistant/test_research.py`
+- `tests/assistant/test_research_tools.py`
 - `tests/assistant/test_retrieval.py`
 - `tests/assistant/test_retrieval_module_contracts.py`
 - `tests/db/test_schema.py`
@@ -110,6 +115,7 @@ Current focused test files:
 - `tests/library/test_importer.py`
 - `tests/library/test_page_text_importer.py`
 - `tests/library/test_page_labels.py`
+- `tests/library/test_retrieval_status.py`
 - `tests/library/test_source_sets.py`
 - `tests/search/test_fts.py`
 - `tests/search/test_scope.py`
@@ -122,6 +128,7 @@ Current focused test files:
 - `tests/tools/test_migrate_db.py`
 - `tests/tools/test_extract_source_objects.py`
 - `tests/tools/test_rebuild_embeddings.py`
+- `tests/tools/test_rebuild_retrieval_assets.py`
 - `tests/tools/test_rebuild_source_object_fts.py`
 - `tests/tools/test_rebuild_source_maps.py`
 - `tests/tools/test_backfill_page_labels.py`
@@ -157,9 +164,11 @@ rebuilds, `retrieval_run_source_books` snapshots, the
 `tools/rebuild_source_maps.py` CLI entrypoint, local source-object embedding
 rebuilds, vector snapshot invalidation, stale embedding job recovery,
 checked-book vector candidate filtering, malformed embedding-row scope
-protection, `tools/rebuild_embeddings.py` count-only CLI output, the
-`tools/init_db.py` CLI
-entrypoint, managed PDF identity, recursive discovery, SHA/atomic-copy storage
+protection, `tools/rebuild_embeddings.py` count-only CLI output,
+`tools/rebuild_retrieval_assets.py` orchestration, retrieval-status aggregate
+counts, vector readiness summaries, model-name redaction, the
+`tools/init_db.py` CLI entrypoint, managed PDF identity, recursive discovery,
+SHA/atomic-copy storage
 helpers, idempotent library import, copy-job recovery, collision/failure
 reporting, the `tools/import_pdfs.py` CLI entrypoint,
 page-text JSON validation, import idempotency, failed/stale import repair,
@@ -223,6 +232,13 @@ limits, provider `store=False`, prompt history/evidence separation, retrieval
 metadata for planned queries, stream-interruption cleanup, and logical retry
 collapse in chat API/frontend read models.
 
+Familiar research-agent tests cover thread-context subject preservation,
+follow-up resolution, page-aware recovery, bounded tool rounds, provider tool
+call planning, tool argument validation, accepted-only final retrieval runs,
+partial/rejected evidence traces, evidence-status transitions, research run
+and tool-call persistence, retrieval diagnostics metadata, stream event
+mapping, and final prompt construction from accepted evidence only.
+
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
 behavior, Library/Search tabs, grouped book sections, per-book source-set
@@ -233,11 +249,11 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-08 reported 493 tests
+The latest full backend verification command on 2026-06-09 reported 560 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
-entrypoints. The latest frontend verification reported 132 Vitest tests
+entrypoints. The latest frontend verification reported 133 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful
-production build.
+production build, and 2 Playwright e2e tests passing.
 
 ## Manual QA
 
