@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-03 initial development scaffold
+Last compiled: 2026-06-08 sparse retrieval query normalization
 
 ## Topics
 

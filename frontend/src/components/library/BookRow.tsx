@@ -1,0 +1,37 @@
+import { BookOpen } from "lucide-react";
+
+import type { LibraryBookRow } from "../../lib/grouping";
+
+export type BookRowProps = {
+  book: LibraryBookRow;
+  error?: string;
+  onOpen: (book: LibraryBookRow) => void;
+  onToggle: (book: LibraryBookRow, enabled: boolean) => void;
+  saving?: boolean;
+};
+
+export function BookRow({ book, error, onOpen, onToggle, saving }: BookRowProps) {
+  return (
+    <div className="book-row">
+      <label>
+        <input
+          checked={book.enabled}
+          disabled={saving}
+          onChange={(event) => onToggle(book, event.currentTarget.checked)}
+          type="checkbox"
+        />
+        <span>{book.title}</span>
+      </label>
+      <button
+        aria-label={`Open ${book.title}`}
+        className="book-row__open"
+        disabled={!book.reader_ready}
+        onClick={() => onOpen(book)}
+        type="button"
+      >
+        <BookOpen aria-hidden="true" size={15} />
+      </button>
+      {error ? <div className="book-row__error">{error}</div> : null}
+    </div>
+  );
+}

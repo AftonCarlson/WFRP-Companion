@@ -1,10 +1,10 @@
 # Local/private project data
-data/
-pdfs/
-books/
-library/
-indexes/
-vector-store/
+/data/
+/pdfs/
+/books/
+/library/
+/indexes/
+/vector-store/
 *.sqlite
 *.sqlite3
 *.db
@@ -22,6 +22,12 @@ build/
 .next/
 .vite/
 coverage/
+.coverage*
+frontend/dist/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+frontend/node_modules/
 __pycache__/
 .pytest_cache/
 .ruff_cache/

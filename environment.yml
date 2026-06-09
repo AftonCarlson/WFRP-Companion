@@ -7,5 +7,14 @@ dependencies:
   - pymupdf
   - poppler
   - tesseract
+  - fastapi
+  - uvicorn
+  - pillow
+  - opencv
+  - imagehash
+  - openai
+  - pytorch
+  - sentence-transformers
   - pytest
+  - pytest-cov
   - ruff
