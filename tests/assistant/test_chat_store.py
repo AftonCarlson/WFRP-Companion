@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from wfrp_companion.assistant import agent_planning, research
 from wfrp_companion.assistant import chat_store
 from wfrp_companion.assistant.evidence import RetrievedHit
 from wfrp_companion.config import AppConfig
@@ -180,6 +181,84 @@ def test_record_retrieval_run_snapshots_source_books_in_relationship_table(
         ("rules-core", "barony", "Barony of the Damned"),
         ("rules-core", "core-rules", "Core Rules"),
     ]
+
+
+def test_update_retrieval_run_validation_status_updates_diagnostics_metadata(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="Validate this evidence.",
+        idempotency_key="send-validation",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    diagnostics = chat_store.research.RetrievalDiagnostics(
+        channel_counts={"page_fts": 1},
+        channel_skip_reasons={},
+        vector_status="disabled",
+        candidate_count_before_fusion=1,
+        candidate_count_after_fusion=1,
+        reranked_count=1,
+        selected_count=1,
+        page_lookup_attempted=False,
+        validation_status="not_evaluated",
+    )
+    retrieval_run_id = chat_store.record_retrieval_run(
+        config,
+        thread_id=thread.id,
+        message_id=queued.user_message.id,
+        source_set_id=thread.active_source_set_id,
+        query="Validate this evidence.",
+        hits=(),
+        diagnostics=diagnostics,
+    )
+
+    updated = chat_store.update_retrieval_run_validation_status(
+        config,
+        retrieval_run_id,
+        validation_status="sufficient",
+        validation_summary={
+            "accepted": 1,
+            "rejected": 0,
+            "reason_codes": ["statline_evidence"],
+        },
+    )
+
+    with open_connection(config.db_path) as connection:
+        metadata = json.loads(
+            connection.execute(
+                "select metadata_json from retrieval_runs where id = ?",
+                (retrieval_run_id,),
+            ).fetchone()["metadata_json"]
+        )
+    assert updated is True
+    assert metadata["validation_status"] == "sufficient"
+    assert metadata["validation_summary"] == {
+        "accepted": 1,
+        "rejected": 0,
+        "reason_codes": ["statline_evidence"],
+    }
+
+
+def test_update_retrieval_run_validation_status_returns_false_for_missing_run(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+
+    updated = chat_store.update_retrieval_run_validation_status(
+        config,
+        "missing-retrieval",
+        validation_status="insufficient",
+        validation_summary={},
+    )
+
+    assert updated is False
 
 
 def test_create_thread_requires_active_or_existing_source_set(tmp_path: Path) -> None:
@@ -875,3 +954,520 @@ def test_result_loading_rejects_or_skips_orphaned_model_runs(tmp_path: Path) -> 
             chat_store.result_for_model_run(connection, "orphan-run")
 
         assert chat_store.load_turns_from_connection(connection, thread.id) == ()
+
+
+def test_familiar_research_run_creation_is_idempotent_and_guarded(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="harpy statline",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+
+    created = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="harpy statline",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+        metadata={"reader_context": {"active_printed_page_label": "99"}},
+    )
+    duplicate = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="ignored duplicate raw query",
+        resolved_query="ignored duplicate resolved query",
+        intent="ignored_intent",
+        max_tool_rounds=2,
+    )
+    tool_calling = chat_store.transition_familiar_research_run(
+        config,
+        created.id,
+        from_statuses=("planning",),
+        to_status="tool_calling",
+        tool_rounds_used=1,
+    )
+    retrieval_run_id = chat_store.record_retrieval_run(
+        config,
+        thread_id=thread.id,
+        message_id=queued.user_message.id,
+        source_set_id=thread.active_source_set_id,
+        query="harpy statline",
+        hits=(),
+        source_book_ids=("core-rules",),
+    )
+    completed = chat_store.transition_familiar_research_run(
+        config,
+        created.id,
+        from_statuses=("tool_calling",),
+        to_status="completed",
+        evidence_status="sufficient",
+        final_retrieval_run_id=retrieval_run_id,
+    )
+    unchanged = chat_store.transition_familiar_research_run(
+        config,
+        created.id,
+        from_statuses=("planning",),
+        to_status="failed",
+    )
+
+    assert created.model_run_id == queued.model_run.id
+    assert created.thread_id == thread.id
+    assert created.user_message_id == queued.user_message.id
+    assert created.source_set_id == thread.active_source_set_id
+    assert created.status == "planning"
+    assert created.evidence_status == "not_evaluated"
+    assert created.metadata == {"reader_context": {"active_printed_page_label": "99"}}
+    assert duplicate.id == created.id
+    assert duplicate.raw_query == "harpy statline"
+    assert tool_calling.status == "tool_calling"
+    assert tool_calling.tool_rounds_used == 1
+    assert completed.status == "completed"
+    assert completed.evidence_status == "sufficient"
+    assert completed.final_retrieval_run_id == retrieval_run_id
+    assert unchanged.status == "completed"
+    assert count_rows(config, "familiar_research_runs") == 1
+
+
+def test_familiar_tool_call_records_arguments_and_guarded_transitions(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="harpy statline",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    research_run = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="harpy statline",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+    )
+
+    tool_call = chat_store.record_familiar_tool_call(
+        config,
+        research_run.id,
+        step_number=1,
+        call_index=0,
+        provider_call_id="call-1",
+        tool_name="search_library",
+        arguments={"limit": 8, "query": "harpy statline"},
+    )
+    duplicate = chat_store.record_familiar_tool_call(
+        config,
+        research_run.id,
+        step_number=99,
+        call_index=99,
+        provider_call_id="call-1",
+        tool_name="search_library",
+        arguments={"query": "ignored"},
+    )
+    running = chat_store.transition_familiar_tool_call(
+        config,
+        tool_call.id,
+        from_statuses=("requested",),
+        to_status="running",
+    )
+    retrieval_run_id = chat_store.record_retrieval_run(
+        config,
+        thread_id=thread.id,
+        message_id=queued.user_message.id,
+        source_set_id=thread.active_source_set_id,
+        query="harpy statline",
+        hits=(),
+        source_book_ids=("core-rules",),
+    )
+    succeeded = chat_store.transition_familiar_tool_call(
+        config,
+        tool_call.id,
+        from_statuses=("running",),
+        to_status="succeeded",
+        retrieval_run_id=retrieval_run_id,
+        output_summary={"accepted_candidate_count": 1},
+    )
+    unchanged = chat_store.transition_familiar_tool_call(
+        config,
+        tool_call.id,
+        from_statuses=("requested",),
+        to_status="failed",
+        error_code="too_late",
+        error_message="terminal calls are not rewritten",
+    )
+
+    assert tool_call.arguments == {"limit": 8, "query": "harpy statline"}
+    assert tool_call.argument_hash == research.normalized_json_hash(
+        {"limit": 8, "query": "harpy statline"}
+    )
+    assert duplicate.id == tool_call.id
+    assert running.status == "running"
+    assert succeeded.status == "succeeded"
+    assert succeeded.retrieval_run_id == retrieval_run_id
+    assert succeeded.output_summary == {"accepted_candidate_count": 1}
+    assert unchanged.status == "succeeded"
+    assert unchanged.error_code is None
+    assert count_rows(config, "familiar_tool_calls") == 1
+
+
+def test_familiar_research_plan_and_requirement_linkage_round_trip(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="harpy statline",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    research_run = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="harpy statline",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+    )
+    plan = agent_planning.ResearchPlan(
+        id="plan-1",
+        research_run_id=research_run.id,
+        revision=1,
+        intent="statline_lookup",
+        plan_summary="Find Harpy statline evidence.",
+        subject=agent_planning.SubjectConstraint(
+            canonical="harpy",
+            surface="harpy",
+            include_terms=("harpy",),
+        ),
+        requirements=(
+            agent_planning.EvidenceRequirement(
+                id="harpy_stats",
+                requirement_type="statline_evidence",
+                subject=agent_planning.SubjectConstraint(
+                    canonical="harpy",
+                    surface="harpy",
+                    include_terms=("harpy",),
+                ),
+                object_type_hints=("stat_block", "monster_profile"),
+            ),
+        ),
+        planned_actions=(
+            agent_planning.PlannedAction(
+                tool_name="search_library",
+                requirement_id="harpy_stats",
+                purpose="Find a Harpy stat block.",
+                arguments={
+                    "query": "harpy statline",
+                    "intent": "statline_lookup",
+                    "subject": "harpy",
+                    "limit": 8,
+                    "include_terms": ["harpy"],
+                    "exclude_terms": [],
+                    "object_type_hints": ["stat_block", "monster_profile"],
+                    "book_title_hints": [],
+                    "page_hints": [],
+                },
+            ),
+        ),
+        provider_call_id="call-plan",
+    )
+
+    stored = chat_store.record_familiar_research_plan(config, plan)
+    duplicate = chat_store.record_familiar_research_plan(config, plan)
+    tool_call = chat_store.record_familiar_tool_call(
+        config,
+        research_run.id,
+        research_plan_id=stored.id,
+        requirement_id="harpy_stats",
+        purpose="Find a Harpy stat block.",
+        step_number=1,
+        provider_call_id="call-tool",
+        tool_name="search_library",
+        arguments={"query": "harpy statline"},
+    )
+    judgment = chat_store.record_familiar_evidence_judgment(
+        config,
+        research_run_id=research_run.id,
+        research_plan_id=stored.id,
+        requirement_id="harpy_stats",
+        requirement_type="statline_evidence",
+        status="rejected",
+        reason_code="missing_statline_markers",
+        reasons=("No statline markers.",),
+        subject_constraint={
+            "canonical": "harpy",
+            "include_terms": ["harpy"],
+            "exclude_terms": [],
+        },
+        constraint_status="failed",
+    )
+    chat_store.transition_familiar_research_run(
+        config,
+        research_run.id,
+        from_statuses=("planning",),
+        to_status="insufficient",
+        evidence_status="partial",
+    )
+    reloaded = chat_store.get_familiar_research_plan(config, stored.id)
+    public_events = chat_store.list_public_research_events(config, queued.model_run.id)
+
+    assert stored == plan
+    assert duplicate == plan
+    assert reloaded == plan
+    assert tool_call.research_plan_id == stored.id
+    assert tool_call.requirement_id == "harpy_stats"
+    assert tool_call.purpose == "Find a Harpy stat block."
+    assert judgment.research_plan_id == stored.id
+    assert judgment.requirement_id == "harpy_stats"
+    assert judgment.subject_constraint == {
+        "canonical": "harpy",
+        "include_terms": ["harpy"],
+        "exclude_terms": [],
+    }
+    assert judgment.constraint_status == "failed"
+    assert public_events[-1]["label"] == "Evidence partial; 0 accepted, 0 partial"
+    assert count_rows(config, "familiar_research_plans") == 1
+
+
+def test_public_research_events_cover_failed_and_tool_fallback_labels(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="harpy statline",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    research_run = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="harpy statline",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+    )
+    for index, tool_name in enumerate(
+        ("search_library", "open_page", "lookup_source_object", "custom_tool"),
+        start=1,
+    ):
+        chat_store.record_familiar_tool_call(
+            config,
+            research_run.id,
+            step_number=index,
+            provider_call_id=f"call-tool-{index}",
+            tool_name=tool_name,
+            arguments={"query": "harpy statline"},
+        )
+    chat_store.transition_familiar_research_run(
+        config,
+        research_run.id,
+        from_statuses=("planning",),
+        to_status="failed",
+        evidence_status="insufficient",
+    )
+
+    events = chat_store.list_public_research_events(config, queued.model_run.id)
+
+    assert [event["label"] for event in events] == [
+        "Research started",
+        "Searched enabled books",
+        "Opened source page",
+        "Inspected source object",
+        "Ran custom_tool",
+        "Research failed before evidence was accepted",
+    ]
+    assert "resolved_query" not in events[0]["metadata"]
+    assert chat_store.list_public_research_events(config, "missing-run") == ()
+
+
+def test_research_plan_row_and_json_list_edge_cases(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    with open_connection(config.db_path) as connection:
+        with pytest.raises(chat_store.ModelRunNotFoundError):
+            chat_store.familiar_research_plan_row(connection, "missing-plan")
+
+    assert chat_store.json_list_from_string(None) == []
+    assert chat_store.json_list_from_string("{bad json") == []
+    assert chat_store.json_list_from_string("{}") == []
+    assert chat_store.json_list_from_string("[1, 2]") == [1, 2]
+
+
+def test_familiar_evidence_judgments_and_thread_context_round_trip(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="harpy statline",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    research_run = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="harpy statline",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+    )
+
+    judgment = chat_store.record_familiar_evidence_judgment(
+        config,
+        research_run_id=research_run.id,
+        requirement_type="statline_markers_present",
+        status="accepted",
+        reason_code="structured_stat_block",
+        reasons=("matched subject", "matched stat markers"),
+        book_id="core-rules",
+        printed_page_label="99",
+    )
+    chat_store.upsert_chat_thread_context(
+        config,
+        thread.id,
+        active_subject="harpy",
+        active_intent="statline_lookup",
+        active_book_id="core-rules",
+        active_printed_page_label="99",
+        active_pdf_page_number=101,
+        updated_from_message_id=queued.user_message.id,
+        updated_from_model_run_id=queued.model_run.id,
+        metadata={"source": "validated_evidence"},
+    )
+    reloaded_context = chat_store.get_chat_thread_context(config, thread.id)
+    judgments = chat_store.list_familiar_evidence_judgments(
+        config,
+        research_run.id,
+    )
+
+    assert judgment.reasons == ("matched subject", "matched stat markers")
+    assert judgments == (judgment,)
+    assert reloaded_context == research.ChatThreadContext(
+        thread_id=thread.id,
+        active_subject="harpy",
+        active_intent="statline_lookup",
+        active_book_id="core-rules",
+        active_printed_page_label="99",
+        active_pdf_page_number=101,
+        active_source_object_id=None,
+        updated_from_message_id=queued.user_message.id,
+        updated_from_model_run_id=queued.model_run.id,
+        metadata={"source": "validated_evidence"},
+        updated_at=reloaded_context.updated_at if reloaded_context else "",
+    )
+
+
+def test_familiar_research_store_rejects_invalid_lifecycle_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="harpy statline",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    research_run = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="harpy statline",
+        resolved_query="harpy statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+    )
+    tool_call = chat_store.record_familiar_tool_call(
+        config,
+        research_run.id,
+        step_number=1,
+        provider_call_id=None,
+        tool_name="search_library",
+        arguments={},
+    )
+
+    with pytest.raises(ValueError, match="from_statuses"):
+        chat_store.transition_familiar_research_run(
+            config,
+            research_run.id,
+            from_statuses=(),
+            to_status="tool_calling",
+        )
+    with pytest.raises(ValueError, match="from_statuses"):
+        chat_store.transition_familiar_tool_call(
+            config,
+            tool_call.id,
+            from_statuses=(),
+            to_status="running",
+        )
+    with open_connection(config.db_path) as connection:
+        connection.execute("pragma foreign_keys = off")
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              user_message_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+              updated_at
+            )
+            values ('run-without-user', ?, null, 'fake', 'fake-model',
+                    'queued', 'run-without-user', '2026-06-09T00:00:00Z',
+                    '2026-06-09T00:00:00Z')
+            """,
+            (thread.id,),
+        )
+    with pytest.raises(chat_store.ModelRunNotRetryableError, match="no user message"):
+        chat_store.create_familiar_research_run(
+            config,
+            model_run_id="run-without-user",
+            raw_query="orphan",
+            resolved_query="orphan",
+            intent="unknown",
+            max_tool_rounds=4,
+        )
+    with open_connection(config.db_path) as connection:
+        with pytest.raises(chat_store.ModelRunNotFoundError, match="research run"):
+            chat_store.familiar_research_run_row(connection, "missing-research")
+        with pytest.raises(chat_store.ModelRunNotFoundError, match="tool call"):
+            chat_store.familiar_tool_call_row(connection, "missing-tool")
+        with pytest.raises(chat_store.ModelRunNotFoundError, match="evidence judgment"):
+            chat_store.familiar_evidence_judgment_row(connection, "missing-judgment")
+
+    monkeypatch.setattr(chat_store, "chat_thread_context_row", lambda *_: None)
+    with pytest.raises(chat_store.ChatThreadNotFoundError, match="context not found"):
+        chat_store.upsert_chat_thread_context(config, thread.id, active_subject="harpy")

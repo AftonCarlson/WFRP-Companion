@@ -4,7 +4,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from wfrp_companion.config import AppConfig
@@ -12,6 +12,8 @@ from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.library.page_labels import load_calibrated_printed_page_label
 from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
 from wfrp_companion.library import source_sets
+from wfrp_companion.assistant import agent_planning
+from wfrp_companion.assistant import research
 
 
 PROVIDER_UNAVAILABLE_MESSAGE = (
@@ -631,6 +633,12 @@ def record_retrieval_run(
     history_message_ids: Sequence[str] = (),
     history_turn_count: int = 0,
     history_strategy: str = "none",
+    diagnostics: research.RetrievalDiagnostics | None = None,
+    tool_call_id: str | None = None,
+    attempt_number: int | None = None,
+    intent: str | None = None,
+    resolved_query: str | None = None,
+    tool_name: str | None = None,
 ) -> str:
     retrieval_run_id = new_id("retrieval")
     now = utc_timestamp()
@@ -642,6 +650,12 @@ def record_retrieval_run(
         history_message_ids=history_message_ids,
         history_turn_count=history_turn_count,
         history_strategy=history_strategy,
+        diagnostics=diagnostics,
+        tool_call_id=tool_call_id,
+        attempt_number=attempt_number,
+        intent=intent,
+        resolved_query=resolved_query,
+        tool_name=tool_name,
     )
     with initialize_database(config.db_path) as connection:
         thread_row(connection, thread_id)
@@ -726,6 +740,39 @@ def record_retrieval_run(
     return retrieval_run_id
 
 
+def update_retrieval_run_validation_status(
+    config: AppConfig,
+    retrieval_run_id: str,
+    *,
+    validation_status: str,
+    validation_summary: dict[str, object],
+) -> bool:
+    with initialize_database(config.db_path) as connection:
+        row = connection.execute(
+            """
+            select metadata_json
+            from retrieval_runs
+            where id = ?
+            """,
+            (retrieval_run_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        metadata = research.object_from_json(row["metadata_json"])
+        metadata["validation_status"] = validation_status
+        metadata["validation_summary"] = validation_summary
+        with connection:
+            connection.execute(
+                """
+                update retrieval_runs
+                set metadata_json = ?
+                where id = ?
+                """,
+                (json.dumps(metadata, sort_keys=True), retrieval_run_id),
+            )
+    return True
+
+
 def record_retrieval_run_source_books(
     connection: sqlite3.Connection,
     *,
@@ -762,6 +809,570 @@ def record_retrieval_run_source_books(
         )
 
 
+def create_familiar_research_run(
+    config: AppConfig,
+    *,
+    model_run_id: str,
+    raw_query: str,
+    resolved_query: str,
+    intent: str,
+    max_tool_rounds: int,
+    metadata: dict[str, object] | None = None,
+) -> research.FamiliarResearchRun:
+    now = utc_timestamp()
+    with initialize_database(config.db_path) as connection:
+        existing = familiar_research_run_by_model_run_id(connection, model_run_id)
+        if existing is not None:
+            return familiar_research_run_from_row(existing)
+        run = model_run_row(connection, model_run_id)
+        if run["user_message_id"] is None:
+            raise ModelRunNotRetryableError(
+                f"Model run has no user message: {model_run_id}"
+            )
+        thread = thread_row(connection, run["thread_id"])
+        research_run_id = new_id("research")
+        with connection:
+            connection.execute(
+                """
+                insert or ignore into familiar_research_runs (
+                  id,
+                  model_run_id,
+                  thread_id,
+                  user_message_id,
+                  source_set_id,
+                  raw_query,
+                  resolved_query,
+                  intent,
+                  status,
+                  max_tool_rounds,
+                  evidence_status,
+                  metadata_json,
+                  created_at,
+                  updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, 'planning', ?, 'not_evaluated',
+                        ?, ?, ?)
+                """,
+                (
+                    research_run_id,
+                    model_run_id,
+                    run["thread_id"],
+                    run["user_message_id"],
+                    thread["active_source_set_id"],
+                    raw_query,
+                    resolved_query,
+                    intent,
+                    max_tool_rounds,
+                    research.normalized_json(metadata or {}),
+                    now,
+                    now,
+                ),
+            )
+        row = familiar_research_run_by_model_run_id(connection, model_run_id)
+        if row is None:  # pragma: no cover - defensive after insert-or-ignore.
+            raise ModelRunNotFoundError(
+                f"Familiar research run not found for model run: {model_run_id}"
+            )
+        return familiar_research_run_from_row(row)
+
+
+def transition_familiar_research_run(
+    config: AppConfig,
+    research_run_id: str,
+    *,
+    from_statuses: Sequence[str],
+    to_status: str,
+    evidence_status: str | None = None,
+    tool_rounds_used: int | None = None,
+    final_retrieval_run_id: str | None = None,
+) -> research.FamiliarResearchRun:
+    if not from_statuses:
+        raise ValueError("from_statuses must not be empty")
+    placeholders = ",".join("?" for _ in from_statuses)
+    now = utc_timestamp()
+    completed_at = now if to_status in {"completed", "insufficient", "failed"} else None
+    assignments = ["status = ?", "updated_at = ?"]
+    values: list[object] = [to_status, now]
+    if evidence_status is not None:
+        assignments.append("evidence_status = ?")
+        values.append(evidence_status)
+    if tool_rounds_used is not None:
+        assignments.append("tool_rounds_used = ?")
+        values.append(tool_rounds_used)
+    if final_retrieval_run_id is not None:
+        assignments.append("final_retrieval_run_id = ?")
+        values.append(final_retrieval_run_id)
+    if completed_at is not None:
+        assignments.append("completed_at = ?")
+        values.append(completed_at)
+    with initialize_database(config.db_path) as connection:
+        with connection:
+            connection.execute(
+                f"""
+                update familiar_research_runs
+                set {", ".join(assignments)}
+                where id = ?
+                  and status in ({placeholders})
+                """,
+                (*values, research_run_id, *from_statuses),
+            )
+        return familiar_research_run_from_row(
+            familiar_research_run_row(connection, research_run_id)
+        )
+
+
+def record_familiar_research_plan(
+    config: AppConfig,
+    plan: agent_planning.ResearchPlan,
+) -> agent_planning.ResearchPlan:
+    now = utc_timestamp()
+    with initialize_database(config.db_path) as connection:
+        existing = familiar_research_plan_row_or_none(connection, plan.id)
+        if existing is not None:
+            return familiar_research_plan_from_row(existing)
+        with connection:
+            connection.execute(
+                """
+                insert into familiar_research_plans (
+                  id,
+                  research_run_id,
+                  revision,
+                  status,
+                  intent,
+                  plan_summary,
+                  subject_json,
+                  requirements_json,
+                  planned_actions_json,
+                  provider_call_id,
+                  validation_errors_json,
+                  created_at,
+                  updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan.id,
+                    plan.research_run_id,
+                    plan.revision,
+                    plan.status,
+                    plan.intent,
+                    plan.plan_summary,
+                    research.normalized_json(plan.subject.to_json()),
+                    research.normalized_json(
+                        [requirement.to_json() for requirement in plan.requirements]
+                    ),
+                    research.normalized_json(
+                        [action.to_json() for action in plan.planned_actions]
+                    ),
+                    plan.provider_call_id,
+                    research.normalized_json(list(plan.validation_errors)),
+                    now,
+                    now,
+                ),
+            )
+        return familiar_research_plan_from_row(
+            familiar_research_plan_row(connection, plan.id)
+        )
+
+
+def get_familiar_research_plan(
+    config: AppConfig,
+    plan_id: str,
+) -> agent_planning.ResearchPlan:
+    with initialize_database(config.db_path) as connection:
+        return familiar_research_plan_from_row(
+            familiar_research_plan_row(connection, plan_id)
+        )
+
+
+def record_familiar_tool_call(
+    config: AppConfig,
+    research_run_id: str,
+    *,
+    research_plan_id: str | None = None,
+    requirement_id: str | None = None,
+    purpose: str | None = None,
+    step_number: int,
+    call_index: int = 0,
+    provider_call_id: str | None,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> research.FamiliarToolCall:
+    now = utc_timestamp()
+    argument_hash = research.normalized_json_hash(arguments)
+    with initialize_database(config.db_path) as connection:
+        if provider_call_id is not None:
+            existing = familiar_tool_call_by_provider_call_id(
+                connection,
+                research_run_id=research_run_id,
+                provider_call_id=provider_call_id,
+            )
+            if existing is not None:
+                return familiar_tool_call_from_row(existing)
+        tool_call_id = new_id("tool-call")
+        with connection:
+            connection.execute(
+                """
+                insert into familiar_tool_calls (
+                  id,
+                  research_run_id,
+                  research_plan_id,
+                  requirement_id,
+                  purpose,
+                  step_number,
+                  call_index,
+                  provider_call_id,
+                  tool_name,
+                  arguments_json,
+                  argument_hash,
+                  status,
+                  created_at,
+                  updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)
+                """,
+                (
+                    tool_call_id,
+                    research_run_id,
+                    research_plan_id,
+                    requirement_id,
+                    purpose,
+                    step_number,
+                    call_index,
+                    provider_call_id,
+                    tool_name,
+                    research.normalized_json(arguments),
+                    argument_hash,
+                    now,
+                    now,
+                ),
+            )
+        return familiar_tool_call_from_row(
+            familiar_tool_call_row(connection, tool_call_id)
+        )
+
+
+def transition_familiar_tool_call(
+    config: AppConfig,
+    tool_call_id: str,
+    *,
+    from_statuses: Sequence[str],
+    to_status: str,
+    retrieval_run_id: str | None = None,
+    output_summary: dict[str, object] | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> research.FamiliarToolCall:
+    if not from_statuses:
+        raise ValueError("from_statuses must not be empty")
+    placeholders = ",".join("?" for _ in from_statuses)
+    now = utc_timestamp()
+    completed_at = now if to_status in {"succeeded", "failed", "rejected"} else None
+    assignments = ["status = ?", "updated_at = ?"]
+    values: list[object] = [to_status, now]
+    if retrieval_run_id is not None:
+        assignments.append("retrieval_run_id = ?")
+        values.append(retrieval_run_id)
+    if output_summary is not None:
+        assignments.append("output_summary_json = ?")
+        values.append(research.normalized_json(output_summary))
+    if error_code is not None:
+        assignments.append("error_code = ?")
+        values.append(error_code)
+    if error_message is not None:
+        assignments.append("error_message = ?")
+        values.append(error_message)
+    if completed_at is not None:
+        assignments.append("completed_at = ?")
+        values.append(completed_at)
+    with initialize_database(config.db_path) as connection:
+        with connection:
+            connection.execute(
+                f"""
+                update familiar_tool_calls
+                set {", ".join(assignments)}
+                where id = ?
+                  and status in ({placeholders})
+                """,
+                (*values, tool_call_id, *from_statuses),
+            )
+        return familiar_tool_call_from_row(familiar_tool_call_row(connection, tool_call_id))
+
+
+def record_familiar_evidence_judgment(
+    config: AppConfig,
+    *,
+    research_run_id: str,
+    research_plan_id: str | None = None,
+    requirement_id: str | None = None,
+    requirement_type: str,
+    status: str,
+    reason_code: str,
+    reasons: Sequence[str] = (),
+    retrieval_run_id: str | None = None,
+    retrieval_hit_id: str | None = None,
+    source_object_id: str | None = None,
+    book_id: str | None = None,
+    printed_page_label: str | None = None,
+    subject_constraint: dict[str, object] | None = None,
+    constraint_status: str | None = None,
+) -> research.FamiliarEvidenceJudgment:
+    judgment_id = new_id("evidence-judgment")
+    now = utc_timestamp()
+    with initialize_database(config.db_path) as connection:
+        with connection:
+            connection.execute(
+                """
+                insert into familiar_evidence_judgments (
+                  id,
+                  research_run_id,
+                  research_plan_id,
+                  requirement_id,
+                  retrieval_run_id,
+                  retrieval_hit_id,
+                  source_object_id,
+                  book_id,
+                  printed_page_label,
+                  requirement_type,
+                  status,
+                  reason_code,
+                  reasons_json,
+                  subject_constraint_json,
+                  constraint_status,
+                  created_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    judgment_id,
+                    research_run_id,
+                    research_plan_id,
+                    requirement_id,
+                    retrieval_run_id,
+                    retrieval_hit_id,
+                    source_object_id,
+                    book_id,
+                    printed_page_label,
+                    requirement_type,
+                    status,
+                    reason_code,
+                    research.normalized_json(list(reasons)),
+                    research.normalized_json(subject_constraint or {}),
+                    constraint_status,
+                    now,
+                ),
+            )
+        return familiar_evidence_judgment_from_row(
+            familiar_evidence_judgment_row(connection, judgment_id)
+        )
+
+
+def list_familiar_evidence_judgments(
+    config: AppConfig,
+    research_run_id: str,
+) -> tuple[research.FamiliarEvidenceJudgment, ...]:
+    with initialize_database(config.db_path) as connection:
+        rows = connection.execute(
+            """
+            select *
+            from familiar_evidence_judgments
+            where research_run_id = ?
+            order by created_at, id
+            """,
+            (research_run_id,),
+        ).fetchall()
+    return tuple(familiar_evidence_judgment_from_row(row) for row in rows)
+
+
+def list_public_research_events(
+    config: AppConfig,
+    model_run_id: str,
+) -> tuple[dict[str, object], ...]:
+    with initialize_database(config.db_path) as connection:
+        research_run = familiar_research_run_by_model_run_id(
+            connection,
+            model_run_id,
+        )
+        if research_run is None:
+            return ()
+        plan = connection.execute(
+            """
+            select *
+            from familiar_research_plans
+            where research_run_id = ?
+              and status = 'accepted'
+            order by revision desc
+            limit 1
+            """,
+            (research_run["id"],),
+        ).fetchone()
+        tool_rows = connection.execute(
+            """
+            select tool_name, requirement_id, purpose, status, step_number
+            from familiar_tool_calls
+            where research_run_id = ?
+            order by step_number, call_index, created_at, id
+            """,
+            (research_run["id"],),
+        ).fetchall()
+        judgment_rows = connection.execute(
+            """
+            select status
+            from familiar_evidence_judgments
+            where research_run_id = ?
+            """,
+            (research_run["id"],),
+        ).fetchall()
+
+    events: list[dict[str, object]] = [
+        {
+            "type": "research_started",
+            "label": "Research started",
+            "metadata": {
+                "research_run_id": research_run["id"],
+                "intent": research_run["intent"],
+            },
+        }
+    ]
+    if plan is not None:
+        events.append(
+            {
+                "type": "research_plan",
+                "label": "Research plan accepted",
+                "metadata": {
+                    "research_run_id": research_run["id"],
+                    "research_plan_id": plan["id"],
+                    "intent": plan["intent"],
+                },
+            }
+        )
+    for row in tool_rows:
+        events.append(
+            {
+                "type": "tool_call",
+                "label": tool_trace_label(row),
+                "metadata": {
+                    "tool_name": row["tool_name"],
+                    "requirement_id": row["requirement_id"],
+                    "status": row["status"],
+                    "step_number": row["step_number"],
+                },
+            }
+        )
+    if judgment_rows:
+        accepted = sum(1 for row in judgment_rows if row["status"] == "accepted")
+        partial = sum(1 for row in judgment_rows if row["status"] == "partial")
+        events.append(
+            {
+                "type": "evidence_validation",
+                "label": (
+                    f"Evidence {research_run['evidence_status']}; "
+                    f"{accepted} accepted, {partial} partial"
+                ),
+                "metadata": {
+                    "evidence_status": research_run["evidence_status"],
+                    "accepted_hit_count": accepted,
+                    "partial_hit_count": partial,
+                },
+            }
+        )
+    elif research_run["status"] == "failed":
+        events.append(
+            {
+                "type": "failed",
+                "label": "Research failed before evidence was accepted",
+                "metadata": {"evidence_status": research_run["evidence_status"]},
+            }
+        )
+    return tuple(events)
+
+
+def tool_trace_label(row: sqlite3.Row) -> str:
+    tool_name = row["tool_name"]
+    if tool_name == "search_library":
+        return "Searched enabled books"
+    if tool_name == "open_page":
+        return "Opened source page"
+    if tool_name == "lookup_source_object":
+        return "Inspected source object"
+    return f"Ran {tool_name}"
+
+
+def upsert_chat_thread_context(
+    config: AppConfig,
+    thread_id: str,
+    *,
+    active_subject: str | None = None,
+    active_intent: str | None = None,
+    active_book_id: str | None = None,
+    active_printed_page_label: str | None = None,
+    active_pdf_page_number: int | None = None,
+    active_source_object_id: str | None = None,
+    updated_from_message_id: str | None = None,
+    updated_from_model_run_id: str | None = None,
+    metadata: dict[str, object] | None = None,
+) -> research.ChatThreadContext:
+    now = utc_timestamp()
+    with initialize_database(config.db_path) as connection:
+        thread_row(connection, thread_id)
+        with connection:
+            connection.execute(
+                """
+                insert into chat_thread_context (
+                  thread_id,
+                  active_subject,
+                  active_intent,
+                  active_book_id,
+                  active_printed_page_label,
+                  active_pdf_page_number,
+                  active_source_object_id,
+                  updated_from_message_id,
+                  updated_from_model_run_id,
+                  metadata_json,
+                  updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(thread_id) do update set
+                  active_subject = excluded.active_subject,
+                  active_intent = excluded.active_intent,
+                  active_book_id = excluded.active_book_id,
+                  active_printed_page_label = excluded.active_printed_page_label,
+                  active_pdf_page_number = excluded.active_pdf_page_number,
+                  active_source_object_id = excluded.active_source_object_id,
+                  updated_from_message_id = excluded.updated_from_message_id,
+                  updated_from_model_run_id = excluded.updated_from_model_run_id,
+                  metadata_json = excluded.metadata_json,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    thread_id,
+                    active_subject,
+                    active_intent,
+                    active_book_id,
+                    active_printed_page_label,
+                    active_pdf_page_number,
+                    active_source_object_id,
+                    updated_from_message_id,
+                    updated_from_model_run_id,
+                    research.normalized_json(metadata or {}),
+                    now,
+                ),
+            )
+        context = chat_thread_context_row(connection, thread_id)
+    if context is None:
+        raise ChatThreadNotFoundError(f"Chat thread context not found: {thread_id}")
+    return chat_thread_context_from_row(context)
+
+
+def get_chat_thread_context(
+    config: AppConfig,
+    thread_id: str,
+) -> research.ChatThreadContext | None:
+    with initialize_database(config.db_path) as connection:
+        row = chat_thread_context_row(connection, thread_id)
+    return None if row is None else chat_thread_context_from_row(row)
+
+
 def retrieval_run_metadata(
     *,
     source_book_ids: Sequence[str],
@@ -771,6 +1382,12 @@ def retrieval_run_metadata(
     history_message_ids: Sequence[str] = (),
     history_turn_count: int = 0,
     history_strategy: str = "none",
+    diagnostics: research.RetrievalDiagnostics | None = None,
+    tool_call_id: str | None = None,
+    attempt_number: int | None = None,
+    intent: str | None = None,
+    resolved_query: str | None = None,
+    tool_name: str | None = None,
 ) -> dict[str, object]:
     metadata: dict[str, object] = {
         "source_book_ids": list(source_book_ids),
@@ -785,7 +1402,36 @@ def retrieval_run_metadata(
         metadata["history_turn_count"] = history_turn_count
     if history_strategy != "none":
         metadata["history_strategy"] = history_strategy
+    if diagnostics is not None:
+        metadata.update(retrieval_diagnostics_to_metadata(diagnostics))
+    if tool_call_id is not None:
+        metadata["tool_call_id"] = tool_call_id
+    if attempt_number is not None:
+        metadata["attempt_number"] = attempt_number
+    if intent is not None:
+        metadata["intent"] = intent
+    if resolved_query is not None:
+        metadata["resolved_query"] = resolved_query
+    if tool_name is not None:
+        metadata["tool_name"] = tool_name
     return metadata
+
+
+def retrieval_diagnostics_to_metadata(
+    diagnostics: research.RetrievalDiagnostics,
+) -> dict[str, object]:
+    return {
+        "diagnostics_schema_version": 1,
+        "channel_counts": dict(diagnostics.channel_counts),
+        "channel_skip_reasons": dict(diagnostics.channel_skip_reasons),
+        "vector_status": diagnostics.vector_status,
+        "candidate_count_before_fusion": diagnostics.candidate_count_before_fusion,
+        "candidate_count_after_fusion": diagnostics.candidate_count_after_fusion,
+        "reranked_count": diagnostics.reranked_count,
+        "selected_count": diagnostics.selected_count,
+        "page_lookup_attempted": diagnostics.page_lookup_attempted,
+        "validation_status": diagnostics.validation_status,
+    }
 
 
 def source_map_entry_to_metadata(entry: object) -> dict[str, object]:
@@ -815,6 +1461,128 @@ def enabled_book_ids_from_connection(
         (source_set_id,),
     ).fetchall()
     return tuple(row["book_id"] for row in rows)
+
+
+def familiar_research_run_row(
+    connection: sqlite3.Connection,
+    research_run_id: str,
+) -> sqlite3.Row:
+    row = connection.execute(
+        """
+        select *
+        from familiar_research_runs
+        where id = ?
+        """,
+        (research_run_id,),
+    ).fetchone()
+    if row is None:
+        raise ModelRunNotFoundError(f"Familiar research run not found: {research_run_id}")
+    return row
+
+
+def familiar_research_run_by_model_run_id(
+    connection: sqlite3.Connection,
+    model_run_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        select *
+        from familiar_research_runs
+        where model_run_id = ?
+        """,
+        (model_run_id,),
+    ).fetchone()
+
+
+def familiar_tool_call_row(
+    connection: sqlite3.Connection,
+    tool_call_id: str,
+) -> sqlite3.Row:
+    row = connection.execute(
+        """
+        select *
+        from familiar_tool_calls
+        where id = ?
+        """,
+        (tool_call_id,),
+    ).fetchone()
+    if row is None:
+        raise ModelRunNotFoundError(f"Familiar tool call not found: {tool_call_id}")
+    return row
+
+
+def familiar_research_plan_row(
+    connection: sqlite3.Connection,
+    plan_id: str,
+) -> sqlite3.Row:
+    row = familiar_research_plan_row_or_none(connection, plan_id)
+    if row is None:
+        raise ModelRunNotFoundError(f"Familiar research plan not found: {plan_id}")
+    return row
+
+
+def familiar_research_plan_row_or_none(
+    connection: sqlite3.Connection,
+    plan_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        select *
+        from familiar_research_plans
+        where id = ?
+        """,
+        (plan_id,),
+    ).fetchone()
+
+
+def familiar_tool_call_by_provider_call_id(
+    connection: sqlite3.Connection,
+    *,
+    research_run_id: str,
+    provider_call_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        select *
+        from familiar_tool_calls
+        where research_run_id = ?
+          and provider_call_id = ?
+        """,
+        (research_run_id, provider_call_id),
+    ).fetchone()
+
+
+def familiar_evidence_judgment_row(
+    connection: sqlite3.Connection,
+    judgment_id: str,
+) -> sqlite3.Row:
+    row = connection.execute(
+        """
+        select *
+        from familiar_evidence_judgments
+        where id = ?
+        """,
+        (judgment_id,),
+    ).fetchone()
+    if row is None:
+        raise ModelRunNotFoundError(
+            f"Familiar evidence judgment not found: {judgment_id}"
+        )
+    return row
+
+
+def chat_thread_context_row(
+    connection: sqlite3.Connection,
+    thread_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        select *
+        from chat_thread_context
+        where thread_id = ?
+        """,
+        (thread_id,),
+    ).fetchone()
 
 
 def thread_row(connection: sqlite3.Connection, thread_id: str) -> sqlite3.Row:
@@ -1213,6 +1981,127 @@ def message_from_row(row: sqlite3.Row) -> ChatMessage:
         content=row["content"],
         created_at=row["created_at"],
     )
+
+
+def familiar_research_run_from_row(row: sqlite3.Row) -> research.FamiliarResearchRun:
+    return research.FamiliarResearchRun(
+        id=row["id"],
+        model_run_id=row["model_run_id"],
+        thread_id=row["thread_id"],
+        user_message_id=row["user_message_id"],
+        source_set_id=row["source_set_id"],
+        raw_query=row["raw_query"],
+        resolved_query=row["resolved_query"],
+        intent=row["intent"],
+        status=row["status"],
+        max_tool_rounds=int(row["max_tool_rounds"]),
+        tool_rounds_used=int(row["tool_rounds_used"]),
+        evidence_status=row["evidence_status"],
+        final_retrieval_run_id=row["final_retrieval_run_id"],
+        metadata=research.object_from_json(row["metadata_json"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        completed_at=row["completed_at"],
+    )
+
+
+def familiar_tool_call_from_row(row: sqlite3.Row) -> research.FamiliarToolCall:
+    return research.FamiliarToolCall(
+        id=row["id"],
+        research_run_id=row["research_run_id"],
+        research_plan_id=row["research_plan_id"],
+        requirement_id=row["requirement_id"],
+        purpose=row["purpose"],
+        step_number=int(row["step_number"]),
+        call_index=int(row["call_index"]),
+        provider_call_id=row["provider_call_id"],
+        tool_name=row["tool_name"],
+        arguments=research.object_from_json(row["arguments_json"]),
+        argument_hash=row["argument_hash"],
+        status=row["status"],
+        retrieval_run_id=row["retrieval_run_id"],
+        output_summary=research.object_from_json(row["output_summary_json"]),
+        error_code=row["error_code"],
+        error_message=row["error_message"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        completed_at=row["completed_at"],
+    )
+
+
+def familiar_research_plan_from_row(row: sqlite3.Row) -> agent_planning.ResearchPlan:
+    subject = research.object_from_json(row["subject_json"])
+    requirements = json_list_from_string(row["requirements_json"])
+    planned_actions = json_list_from_string(row["planned_actions_json"])
+    plan = agent_planning.parse_research_plan(
+        {
+            "intent": row["intent"],
+            "plan_summary": row["plan_summary"],
+            "subject": subject,
+            "requirements": requirements,
+            "planned_actions": planned_actions,
+        },
+        research_run_id=row["research_run_id"],
+        plan_id=row["id"],
+        revision=int(row["revision"]),
+        provider_call_id=row["provider_call_id"],
+        status=row["status"],
+    )
+    return replace(
+        plan,
+        validation_errors=research.string_tuple_from_json(
+            row["validation_errors_json"]
+        ),
+    )
+
+
+def familiar_evidence_judgment_from_row(
+    row: sqlite3.Row,
+) -> research.FamiliarEvidenceJudgment:
+    return research.FamiliarEvidenceJudgment(
+        id=row["id"],
+        research_run_id=row["research_run_id"],
+        research_plan_id=row["research_plan_id"],
+        requirement_id=row["requirement_id"],
+        retrieval_run_id=row["retrieval_run_id"],
+        retrieval_hit_id=row["retrieval_hit_id"],
+        source_object_id=row["source_object_id"],
+        book_id=row["book_id"],
+        printed_page_label=row["printed_page_label"],
+        requirement_type=row["requirement_type"],
+        status=row["status"],
+        reason_code=row["reason_code"],
+        reasons=research.string_tuple_from_json(row["reasons_json"]),
+        subject_constraint=research.object_from_json(row["subject_constraint_json"]),
+        constraint_status=row["constraint_status"],
+        created_at=row["created_at"],
+    )
+
+
+def chat_thread_context_from_row(row: sqlite3.Row) -> research.ChatThreadContext:
+    return research.ChatThreadContext(
+        thread_id=row["thread_id"],
+        active_subject=row["active_subject"],
+        active_intent=row["active_intent"],
+        active_book_id=row["active_book_id"],
+        active_printed_page_label=row["active_printed_page_label"],
+        active_pdf_page_number=row["active_pdf_page_number"],
+        active_source_object_id=row["active_source_object_id"],
+        updated_from_message_id=row["updated_from_message_id"],
+        updated_from_model_run_id=row["updated_from_model_run_id"],
+        metadata=research.object_from_json(row["metadata_json"]),
+        updated_at=row["updated_at"],
+    )
+
+
+def json_list_from_string(value: str | None) -> list[object]:
+    if not value:
+        return []
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return decoded if isinstance(decoded, list) else []
 
 
 def is_model_run_retryable(connection: sqlite3.Connection, row: sqlite3.Row) -> bool:

@@ -7,10 +7,11 @@ from typing import Protocol
 from wfrp_companion.assistant import (
     chat_store,
     conversation_context,
-    prompts,
+    familiar_agent,
     provider,
-    retrieval,
+    research,
 )
+from wfrp_companion.assistant import retrieval
 from wfrp_companion.config import AppConfig
 
 
@@ -23,6 +24,11 @@ class ResponseProvider(Protocol):
         *,
         messages: Sequence[provider.ProviderMessage],
         request_id: str,
+        tools: Sequence[provider.ProviderToolDefinition] = (),
+        tool_results: Sequence[provider.ProviderToolResult] = (),
+        previous_response_id: str | None = None,
+        tool_choice: object | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> Iterable[provider.ProviderStreamEvent]:
         pass  # pragma: no cover - protocol declaration only
 
@@ -40,6 +46,7 @@ class ChatStreamEvent:
     citations: tuple[chat_store.ChatCitation, ...]
     text_delta: str | None = None
     error_message: str | None = None
+    metadata: dict[str, object] | None = None
 
 
 def stream_chat_message(
@@ -48,6 +55,7 @@ def stream_chat_message(
     thread_id: str,
     content: str,
     idempotency_key: str,
+    reader_context: research.ReaderContext | None = None,
     provider_factory: ProviderFactory | None = None,
 ) -> Iterable[ChatStreamEvent]:
     result = chat_store.create_queued_turn(
@@ -62,6 +70,7 @@ def stream_chat_message(
         config,
         result=result,
         content=content,
+        reader_context=reader_context,
         provider_factory=provider_factory,
     )
 
@@ -93,7 +102,8 @@ def stream_queued_result(
     *,
     result: chat_store.SendChatResult,
     content: str,
-    provider_factory: ProviderFactory | None,
+    reader_context: research.ReaderContext | None = None,
+    provider_factory: ProviderFactory | None = None,
 ) -> Iterable[ChatStreamEvent]:
     yield event_from_result("accepted", result)
 
@@ -139,36 +149,30 @@ def stream_queued_result(
             current_user_message_id=result.user_message.id,
             current_user_content=content,
         )
-        context = retrieval.retrieve_context(
+        research_result = familiar_agent.run_research(
             config,
-            result.thread.id,
-            conversation.retrieval_query,
-            hit_limit=config.chat_context_hit_limit,
-            total_char_limit=config.chat_context_char_limit,
-            window_chars=config.chat_context_window_chars,
+            result=result,
+            content=content,
+            conversation=conversation,
+            reader_context=reader_context,
+            response_provider=response_provider,
         )
-        retrieval_run_id = chat_store.record_retrieval_run(
-            config,
-            thread_id=result.thread.id,
-            message_id=result.user_message.id,
-            source_set_id=context.source_set_id,
-            query=content,
-            hits=context.hits,
-            source_book_ids=context.source_book_ids,
-            source_map=context.source_map,
-            candidates=context.candidates,
-            retrieval_query=conversation.retrieval_query,
-            history_message_ids=conversation.history_message_ids,
-            history_turn_count=conversation.history_turn_count,
-            history_strategy=conversation.history_strategy,
+        retrieved = (
+            chat_store.attach_retrieval_run(
+                config,
+                result.model_run.id,
+                retrieval_run_id=research_result.final_retrieval_run_id,
+            )
+            if research_result.final_retrieval_run_id is not None
+            else result
         )
-        retrieved = chat_store.attach_retrieval_run(
-            config,
-            result.model_run.id,
-            retrieval_run_id=retrieval_run_id,
-        )
-        citations = citations_from_hits(context.hits)
-        yield event_from_result("retrieval", retrieved, citations=citations)
+        for progress_event in research_result.progress_events:
+            yield event_from_result(
+                progress_event.type,
+                retrieved,
+                citations=citations_from_hits(progress_event.hits),
+                metadata=progress_event.metadata,
+            )
 
         chat_store.transition_model_run(
             config,
@@ -176,17 +180,11 @@ def stream_queued_result(
             from_statuses=("retrieving",),
             to_status="calling_model",
         )
-        prompt_messages = prompts.build_prompt_messages(
-            question=content,
-            hits=context.hits,
-            source_map=context.source_map,
-            recent_messages=conversation.prompt_messages,
-            context_char_limit=config.chat_context_char_limit,
-        )
         provider_messages = tuple(
             provider.ProviderMessage(role=message.role, content=message.content)
-            for message in prompt_messages
+            for message in research_result.final_prompt_messages
         )
+        citations = citations_from_hits(research_result.accepted_hits)
         text_parts: list[str] = []
         provider_response_id: str | None = None
         input_tokens: int | None = None
@@ -195,6 +193,7 @@ def stream_queued_result(
         for provider_event in response_provider.stream_response(
             messages=provider_messages,
             request_id=result.model_run.id,
+            tool_choice="none",
         ):
             if provider_event.type == "delta":
                 delta = provider_event.text_delta or ""
@@ -262,6 +261,7 @@ def event_from_result(
     citations: tuple[chat_store.ChatCitation, ...] | None = None,
     text_delta: str | None = None,
     error_message: str | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> ChatStreamEvent:
     return ChatStreamEvent(
         type=event_type,
@@ -272,6 +272,7 @@ def event_from_result(
         citations=result.citations if citations is None else citations,
         text_delta=text_delta,
         error_message=error_message,
+        metadata=metadata,
     )
 
 

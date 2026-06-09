@@ -13,15 +13,106 @@ from wfrp_companion.library import source_sets
 from wfrp_companion.search.fts import rebuild_global_fts
 
 
+def plan_payload_from_messages(
+    messages: Sequence[provider.ProviderMessage],
+) -> dict[str, object]:
+    content = messages[-1].content
+    query = planning_line(content, "Resolved query hint") or "critical hit"
+    intent = planning_line(content, "Intent hint") or "rules_lookup"
+    subject = planning_line(content, "Subject hint")
+    subject = None if subject in (None, "none") else subject
+    include_terms = [] if subject is None else [subject]
+    return {
+        "intent": intent,
+        "plan_summary": f"Find accepted evidence for {query}.",
+        "subject": {
+            "canonical": subject,
+            "surface": subject,
+            "include_terms": include_terms,
+            "exclude_terms": [],
+            "book_title_hints": [],
+            "page_hints": [],
+            "notes": None,
+        },
+        "requirements": [
+            {
+                "id": "research_evidence",
+                "requirement_type": "statline_evidence"
+                if intent == "statline_lookup"
+                else "topical_evidence",
+                "subject": {
+                    "canonical": subject,
+                    "surface": subject,
+                    "include_terms": include_terms,
+                    "exclude_terms": [],
+                    "book_title_hints": [],
+                    "page_hints": [],
+                    "notes": None,
+                },
+                "required_terms": include_terms,
+                "excluded_terms": [],
+                "object_type_hints": [],
+                "min_accepted_hits": 1,
+                "required": True,
+            }
+        ],
+        "planned_actions": [
+            {
+                "tool_name": "search_library",
+                "requirement_id": "research_evidence",
+                "purpose": f"Search checked books for {query}.",
+                "arguments": {
+                    "query": query,
+                    "intent": intent,
+                    "subject": subject,
+                    "limit": 8,
+                    "include_terms": include_terms,
+                    "exclude_terms": [],
+                    "object_type_hints": [],
+                    "book_title_hints": [],
+                    "page_hints": [],
+                },
+            }
+        ],
+    }
+
+
+def planning_line(content: str, label: str) -> str | None:
+    prefix = f"{label}: "
+    for line in content.splitlines():
+        if line.startswith(prefix):
+            value = line.removeprefix(prefix).strip()
+            return value if value else None
+    return None
+
+
+def is_planning_request(kwargs: dict[str, object]) -> bool:
+    tools = kwargs.get("tools")
+    if not tools:
+        return False
+    tool_names = [tool.name for tool in tools]
+    return tool_names == ["set_research_plan"]
+
+
 class FakeProvider:
     def stream_response(
         self,
         *,
         messages: Sequence[provider.ProviderMessage],
         request_id: str,
+        **_kwargs,
     ):
         assert request_id.startswith("run-")
         assert messages[-1].role == "user"
+        if is_planning_request(_kwargs):
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="set_research_plan",
+                tool_call_id="call-plan",
+                tool_arguments_json=json.dumps(plan_payload_from_messages(messages)),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
         yield provider.ProviderStreamEvent(type="delta", text_delta="Critical ")
         yield provider.ProviderStreamEvent(type="delta", text_delta="hits.")
         yield provider.ProviderStreamEvent(
@@ -42,27 +133,64 @@ class CapturingProvider:
         *,
         messages: Sequence[provider.ProviderMessage],
         request_id: str,
+        **_kwargs,
     ):
+        if is_planning_request(_kwargs):
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="set_research_plan",
+                tool_call_id="call-plan",
+                tool_arguments_json=json.dumps(plan_payload_from_messages(messages)),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
         self.messages = tuple(messages)
         yield provider.ProviderStreamEvent(type="delta", text_delta=self.answer)
         yield provider.ProviderStreamEvent(type="completed")
 
 
 class EmptyDeltaProvider:
-    def stream_response(self, *, messages, request_id):
+    def stream_response(self, *, messages, request_id, **_kwargs):
+        if is_planning_request(_kwargs):
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="set_research_plan",
+                tool_call_id="call-plan",
+                tool_arguments_json=json.dumps(plan_payload_from_messages(messages)),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
         yield provider.ProviderStreamEvent(type="delta", text_delta="")
         yield provider.ProviderStreamEvent(type="delta", text_delta="Answer")
         yield provider.ProviderStreamEvent(type="completed")
 
 
 class ProviderUnavailableDuringStream:
-    def stream_response(self, *, messages, request_id):
+    def stream_response(self, *, messages, request_id, **_kwargs):
+        if is_planning_request(_kwargs):
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="set_research_plan",
+                tool_call_id="call-plan",
+                tool_arguments_json=json.dumps(plan_payload_from_messages(messages)),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
         raise provider.ProviderUnavailableError("provider dropped")
         yield provider.ProviderStreamEvent(type="completed")
 
 
 class BrokenProvider:
-    def stream_response(self, *, messages, request_id):
+    def stream_response(self, *, messages, request_id, **_kwargs):
+        if is_planning_request(_kwargs):
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="set_research_plan",
+                tool_call_id="call-plan",
+                tool_arguments_json=json.dumps(plan_payload_from_messages(messages)),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
         raise RuntimeError("provider exploded")
         yield provider.ProviderStreamEvent(type="completed")
 
@@ -197,7 +325,12 @@ def test_stream_chat_message_persists_completed_run_and_streams_deltas(
 
     assert [event.type for event in events] == [
         "accepted",
+        "research_started",
+        "research_plan",
+        "tool_call",
         "retrieval",
+        "tool_result",
+        "evidence_validation",
         "delta",
         "delta",
         "completed",
@@ -229,7 +362,7 @@ def test_stream_chat_message_persists_completed_run_and_streams_deltas(
     assert model_run["input_tokens"] == 10
     assert model_run["output_tokens"] == 2
     assert assistant_message_count == 1
-    assert retrieval_hit_count == 1
+    assert retrieval_hit_count == 2
 
     duplicate_events = tuple(
         chat_service.stream_chat_message(
@@ -369,18 +502,23 @@ def test_stream_chat_message_uses_history_aware_query_for_followup_retrieval(
     assert retrieval_events
     assert retrieval_events[0].citations[0].title == "Core Rules"
     with open_connection(config.db_path) as connection:
-        row = connection.execute(
+        rows = connection.execute(
             """
             select query, metadata_json
             from retrieval_runs
             where message_id = ?
             """,
             (second_events[-1].user_message.id,),
-        ).fetchone()
+        ).fetchall()
+    row = next(
+        row
+        for row in rows
+        if json.loads(row["metadata_json"]).get("tool_name") == "search_library"
+    )
     metadata = json.loads(row["metadata_json"])
-    assert row["query"] == "What about it?"
-    assert metadata["retrieval_query"] != "What about it?"
-    assert "critical hits" in metadata["retrieval_query"].lower()
+    assert row["query"] != "What about it?"
+    assert "critical hits" in row["query"].lower()
+    assert metadata["retrieval_query"] == row["query"]
     assert metadata["history_strategy"] == "followup_contextualized"
     assert metadata["history_turn_count"] == 1
     assert metadata["history_message_ids"] == [
@@ -429,10 +567,16 @@ def test_stream_close_after_retrieval_marks_active_run_failed(
     )
 
     accepted_event = next(events)
+    research_event = next(events)
+    plan_event = next(events)
+    tool_event = next(events)
     retrieval_event = next(events)
     events.close()
 
     assert accepted_event.type == "accepted"
+    assert research_event.type == "research_started"
+    assert plan_event.type == "research_plan"
+    assert tool_event.type == "tool_call"
     assert retrieval_event.type == "retrieval"
     with open_connection(config.db_path) as connection:
         row = connection.execute(
@@ -503,7 +647,12 @@ def test_stream_chat_message_ignores_empty_deltas(tmp_path: Path) -> None:
 
     assert [event.type for event in events] == [
         "accepted",
+        "research_started",
+        "research_plan",
+        "tool_call",
         "retrieval",
+        "tool_result",
+        "evidence_validation",
         "delta",
         "completed",
     ]
@@ -528,7 +677,9 @@ def test_stream_chat_message_marks_provider_unavailable_during_stream(
         )
     )
 
-    assert [event.type for event in events] == ["accepted", "retrieval", "failed"]
+    assert events[0].type == "accepted"
+    assert "retrieval" in [event.type for event in events]
+    assert events[-1].type == "failed"
     assert events[-1].model_run.status == "failed"
     assert events[-1].model_run.error_code == "provider_unavailable"
     assert events[-1].error_message == "provider dropped"
@@ -549,7 +700,9 @@ def test_stream_chat_message_marks_generic_provider_failure(tmp_path: Path) -> N
         )
     )
 
-    assert [event.type for event in events] == ["accepted", "retrieval", "failed"]
+    assert events[0].type == "accepted"
+    assert "retrieval" in [event.type for event in events]
+    assert events[-1].type == "failed"
     assert events[-1].model_run.status == "failed"
     assert events[-1].model_run.error_code == "provider_error"
     assert events[-1].error_message == "provider exploded"

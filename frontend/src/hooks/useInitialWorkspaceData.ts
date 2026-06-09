@@ -4,12 +4,14 @@ import { apiClient, type ApiClient } from "../lib/apiClient";
 import { errorMessage } from "../lib/apiError";
 import type {
   BookSummaryResponse,
+  RetrievalStatusResponse,
   SourceSetBookResponse,
   SourceSetsResponse,
 } from "../types/api";
 
 export type InitialWorkspaceData = {
   books: BookSummaryResponse[];
+  retrievalStatus: RetrievalStatusResponse;
   sourceSets: SourceSetsResponse["source_sets"];
   activeSourceSetId: string | null;
   sourceSetBooks: SourceSetBookResponse[];
@@ -37,8 +39,9 @@ export function useInitialWorkspaceData(
       setState({ data: null, error: null, loading: true });
       try {
         await client.getHealth({ signal: controller.signal });
-        const [booksResponse, sourceSetsResponse] = await Promise.all([
+        const [booksResponse, retrievalStatus, sourceSetsResponse] = await Promise.all([
           client.listBooks({ signal: controller.signal }),
+          client.getRetrievalStatus({ signal: controller.signal }),
           client.listSourceSets({ signal: controller.signal }),
         ]);
         const activeSourceSetId = sourceSetsResponse.active_source_set_id;
@@ -52,6 +55,7 @@ export function useInitialWorkspaceData(
         setState({
           data: {
             books: booksResponse.books,
+            retrievalStatus,
             sourceSets: sourceSetsResponse.source_sets,
             activeSourceSetId,
             sourceSetBooks,

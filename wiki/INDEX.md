@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-08 sparse retrieval query normalization
+Last compiled: 2026-06-09 Familiar tool-calling hybrid RAG
 
 ## Topics
 

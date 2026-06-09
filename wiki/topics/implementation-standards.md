@@ -74,6 +74,26 @@ The current codebase has working local implementations for steps 1 through 6:
 - Keep copyrighted content out of committed fixtures.
 - Keep generated/cached local data out of Git.
 
+## Subagent Review Tooling
+
+[coverage: high]
+
+The `multi_agent_v1` subagent service has shown a platform lifecycle failure in
+this project: completed or interrupted agents can continue counting against the
+thread limit, while `close_agent` can hang indefinitely. Treat this as an
+external service blocker, not as repo work.
+
+- Do not call `multi_agent_v1.close_agent` in this repo until the platform
+  lifecycle issue is fixed.
+- Never call `close_agent` in parallel.
+- Use `wait_agent` only with explicit bounded timeouts.
+- If `spawn_agent` returns `agent thread limit reached`, stop trying to spawn
+  or clean up subagents. Report the blocker with the stale agent IDs/statuses
+  found through bounded diagnostics.
+- Do not downgrade the review requirement silently. If independent review is
+  still required, ask for or use an explicitly approved alternate review path
+  such as a normal Codex background thread or external PR review.
+
 ## AI-Specific Rules
 
 [coverage: high]

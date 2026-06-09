@@ -14,6 +14,91 @@ WFRP rules lookup needs hybrid retrieval:
 
 Vector search alone is not enough for rules-heavy material.
 
+Current Familiar implementation:
+
+- Familiar is a bounded tool-calling research agent, not a single retrieval
+  call chained directly to one model answer.
+- Each run resolves the user's request, preserves active follow-up context
+  such as the current subject, records a `familiar_research_runs` row, and
+  must accept a provider-submitted public research plan before any retrieval
+  tool runs.
+- Accepted plans are stored in `familiar_research_plans`; tool calls and
+  evidence judgments carry `research_plan_id` and `requirement_id` so the app
+  can audit which requirement each retrieval attempt served.
+- Familiar requirement ids are provider-facing plan contract fields, not
+  database-internal names. The parser and tool schemas share one published
+  pattern and explicitly accept short provider ids such as `r1`, while still
+  rejecting unsafe shapes such as hyphenated ids.
+- Chat requests may include `reader_context` from the active Grimoire tab:
+  active book id, active PDF page number, optional printed page label, and open
+  book ids. Familiar treats this only as a routing hint for page-aware
+  recovery; it is not evidence and cannot satisfy citations by itself.
+- `search_library` is the default tool. It uses hybrid retrieval over the
+  thread's checked source-book snapshot: page FTS, source-object FTS,
+  source-object fallback scan, current local vector candidates when embeddings
+  are enabled, structured table/stat/source-object signals, RRF fusion, and
+  deterministic reranking.
+- `open_page` is used when the request contains page evidence such as
+  "it is on pg 99"; it resolves the checked book plus PDF/printed-page label
+  directly instead of trying another broad text search.
+- `lookup_source_object` can recover a complete structured evidence object
+  from a selected source-object id while still enforcing the checked-book
+  source scope.
+- Evidence validation runs after every tool call. Only accepted evidence can
+  feed the final answer prompt and final citation run; partial or rejected
+  evidence remains in the research trace for debugging.
+- **A Familiar run is not sufficient until every required plan requirement has
+  met its own `min_accepted_hits`.** Accepted evidence is tracked per
+  requirement, so one successful retrieval cannot prematurely satisfy a
+  multi-requirement plan.
+- Accepted evidence is deduplicated by the same key that `retrieval_hits`
+  enforces for a single run: source-object id when present, otherwise page id.
+  Repeated provider lookups can waste tool rounds, but they must not inflate a
+  requirement ledger or crash final accepted-evidence persistence with duplicate
+  hit rows.
+- Weak or empty evidence can trigger bounded provider-directed tool actions.
+  The backend validates tool names, requirement ids, argument/requirement
+  equality, scope, evidence status, and max tool rounds before any local side
+  effect. A `finish_research` action can stop without running another
+  retrieval, but `requirements_satisfied` is accepted only when the backend's
+  per-requirement ledger is satisfied. The final answer still uses only
+  accepted evidence or an honest insufficiency.
+- Recovery planning is stateless with respect to OpenAI response storage:
+  provider calls do not rely on `previous_response_id` or hosted tool-result
+  chaining. Prior local tool outputs are summarized in the next research prompt
+  instead, and the prompt includes the accepted public plan plus requirement
+  ids/status/counts and bounded requirement constraints such as subject terms,
+  required/excluded terms, object hints, and page/book hints so recovery
+  actions stay anchored to the plan while preserving local-first/private
+  behavior and avoiding stale provider response ids.
+- Requirement-aware validation now checks plan constraints rather than only a
+  literal normalized subject. This lets Familiar reject excluded evidence such
+  as Rat Ogre hits for regular Ogre requirements while accepting broad cited
+  recommendation evidence when the plan does not require a fake subject phrase.
+- Active stat follow-ups such as "give me the stats",
+  "give me their stats", and common typo forms such as "give me there stats"
+  resolve to the current thread subject before retrieval.
+- Retrieval diagnostics record which channels ran, vector status/failures,
+  selected candidates, reranker outcomes, page lookup attempts, table/stat
+  lookups, skip reasons, and accepted/rejected evidence judgments. Vector
+  status distinguishes `ran`, `ran_no_candidates`, `disabled`,
+  `missing_embeddings`, `stale_embeddings`, and provider failures.
+- The UI can surface aggregate retrieval readiness through
+  `/api/retrieval/status`: copied books, enabled books, page-text indexed
+  books, source-object indexed books, table/stat indexed books, current
+  vectorized books, vectorized enabled books, provider, dimensions, and
+  aggregate vector status.
+- Familiar chat turns surface a compact expandable public research trace from
+  stream events and persisted chat history: research start, accepted plan,
+  tool call, retrieval/candidate counts, vector status when reported,
+  evidence validation status, finalizing decisions, and failures. **Public trace
+  metadata is intentionally enum/count/id/status based** before it reaches the
+  API/UI; resolved queries, plan summaries, tool purposes, raw provider tool
+  arguments, local paths, PDF filenames, and copied source text are not exposed
+  through progress metadata.
+
+Historical phase notes below describe how the current system was assembled.
+
 Phase 6 added deterministic local exact search first:
 
 - New chat threads snapshot enabled books into `chat_thread_source_books`.
@@ -25,8 +110,9 @@ Phase 6 added deterministic local exact search first:
   and optional `page_label` for printed-page context. Frontend code must not
   infer a PDF jump target from citation display text.
 
-Vector retrieval remains future work and should layer onto this explicit
-source-set and citation contract rather than replacing it.
+That Phase 6 vector boundary has been superseded. Current vector retrieval
+layers onto the same explicit source-set and citation contract rather than
+replacing it.
 
 Phase 7 PR1 adds the typed source-object storage foundation that later
 retrieval phases will use:
@@ -49,9 +135,9 @@ retrieval phases will use:
   reasons, text snapshot hash, and metadata. Legacy page hits migrate as
   `page_fallback` rows.
 
-Important current boundary: Phase 7 PR1 does **not** yet extract source objects
-or change Familiar ranking. Until a later extractor/reranker phase lands,
-Familiar still uses the Phase 6 page-level exact-search retrieval path.
+Historical boundary: Phase 7 PR1 did **not** yet extract source objects or
+change Familiar ranking. Later phases and the current Familiar agent now use
+source objects, rank fusion, vector candidates, and evidence validation.
 
 Phase 7 PR2 adds deterministic source-object extraction:
 
@@ -66,10 +152,10 @@ Phase 7 PR2 adds deterministic source-object extraction:
 Phase 7 PR3 integrates the first source-map-aware hybrid retrieval slice into
 Familiar:
 
-- New Familiar model runs resolve checked books from the thread's active source
-  set at message time, so Library checkbox changes affect the next answer.
-  `chat_thread_source_books` remains a historical thread-creation snapshot, but
-  it is no longer the authoritative source for new retrieval runs.
+- New Familiar model runs use the thread's checked-book snapshot in
+  `chat_thread_source_books` as the authoritative source scope for research
+  tools. `retrieval_run_source_books` then snapshots the exact books considered
+  by each tool call or final accepted-evidence run.
 - `retrieval_runs.metadata_json` stores the per-run checked-book snapshot,
   compact enabled-book source map, and candidate strings used for the run.
 - `wfrp_companion/source_objects/store.py` now fills
@@ -328,10 +414,10 @@ Phase 7 PR11 adds Familiar prompt history and history-aware retrieval planning:
   answers into retrieval planning; failure-style answers that say retrieved
   evidence was missing are skipped as retrieval-query context so wrong-source
   detours do not snowball.
-- Familiar still resolves enabled books from the thread's active source set at
-  run time. Source maps, candidate generation, reranking, prompt context,
-  retrieval metadata, and citations remain constrained to that checked-book
-  snapshot.
+- Familiar still resolves enabled books from the thread's
+  `chat_thread_source_books` snapshot at run time. Source maps, candidate
+  generation, reranking, prompt context, retrieval metadata, and citations
+  remain constrained to that checked-book snapshot.
 - The chat read model now collapses retries into one visible logical turn:
   completed retries win, active retries are visible over failed attempts, and
   otherwise the newest failed run is shown.
@@ -457,6 +543,17 @@ only for conversational references and user intent; it is not retrieved
 rules/evidence. Current retrieved context remains the only basis for cited WFRP
 claims.
 
+The current Familiar agent has two prompt surfaces:
+
+- A research prompt that exposes only bounded tools:
+  `search_library`, `open_page`, and `lookup_source_object`. It instructs the
+  model to use tools only for retrieval correction and to keep factual claims
+  out of tool planning.
+- A final answer prompt that receives accepted evidence only. It instructs
+  Familiar to cite book/page references for factual WFRP claims, say when
+  evidence is insufficient, distinguish rules from GM interpretation, and avoid
+  long copyrighted excerpts.
+
 ## Streaming Provider Loop
 
 [coverage: high]
@@ -466,7 +563,15 @@ Familiar streams output through the backend-owned endpoint
 `fetch()` with a request body and reads newline-delimited JSON events:
 
 - `accepted` after the user message and `model_runs` row are persisted.
-- `retrieval` after local retrieval metadata is written.
+- `research_started` after the Familiar research run is created and the
+  request has a resolved intent/query.
+- `tool_call` before each backend research tool is executed.
+- `retrieval` after a tool retrieval run or final accepted-evidence retrieval
+  run is written.
+- `tool_result` after each backend research tool returns count-only result
+  metadata.
+- `evidence_validation` after retrieved hits are judged accepted, partial, or
+  rejected for the current request.
 - `delta` for each streamed assistant text chunk.
 - `completed` after one assistant `chat_messages` row is persisted and linked.
 - `failed` when the provider is unavailable or returns an error.

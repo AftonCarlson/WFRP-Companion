@@ -10,6 +10,7 @@ import {
 } from "../../lib/grouping";
 import type {
   BookSummaryResponse,
+  RetrievalStatusResponse,
   SourceSetBookResponse,
 } from "../../types/api";
 import { BookCategorySection } from "./BookCategorySection";
@@ -40,6 +41,7 @@ export type LibraryTabProps = {
   onOpenBook: (book: LibraryBookRow) => void;
   onSourceSetBookUpdated: (book: SourceSetBookResponse) => void;
   onToggleCategory: (category: string) => void;
+  retrievalStatus?: RetrievalStatusResponse | null;
   sourceSetBooks: SourceSetBookResponse[];
 };
 
@@ -51,6 +53,7 @@ export function LibraryTab({
   onOpenBook,
   onSourceSetBookUpdated,
   onToggleCategory,
+  retrievalStatus = null,
   sourceSetBooks,
 }: LibraryTabProps) {
   const [filter, setFilter] = useState("");
@@ -69,7 +72,13 @@ export function LibraryTab({
         book.category.toLowerCase().includes(needle),
     );
   }, [books, filter, sourceSetBooks]);
-  const semanticStatus = useMemo(() => semanticSearchStatus(books), [books]);
+  const semanticStatus = useMemo(
+    () =>
+      retrievalStatus
+        ? aggregateRetrievalStatus(retrievalStatus)
+        : semanticSearchStatus(books),
+    [books, retrievalStatus],
+  );
 
   async function handleToggle(book: LibraryBookRow, enabled: boolean) {
     if (activeSourceSetId === null) {
@@ -154,4 +163,15 @@ function semanticSearchStatus(books: BookSummaryResponse[]) {
     return `${count} ${VECTOR_STATUS_LABELS[status] ?? status.replace(/_/g, " ")}`;
   });
   return `Semantic search: ${parts.length ? parts.join(", ") : "0 indexed"}`;
+}
+
+function aggregateRetrievalStatus(status: RetrievalStatusResponse) {
+  return (
+    `Retrieval: ${status.books_enabled} enabled, ` +
+    `${status.page_text_indexed} page text indexed, ` +
+    `${status.source_objects_indexed} source-object indexed, ` +
+    `${status.table_or_stat_indexed} table/stat indexed, ` +
+    `${status.vectorized_enabled} vectorized enabled, ` +
+    `vector ${status.vector_status}`
+  );
 }

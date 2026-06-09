@@ -412,7 +412,7 @@ Current local config variables:
 - `WFRP_DB_PATH`
 - `WFRP_ASSET_DIR`
 - `OPENAI_API_KEY`
-- `WFRP_OPENAI_MODEL` defaults to `gpt-5.4-mini`
+- `WFRP_OPENAI_MODEL` defaults to `gpt-5.5`
 - `WFRP_OPENAI_TIMEOUT_SECONDS` defaults to `60`
 - `WFRP_CHAT_CONTEXT_HIT_LIMIT` defaults to `6`
 - `WFRP_CHAT_CONTEXT_CHAR_LIMIT` defaults to `9000`

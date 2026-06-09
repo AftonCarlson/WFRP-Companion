@@ -1,5 +1,78 @@
 # Wiki Compile Log
 
+## 2026-06-09 Familiar Reasoning-Led Research Agent Phase
+
+- Implemented provider-first Familiar research planning: no local retrieval
+  tool runs until the provider returns one accepted strict public plan.
+- Added durable `familiar_research_plans` storage plus plan/requirement links
+  on tool calls and evidence judgments. Public trace reload now synthesizes
+  research start, accepted plan, tool actions, evidence status, finalizing, and
+  failures from persisted research rows.
+- Replaced recovery-only behavior with a bounded provider-directed action loop.
+  Every later tool action must name a known plan requirement, and
+  `finish_research` can stop without another retrieval while preserving the
+  accepted-evidence-only final answer contract. Review hardening now rejects
+  multiple recovery tool calls, includes the accepted public plan/requirement
+  ledger plus bounded requirement constraints in recovery prompts, and prevents
+  `requirements_satisfied` from stopping a run when required plan requirements
+  remain unsatisfied.
+- Added requirement-aware evidence validation for included/excluded subject
+  terms, statline evidence, broad topical/recommendation evidence, and
+  requirement-linked judgment persistence. Required requirements are satisfied
+  per requirement id and `min_accepted_hits`, not by aggregate evidence alone.
+- Hardened hybrid diagnostics so vector status distinguishes `ran`,
+  `ran_no_candidates`, `disabled`, `missing_embeddings`, `stale_embeddings`,
+  and provider errors.
+- Updated Familiar final prompts to include the public plan, requirement
+  status, answer policy, accepted evidence, and insufficiency guidance without
+  exposing hidden reasoning.
+- Updated the Familiar UI/API surface so live streams and reloaded chat
+  history show compact public research traces. Public metadata is now
+  enum/count/id/status based before API/UI exposure, so resolved queries, plan
+  summaries, tool purposes, local paths, PDF filenames, unknown raw tool
+  arguments, and copied source text are not surfaced in trace metadata.
+- Verification completed: `ruff check .`; backend 100% coverage gate with
+  632 tests at 100.00%; frontend Vitest coverage above configured thresholds;
+  frontend production build; Playwright e2e with 2 passing tests. Retrieval
+  status curl against `127.0.0.1:8000` did not return JSON because no local API
+  server was listening during verification.
+
+## 2026-06-09 Familiar Tool-Calling Hybrid RAG
+
+- Repaired a live Familiar follow-up failure where `give me there stats`
+  could lose the active subject and, on weak evidence, surface a provider
+  `previous_response_id` recovery error as generic research failure. Active
+  stat follow-ups such as `give me the/their/there stats` now resolve to the
+  current subject, and recovery planning stays stateless against OpenAI while
+  carrying prior local tool outputs in the prompt. Verification for this repair:
+  targeted regressions passed, assistant tests reported 161 passing, `ruff
+  check .` passed, and the full backend coverage gate reported 563 passing with
+  100.00% coverage.
+- Overhauled Familiar from a one-shot retrieval answer path into a bounded
+  tool-calling research agent. Runs now record research state, tool calls,
+  retrieval attempts, diagnostics, evidence judgments, and accepted-evidence
+  final citation runs.
+- Familiar uses hybrid retrieval by default through backend tools: page FTS,
+  source-object FTS, source-object fallback scan, current local vector
+  candidates when embeddings are enabled, structured table/stat/source-object
+  evidence, direct page lookup, direct source-object lookup, RRF fusion,
+  deterministic reranking, and evidence validation.
+- Added page-aware recovery for explicit page references, follow-up subject
+  resolution through thread context, bounded retry/correction behavior when
+  evidence is weak, and a final prompt contract that receives accepted
+  evidence only.
+- Added retrieval readiness visibility through `/api/retrieval/status` and
+  `tools/rebuild_retrieval_assets.py`, keeping output count-only and avoiding
+  raw book text, local model paths, or private PDF paths.
+- Updated the wiki to reflect the current implementation and added a local
+  process rule: do not use `multi_agent_v1.close_agent` while the agent
+  lifecycle service is leaking completed threads. Fresh independent subagent
+  review for this phase was blocked by that platform issue, so recovered prior
+  reviewer findings were audited directly against the code with focused tests.
+- Verification target for this phase: `ruff check .`, the full backend 100%
+  coverage command including `tools.rebuild_retrieval_assets`, frontend
+  Vitest, frontend coverage, frontend production build, and Playwright e2e.
+
 ## 2026-06-08 Stat-Line Retrieval Follow-Up
 
 - Debugged the live `harpies stat line` failure. The previous sparse

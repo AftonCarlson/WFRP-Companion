@@ -35,6 +35,19 @@ class BooksResponse(BaseModel):
     books: list[BookSummaryResponse]
 
 
+class RetrievalStatusResponse(BaseModel):
+    books_total: int
+    books_enabled: int
+    page_text_indexed: int
+    source_objects_indexed: int
+    table_or_stat_indexed: int
+    vectorized_current: int
+    vectorized_enabled: int
+    embedding_provider: str
+    embedding_dimensions: int | None
+    vector_status: str
+
+
 class PageReferenceResponse(BaseModel):
     page_id: str
     book_id: str
@@ -159,9 +172,23 @@ class ChatCitationResponse(BaseModel):
     page_range_label: str | None = None
 
 
+class ChatResearchEventResponse(BaseModel):
+    type: str
+    label: str
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ReaderContextRequest(BaseModel):
+    active_book_id: str | None = None
+    active_pdf_page_number: int | None = Field(default=None, ge=1)
+    active_printed_page_label: str | None = None
+    open_book_ids: list[str] = Field(default_factory=list)
+
+
 class SendChatMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
     idempotency_key: str | None = None
+    reader_context: ReaderContextRequest | None = None
 
 
 class RetryModelRunRequest(BaseModel):
@@ -199,6 +226,7 @@ class ChatTurnResponse(BaseModel):
     assistant_message: ChatMessageResponse | None
     model_run: ModelRunResponse
     citations: list[ChatCitationResponse]
+    research_events: list[ChatResearchEventResponse] = Field(default_factory=list)
 
 
 class ChatThreadDetailResponse(BaseModel):

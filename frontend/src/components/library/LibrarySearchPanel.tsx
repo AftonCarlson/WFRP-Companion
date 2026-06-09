@@ -2,6 +2,7 @@ import type { ApiClient } from "../../lib/apiClient";
 import type { LibraryBookRow } from "../../lib/grouping";
 import type {
   BookSummaryResponse,
+  RetrievalStatusResponse,
   SearchHitResponse,
   SourceSetBookResponse,
 } from "../../types/api";
@@ -25,6 +26,7 @@ export type LibrarySearchPanelProps = {
   onSetLeftTab: (leftTab: LeftTab) => void;
   onSourceSetBookUpdated: (book: SourceSetBookResponse) => void;
   onToggleCategory: (category: string) => void;
+  retrievalStatus: RetrievalStatusResponse | null;
   sourceSetBooks: SourceSetBookResponse[];
 };
 
@@ -38,6 +40,7 @@ export function LibrarySearchPanel({
   onSetLeftTab,
   onSourceSetBookUpdated,
   onToggleCategory,
+  retrievalStatus,
   sourceSetBooks,
 }: LibrarySearchPanelProps) {
   function handleOpenBook(book: LibraryBookRow) {
@@ -97,6 +100,7 @@ export function LibrarySearchPanel({
             onOpenBook={handleOpenBook}
             onSourceSetBookUpdated={onSourceSetBookUpdated}
             onToggleCategory={onToggleCategory}
+            retrievalStatus={retrievalStatus}
             sourceSetBooks={sourceSetBooks}
           />
         </div>

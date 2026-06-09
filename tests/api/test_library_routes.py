@@ -171,6 +171,96 @@ def test_books_detail_and_page_routes_return_reader_metadata(tmp_path: Path) -> 
     assert "private page text" not in page_response.text
 
 
+def test_retrieval_status_route_returns_aggregate_readiness_without_paths(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_book(config)
+    with initialize_database(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into book_object_status (
+              book_id,
+              status,
+              object_count,
+              table_count,
+              stat_block_count,
+              location_count,
+              updated_at
+            )
+            values ('core-rules', 'indexed', 2, 1, 1, 0,
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into source_objects (
+              id,
+              book_id,
+              page_id,
+              object_type,
+              parent_object_id,
+              title,
+              heading_path_json,
+              page_start,
+              page_end,
+              char_start,
+              char_end,
+              bbox_json,
+              text,
+              search_text,
+              metadata_json,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            )
+            values ('core-rules:stat', 'core-rules', 'core-rules:1',
+                    'stat_block', null, 'Synthetic Stat', '[]', 1, 1,
+                    null, null, null, 'Synthetic stat block',
+                    'Synthetic stat block', '{}', 0.95, 'synthetic',
+                    'stat-sha', '2026-06-09T00:00:00Z',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              vector_status,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              last_error,
+              updated_at
+            )
+            values ('core-rules', 'disabled', 'disabled',
+                    '/local/model/path', null, '/private/error',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+    client = TestClient(create_app(config))
+
+    response = client.get("/api/retrieval/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "books_total": 1,
+        "books_enabled": 1,
+        "page_text_indexed": 1,
+        "source_objects_indexed": 1,
+        "table_or_stat_indexed": 1,
+        "vectorized_current": 0,
+        "vectorized_enabled": 0,
+        "embedding_provider": "disabled",
+        "embedding_dimensions": None,
+        "vector_status": "disabled",
+    }
+    assert "/local/model/path" not in response.text
+    assert "/private/error" not in response.text
+
+
 def test_page_text_route_returns_explicit_page_text(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_book(config)

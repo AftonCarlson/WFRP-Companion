@@ -12,12 +12,29 @@ class ProviderMessage:
 
 
 @dataclass(frozen=True)
+class ProviderToolDefinition:
+    name: str
+    description: str
+    parameters: dict[str, object]
+    strict: bool = True
+
+
+@dataclass(frozen=True)
+class ProviderToolResult:
+    tool_call_id: str
+    output_json: str
+
+
+@dataclass(frozen=True)
 class ProviderStreamEvent:
     type: str
     text_delta: str | None = None
     provider_response_id: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    tool_name: str | None = None
+    tool_call_id: str | None = None
+    tool_arguments_json: str | None = None
 
 
 class ProviderError(Exception):
@@ -58,21 +75,61 @@ class OpenAIProvider:
         *,
         messages: Sequence[ProviderMessage],
         request_id: str,
+        tools: Sequence[ProviderToolDefinition] = (),
+        tool_results: Sequence[ProviderToolResult] = (),
+        previous_response_id: str | None = None,
+        tool_choice: object | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> Iterable[ProviderStreamEvent]:
+        create_kwargs: dict[str, object] = {
+            "model": self.model,
+            "input": response_input(messages, tool_results),
+            "stream": True,
+            "store": False,
+            "extra_headers": {"X-Client-Request-Id": request_id},
+        }
+        if tools:
+            create_kwargs["tools"] = [tool_definition_payload(tool) for tool in tools]
+        if previous_response_id is not None:
+            create_kwargs["previous_response_id"] = previous_response_id
+        if tool_choice is not None:
+            create_kwargs["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            create_kwargs["parallel_tool_calls"] = parallel_tool_calls
+
         stream = self.client.responses.create(
-            model=self.model,
-            input=[
-                {"role": message.role, "content": message.content}
-                for message in messages
-            ],
-            stream=True,
-            store=False,
-            extra_headers={"X-Client-Request-Id": request_id},
+            **create_kwargs,
         )
+        seen_tool_call_ids: set[str] = set()
         for event in stream:
             event_type = getattr(event, "type", "")
             if event_type == "response.output_text.delta":
                 yield ProviderStreamEvent(type="delta", text_delta=getattr(event, "delta", ""))
+            elif event_type == "response.function_call_arguments.done":
+                tool_call_id = getattr(event, "call_id", None)
+                if isinstance(tool_call_id, str) and tool_call_id not in seen_tool_call_ids:
+                    seen_tool_call_ids.add(tool_call_id)
+                    yield ProviderStreamEvent(
+                        type="tool_call",
+                        tool_name=getattr(event, "name", None),
+                        tool_call_id=tool_call_id,
+                        tool_arguments_json=getattr(event, "arguments", None),
+                    )
+            elif event_type == "response.output_item.done":
+                item = getattr(event, "item", None)
+                if getattr(item, "type", None) == "function_call":
+                    tool_call_id = getattr(item, "call_id", None)
+                    if (
+                        isinstance(tool_call_id, str)
+                        and tool_call_id not in seen_tool_call_ids
+                    ):
+                        seen_tool_call_ids.add(tool_call_id)
+                        yield ProviderStreamEvent(
+                            type="tool_call",
+                            tool_name=getattr(item, "name", None),
+                            tool_call_id=tool_call_id,
+                            tool_arguments_json=getattr(item, "arguments", None),
+                        )
             elif event_type == "response.completed":
                 response = getattr(event, "response", None)
                 usage = getattr(response, "usage", None)
@@ -88,6 +145,35 @@ def default_openai_client(**kwargs: object) -> ProviderClient:
     from openai import OpenAI
 
     return OpenAI(**kwargs)
+
+
+def response_input(
+    messages: Sequence[ProviderMessage],
+    tool_results: Sequence[ProviderToolResult],
+) -> list[dict[str, object]]:
+    if tool_results:
+        return [
+            {
+                "type": "function_call_output",
+                "call_id": result.tool_call_id,
+                "output": result.output_json,
+            }
+            for result in tool_results
+        ]
+    return [
+        {"role": message.role, "content": message.content}
+        for message in messages
+    ]
+
+
+def tool_definition_payload(tool: ProviderToolDefinition) -> dict[str, object]:
+    return {
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+        "strict": tool.strict,
+    }
 
 
 def usage_value(usage: object, key: str) -> int | None:

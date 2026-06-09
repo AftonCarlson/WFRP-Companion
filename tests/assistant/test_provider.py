@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -86,6 +87,140 @@ def test_openai_provider_streams_text_deltas_and_metadata() -> None:
     assert fake_client.responses.kwargs["extra_headers"] == {
         "X-Client-Request-Id": "run-1"
     }
+
+
+def test_openai_provider_sends_tools_tool_results_and_previous_response_id() -> None:
+    fake_client = FakeOpenAIClient()
+    openai_provider = provider.OpenAIProvider(
+        api_key="test-key",
+        model="gpt-5.4-mini",
+        client_factory=lambda **kwargs: fake_client,
+    )
+
+    events = tuple(
+        openai_provider.stream_response(
+            messages=(provider.ProviderMessage(role="user", content="Research"),),
+            request_id="run-2",
+            tools=(
+                provider.ProviderToolDefinition(
+                    name="search_library",
+                    description="Search enabled source books.",
+                    parameters={
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                        "additionalProperties": False,
+                    },
+                ),
+            ),
+            tool_results=(
+                provider.ProviderToolResult(
+                    tool_call_id="call-1",
+                    output_json='{"status":"ok"}',
+                ),
+            ),
+            previous_response_id="resp-prev",
+            tool_choice="none",
+            parallel_tool_calls=False,
+        )
+    )
+
+    assert events[-1].type == "completed"
+    assert fake_client.responses.kwargs is not None
+    assert fake_client.responses.kwargs["previous_response_id"] == "resp-prev"
+    assert fake_client.responses.kwargs["tool_choice"] == "none"
+    assert fake_client.responses.kwargs["parallel_tool_calls"] is False
+    assert fake_client.responses.kwargs["input"] == [
+        {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": '{"status":"ok"}',
+        }
+    ]
+    assert fake_client.responses.kwargs["tools"] == [
+        {
+            "type": "function",
+            "name": "search_library",
+            "description": "Search enabled source books.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+    ]
+
+
+def test_openai_provider_streams_function_call_events() -> None:
+    function_item = SimpleNamespace(
+        type="function_call",
+        name="open_page",
+        call_id="call-open",
+        arguments='{"printed_page_label":"99"}',
+    )
+    fake_client = FakeOpenAIClient()
+    fake_client.responses.create = lambda **kwargs: [
+        SimpleNamespace(type="response.output_item.done", item=function_item),
+        FakeCompletedEvent("response.completed", FakeResponse()),
+    ]
+    openai_provider = provider.OpenAIProvider(
+        api_key="test-key",
+        model="gpt-5.4-mini",
+        client_factory=lambda **kwargs: fake_client,
+    )
+
+    events = tuple(
+        openai_provider.stream_response(
+            messages=(provider.ProviderMessage(role="user", content="Research"),),
+            request_id="run-3",
+        )
+    )
+
+    assert events[0] == provider.ProviderStreamEvent(
+        type="tool_call",
+        tool_name="open_page",
+        tool_call_id="call-open",
+        tool_arguments_json='{"printed_page_label":"99"}',
+    )
+    assert events[-1].type == "completed"
+
+
+def test_openai_provider_streams_function_argument_done_events_once() -> None:
+    function_item = SimpleNamespace(
+        type="function_call",
+        name="open_page",
+        call_id="call-open",
+        arguments='{"printed_page_label":"99"}',
+    )
+    fake_client = FakeOpenAIClient()
+    fake_client.responses.create = lambda **kwargs: [
+        SimpleNamespace(
+            type="response.function_call_arguments.done",
+            name="open_page",
+            call_id="call-open",
+            arguments='{"printed_page_label":"99"}',
+        ),
+        SimpleNamespace(type="response.output_item.done", item=function_item),
+        FakeCompletedEvent("response.completed", FakeResponse()),
+    ]
+    openai_provider = provider.OpenAIProvider(
+        api_key="test-key",
+        model="gpt-5.4-mini",
+        client_factory=lambda **kwargs: fake_client,
+    )
+
+    events = tuple(
+        openai_provider.stream_response(
+            messages=(provider.ProviderMessage(role="user", content="Research"),),
+            request_id="run-4",
+        )
+    )
+
+    assert [event.type for event in events] == ["tool_call", "completed"]
+    assert events[0].tool_name == "open_page"
+    assert events[0].tool_call_id == "call-open"
 
 
 def test_openai_provider_configures_client_retry_and_timeout() -> None:

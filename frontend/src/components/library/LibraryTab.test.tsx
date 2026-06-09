@@ -77,6 +77,7 @@ function client(overrides: Partial<ApiClient> = {}) {
     }),
     getHealth: vi.fn(),
     listBooks: vi.fn(),
+    getRetrievalStatus: vi.fn(),
     listSourceSets: vi.fn(),
     listSourceSetBooks: vi.fn(),
     searchExact: vi.fn(),
@@ -265,6 +266,37 @@ it("renders a compact semantic search status summary", () => {
     screen.getByLabelText("Semantic search status"),
   ).toHaveTextContent(
     "Semantic search: 1 indexed, 1 needs rebuild, 1 not indexed, 1 failed",
+  );
+});
+
+it("renders aggregate retrieval status when provided", () => {
+  renderApp(
+    <LibraryTab
+      activeSourceSetId="rules-core"
+      books={[book]}
+      client={client()}
+      collapsedCategories={[]}
+      onOpenBook={vi.fn()}
+      onSourceSetBookUpdated={vi.fn()}
+      onToggleCategory={vi.fn()}
+      retrievalStatus={{
+        books_total: 26,
+        books_enabled: 13,
+        page_text_indexed: 26,
+        source_objects_indexed: 26,
+        table_or_stat_indexed: 18,
+        vectorized_current: 26,
+        vectorized_enabled: 13,
+        embedding_provider: "local-hash",
+        embedding_dimensions: 64,
+        vector_status: "ready",
+      }}
+      sourceSetBooks={[sourceSetBook]}
+    />,
+  );
+
+  expect(screen.getByLabelText("Semantic search status")).toHaveTextContent(
+    "Retrieval: 13 enabled, 26 page text indexed, 26 source-object indexed, 18 table/stat indexed, 13 vectorized enabled, vector ready",
   );
 });
 

@@ -11,6 +11,7 @@ from wfrp_companion.api.dependencies import ConfigDependency
 from wfrp_companion.api.schemas import (
     ChatCitationResponse,
     ChatMessageResponse,
+    ChatResearchEventResponse,
     ChatThreadDetailResponse,
     ChatThreadResponse,
     ChatThreadsResponse,
@@ -21,7 +22,7 @@ from wfrp_companion.api.schemas import (
     SendChatMessageRequest,
     SendChatMessageResponse,
 )
-from wfrp_companion.assistant import chat_service, chat_store
+from wfrp_companion.assistant import chat_service, chat_store, research
 from wfrp_companion.library import source_sets
 
 
@@ -63,7 +64,7 @@ def get_thread_detail(
     return ChatThreadDetailResponse(
         thread=thread_response(detail.thread),
         source_book_ids=list(detail.source_book_ids),
-        turns=[turn_response(turn) for turn in detail.turns],
+        turns=[turn_response(config, turn) for turn in detail.turns],
     )
 
 
@@ -84,6 +85,7 @@ def send_message(
                 thread_id=thread_id,
                 content=request.content,
                 idempotency_key=request.idempotency_key or chat_store.new_id("send"),
+                reader_context=reader_context_from_request(request),
                 provider_factory=getattr(
                     app_request.app.state,
                     "assistant_provider_factory",
@@ -112,6 +114,7 @@ def stream_message(
                 thread_id=thread_id,
                 content=request.content,
                 idempotency_key=request.idempotency_key or chat_store.new_id("send"),
+                reader_context=reader_context_from_request(request),
                 provider_factory=getattr(
                     app_request.app.state,
                     "assistant_provider_factory",
@@ -172,7 +175,7 @@ def model_run_response(model_run: chat_store.ModelRun) -> ModelRunResponse:
     return ModelRunResponse(**model_run.__dict__)
 
 
-def turn_response(turn: chat_store.ChatTurn) -> ChatTurnResponse:
+def turn_response(config, turn: chat_store.ChatTurn) -> ChatTurnResponse:
     return ChatTurnResponse(
         user_message=message_response(turn.user_message),
         assistant_message=None
@@ -180,6 +183,13 @@ def turn_response(turn: chat_store.ChatTurn) -> ChatTurnResponse:
         else message_response(turn.assistant_message),
         model_run=model_run_response(turn.model_run),
         citations=[citation_response(citation) for citation in turn.citations],
+        research_events=[
+            ChatResearchEventResponse(**event)
+            for event in chat_store.list_public_research_events(
+                config,
+                turn.model_run.id,
+            )
+        ],
     )
 
 
@@ -223,7 +233,21 @@ def stream_event_response(event: chat_service.ChatStreamEvent) -> dict[str, obje
         ],
         "text_delta": event.text_delta,
         "error_message": event.error_message,
+        "metadata": event.metadata,
     }
+
+
+def reader_context_from_request(
+    request: SendChatMessageRequest,
+) -> research.ReaderContext | None:
+    if request.reader_context is None:
+        return None
+    return research.ReaderContext(
+        active_book_id=request.reader_context.active_book_id,
+        active_pdf_page_number=request.reader_context.active_pdf_page_number,
+        active_printed_page_label=request.reader_context.active_printed_page_label,
+        open_book_ids=tuple(request.reader_context.open_book_ids),
+    )
 
 
 def citation_response(citation: chat_store.ChatCitation) -> ChatCitationResponse:

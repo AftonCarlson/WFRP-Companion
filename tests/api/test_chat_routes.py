@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from types import SimpleNamespace
 from pathlib import Path
@@ -209,13 +210,77 @@ def test_stream_message_can_emit_model_deltas_and_completed_event(
     events = [line for line in response.text.splitlines() if line]
     assert response.status_code == 200
     assert '"type":"accepted"' in events[0]
-    assert '"type":"retrieval"' in events[1]
-    assert '"type":"delta"' in events[2]
-    assert '"text_delta":"Rules answer."' in events[2]
+    assert '"type":"research_started"' in events[1]
+    assert any('"type":"retrieval"' in event for event in events)
+    delta_event = next(event for event in events if '"type":"delta"' in event)
+    assert '"text_delta":"Rules answer."' in delta_event
     assert '"type":"completed"' in events[-1]
     assert '"assistant_message"' in events[-1]
     assert count_rows(config, "chat_messages") == 2
     assert count_rows(config, "model_runs") == 1
+
+
+def test_send_message_passes_reader_context_to_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    client = TestClient(create_app(config))
+    thread_id = client.post("/api/chat/threads", json={}).json()["id"]
+    captured: dict[str, object] = {}
+
+    def fake_stream_chat_message(config_arg, **kwargs):
+        captured.update(kwargs)
+        result = chat_store.create_provider_unavailable_turn(
+            config_arg,
+            kwargs["thread_id"],
+            content=kwargs["content"],
+            idempotency_key=kwargs["idempotency_key"],
+            provider="openai",
+            model=config_arg.openai_model,
+        )
+        yield chat_routes.chat_service.event_from_result(
+            "failed",
+            result,
+            error_message="fake failure",
+        )
+
+    monkeypatch.setattr(
+        chat_routes.chat_service,
+        "stream_chat_message",
+        fake_stream_chat_message,
+    )
+
+    response = client.post(
+        f"/api/chat/threads/{thread_id}/messages",
+        json={
+            "content": "it's on pg 99",
+            "idempotency_key": "send-reader-context",
+            "reader_context": {
+                "active_book_id": "core-rules",
+                "active_pdf_page_number": 134,
+                "active_printed_page_label": "99",
+                "open_book_ids": ["core-rules", "barony"],
+            },
+        },
+    )
+    invalid_response = client.post(
+        f"/api/chat/threads/{thread_id}/messages",
+        json={
+            "content": "bad page",
+            "idempotency_key": "send-bad-reader-context",
+            "reader_context": {"active_pdf_page_number": 0},
+        },
+    )
+
+    assert response.status_code == 200
+    reader_context = captured["reader_context"]
+    assert reader_context.active_book_id == "core-rules"
+    assert reader_context.active_pdf_page_number == 134
+    assert reader_context.active_printed_page_label == "99"
+    assert reader_context.open_book_ids == ("core-rules", "barony")
+    assert invalid_response.status_code == 422
 
 
 def test_retry_route_reuses_user_message_and_is_idempotent(tmp_path: Path) -> None:
@@ -275,6 +340,13 @@ def test_thread_detail_route_collapses_successful_retry(tmp_path: Path) -> None:
     assert turn["model_run"]["id"] == retry.json()["model_run"]["id"]
     assert turn["model_run"]["status"] == "completed"
     assert turn["model_run"]["retryable"] is False
+    assert [event["type"] for event in turn["research_events"]] == [
+        "research_started",
+        "research_plan",
+        "tool_call",
+    ]
+    assert turn["research_events"][1]["label"] == "Research plan accepted"
+    assert "plan_summary" not in turn["research_events"][1]["metadata"]
 
 
 def test_chat_routes_map_missing_resources_and_validation(tmp_path: Path) -> None:
@@ -412,9 +484,69 @@ def test_response_helpers_include_citations(tmp_path: Path) -> None:
 
 
 class FakeProvider:
-    def stream_response(self, *, messages, request_id):
+    def stream_response(self, *, messages, request_id, **_kwargs):
         assert request_id.startswith("run-")
         assert messages[-1].role == "user"
+        tools = _kwargs.get("tools") or ()
+        if tools and [tool.name for tool in tools] == ["set_research_plan"]:
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="set_research_plan",
+                tool_call_id="call-plan",
+                tool_arguments_json=json.dumps(
+                    {
+                        "intent": "rules_lookup",
+                        "plan_summary": "Find cited rules evidence.",
+                        "subject": {
+                            "canonical": None,
+                            "surface": None,
+                            "include_terms": [],
+                            "exclude_terms": [],
+                            "book_title_hints": [],
+                            "page_hints": [],
+                            "notes": None,
+                        },
+                        "requirements": [
+                            {
+                                "id": "rules_evidence",
+                                "requirement_type": "topical_evidence",
+                                "subject": {
+                                    "canonical": None,
+                                    "surface": None,
+                                    "include_terms": [],
+                                    "exclude_terms": [],
+                                    "book_title_hints": [],
+                                    "page_hints": [],
+                                    "notes": None,
+                                },
+                                "required_terms": [],
+                                "excluded_terms": [],
+                                "object_type_hints": [],
+                                "min_accepted_hits": 1,
+                                "required": True,
+                            }
+                        ],
+                        "planned_actions": [
+                            {
+                                "tool_name": "search_library",
+                                "requirement_id": "rules_evidence",
+                                "purpose": "Search enabled books for rules evidence.",
+                                "arguments": {
+                                    "query": "rules evidence",
+                                    "intent": "rules_lookup",
+                                    "subject": None,
+                                    "limit": 4,
+                                },
+                            }
+                        ],
+                    }
+                ),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
+        if tools:
+            yield provider.ProviderStreamEvent(type="completed")
+            return
         yield provider.ProviderStreamEvent(type="delta", text_delta="Rules answer.")
         yield provider.ProviderStreamEvent(
             type="completed",

@@ -26,6 +26,19 @@ export type BooksResponse = {
   books: BookSummaryResponse[];
 };
 
+export type RetrievalStatusResponse = {
+  books_total: number;
+  books_enabled: number;
+  page_text_indexed: number;
+  source_objects_indexed: number;
+  table_or_stat_indexed: number;
+  vectorized_current: number;
+  vectorized_enabled: number;
+  embedding_provider: string;
+  embedding_dimensions: number | null;
+  vector_status: string;
+};
+
 export type SourceSetResponse = {
   id: string;
   name: string;
@@ -141,6 +154,19 @@ export type ChatCitationResponse = {
   page_range_label?: string | null;
 };
 
+export type ChatResearchEventResponse = {
+  type: string;
+  label: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type ReaderContextRequest = {
+  active_book_id?: string | null;
+  active_pdf_page_number?: number | null;
+  active_printed_page_label?: string | null;
+  open_book_ids?: string[];
+};
+
 export type SendChatMessageResponse = {
   thread: ChatThreadResponse;
   user_message: ChatMessageResponse;
@@ -154,6 +180,7 @@ export type ChatTurnResponse = {
   assistant_message: ChatMessageResponse | null;
   model_run: ModelRunResponse;
   citations: ChatCitationResponse[];
+  research_events?: ChatResearchEventResponse[];
 };
 
 export type ChatThreadDetailResponse = {
@@ -163,7 +190,18 @@ export type ChatThreadDetailResponse = {
 };
 
 export type ChatStreamEvent = {
-  type: "accepted" | "retrieval" | "delta" | "completed" | "failed";
+  type:
+    | "accepted"
+    | "research_started"
+    | "research_plan"
+    | "tool_call"
+    | "retrieval"
+    | "tool_result"
+    | "evidence_validation"
+    | "finalizing"
+    | "delta"
+    | "completed"
+    | "failed";
   thread?: ChatThreadResponse | null;
   user_message?: ChatMessageResponse | null;
   assistant_message?: ChatMessageResponse | null;
@@ -171,4 +209,5 @@ export type ChatStreamEvent = {
   citations?: ChatCitationResponse[];
   text_delta?: string | null;
   error_message?: string | null;
+  metadata?: Record<string, unknown> | null;
 };

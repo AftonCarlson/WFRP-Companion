@@ -30,6 +30,18 @@ function client(overrides: Partial<ApiClient> = {}): ApiClient {
         },
       ],
     }),
+    getRetrievalStatus: vi.fn().mockResolvedValue({
+      books_total: 1,
+      books_enabled: 1,
+      page_text_indexed: 1,
+      source_objects_indexed: 1,
+      table_or_stat_indexed: 1,
+      vectorized_current: 1,
+      vectorized_enabled: 1,
+      embedding_provider: "sentence-transformers",
+      embedding_dimensions: 1024,
+      vector_status: "ready",
+    }),
     listSourceSets: vi.fn().mockResolvedValue({
       active_source_set_id: "rules-core",
       source_sets: [
@@ -73,6 +85,7 @@ describe("useInitialWorkspaceData", () => {
     expect(result.current.error).toBeNull();
     expect(result.current.data?.activeSourceSetId).toBe("rules-core");
     expect(result.current.data?.books[0].title).toBe("Core Rules");
+    expect(result.current.data?.retrievalStatus.vector_status).toBe("ready");
     expect(result.current.data?.sourceSetBooks[0].enabled).toBe(true);
     expect(fakeClient.listSourceSetBooks).toHaveBeenCalledWith(
       "rules-core",

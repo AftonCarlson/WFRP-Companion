@@ -295,6 +295,8 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0004_structured_evidence",
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
+        "0007_familiar_agent_research",
+        "0008_familiar_research_plans",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -363,8 +365,27 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0007_familiar_agent_research",),
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0008_familiar_research_plans",),
+            ).fetchone()
+            is not None
+        )
         assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
+        assert migrations.table_exists(connection, "familiar_research_runs")
+        assert migrations.table_exists(connection, "familiar_research_plans")
+        assert migrations.table_exists(connection, "familiar_tool_calls")
+        assert migrations.table_exists(connection, "familiar_evidence_judgments")
+        assert migrations.table_exists(connection, "chat_thread_context")
         assert (
             connection.execute(
                 "select count(*) from book_retrieval_status"
@@ -391,6 +412,215 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         assert run_source["source_set_id"] == "rules-core"
         assert run_source["book_id"] == "core-rules"
         assert run_source["book_title_snapshot"] == "Core Rules"
+
+
+def test_familiar_research_plans_migration_rebuilds_agent_tables(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-agent.sqlite"
+    create_legacy_phase6_database(db_path)
+    with open_connection(db_path) as connection:
+        for migration_id in (
+            "0001_phase_7_source_objects",
+            "0002_source_map_retrieval",
+            "0003_vector_retrieval",
+            "0004_structured_evidence",
+            "0005_page_label_calibration",
+            "0006_embedding_provider_identity",
+            "0007_familiar_agent_research",
+        ):
+            apply_migration(connection, migration_id)
+        connection.execute(
+            """
+            insert into familiar_research_runs (
+              id,
+              model_run_id,
+              thread_id,
+              user_message_id,
+              source_set_id,
+              raw_query,
+              resolved_query,
+              intent,
+              status,
+              max_tool_rounds,
+              evidence_status,
+              created_at,
+              updated_at
+            )
+            values ('research-1', 'model-1', 'thread-1', 'message-1',
+                    'rules-core', 'stats?', 'harpy stats', 'statline_lookup',
+                    'planning', 4, 'not_evaluated',
+                    '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into familiar_tool_calls (
+              id,
+              research_run_id,
+              step_number,
+              call_index,
+              provider_call_id,
+              tool_name,
+              arguments_json,
+              argument_hash,
+              status,
+              created_at,
+              updated_at
+            )
+            values ('tool-1', 'research-1', 1, 0, 'call-1',
+                    'search_library', '{}', 'hash-1', 'requested',
+                    '2026-06-09T00:00:00Z', '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            insert into familiar_evidence_judgments (
+              id,
+              research_run_id,
+              requirement_type,
+              status,
+              reason_code,
+              reasons_json,
+              created_at
+            )
+            values ('judgment-1', 'research-1', 'statline_lookup', 'partial',
+                    'subject_only_page', '["page mention only"]',
+                    '2026-06-09T00:00:00Z')
+            """
+        )
+        connection.commit()
+
+        apply_migration(connection, "0008_familiar_research_plans")
+
+        run_sql = migrations.table_sql(connection, "familiar_research_runs")
+        assert "deciding" in run_sql
+        assert migrations.table_exists(connection, "familiar_research_plans")
+        plan_foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_research_plans)"
+        ).fetchall()
+        assert any(row["table"] == "familiar_research_runs" for row in plan_foreign_keys)
+        assert "familiar_research_runs_before_0008" not in migrations.table_sql(
+            connection,
+            "familiar_research_plans",
+        )
+        assert "research_plan_id" in migrations.column_names(
+            connection,
+            "familiar_tool_calls",
+        )
+        assert "purpose" in migrations.column_names(connection, "familiar_tool_calls")
+        assert "subject_constraint_json" in migrations.column_names(
+            connection,
+            "familiar_evidence_judgments",
+        )
+        assert (
+            connection.execute("select count(*) from familiar_research_runs").fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute("select count(*) from familiar_tool_calls").fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "select count(*) from familiar_evidence_judgments"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0008_familiar_research_plans",),
+            ).fetchone()
+            is not None
+        )
+
+
+def test_familiar_research_plan_migration_repairs_temporary_fk_target(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-agent-bad-fk.sqlite"
+    create_legacy_phase6_database(db_path)
+    with open_connection(db_path) as connection:
+        migrations.repair_familiar_research_plans_if_needed(connection)
+        for migration_id in (
+            "0001_phase_7_source_objects",
+            "0002_source_map_retrieval",
+            "0003_vector_retrieval",
+            "0004_structured_evidence",
+            "0005_page_label_calibration",
+            "0006_embedding_provider_identity",
+            "0007_familiar_agent_research",
+        ):
+            apply_migration(connection, migration_id)
+
+        connection.execute(migrations.FAMILIAR_RESEARCH_PLANS_TABLE_SQL)
+        migrations.rebuild_familiar_research_runs_if_needed(connection)
+        migrations.rebuild_familiar_tool_calls_if_needed(connection)
+        migrations.rebuild_familiar_evidence_judgments_if_needed(connection)
+
+        assert "familiar_research_runs_before_0008" in migrations.table_sql(
+            connection,
+            "familiar_research_plans",
+        )
+        assert "familiar_research_plans_bad_fk" not in migrations.table_sql(
+            connection,
+            "familiar_tool_calls",
+        )
+
+        migrations.repair_familiar_research_plans_if_needed(connection)
+        migrations.repair_familiar_plan_dependent_tables_if_needed(connection)
+
+        plan_foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_research_plans)"
+        ).fetchall()
+        tool_foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_tool_calls)"
+        ).fetchall()
+        judgment_foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_evidence_judgments)"
+        ).fetchall()
+        assert any(row["table"] == "familiar_research_runs" for row in plan_foreign_keys)
+        assert any(row["table"] == "familiar_research_plans" for row in tool_foreign_keys)
+        assert any(
+            row["table"] == "familiar_research_plans" for row in judgment_foreign_keys
+        )
+        assert "familiar_research_runs_before_0008" not in migrations.table_sql(
+            connection,
+            "familiar_research_plans",
+        )
+        assert "familiar_research_plans_bad_fk" not in migrations.table_sql(
+            connection,
+            "familiar_tool_calls",
+        )
+        assert "familiar_research_plans_bad_fk" not in migrations.table_sql(
+            connection,
+            "familiar_evidence_judgments",
+        )
+
+
+def test_familiar_research_plan_migration_leaves_no_temporary_schema_references(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-agent-clean-schema.sqlite"
+    create_legacy_phase6_database(db_path)
+    with open_connection(db_path) as connection:
+        for migration_id in migrations.MIGRATION_IDS:
+            apply_migration(connection, migration_id)
+
+        stale_schema_rows = connection.execute(
+            """
+            select type, name, tbl_name, sql
+            from sqlite_master
+            where sql like '%before_%'
+               or sql like '%bad_fk%'
+               or name like '%before_%'
+               or name like '%bad_fk%'
+            """
+        ).fetchall()
+        assert stale_schema_rows == []
+        assert connection.execute("pragma integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("pragma foreign_key_check").fetchall() == []
 
 
 def test_embedding_provider_identity_migration_backfills_legacy_vectors(
@@ -846,6 +1076,8 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0004_structured_evidence",
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
+        "0007_familiar_agent_research",
+        "0008_familiar_research_plans",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -855,6 +1087,8 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0004_structured_evidence",
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
+        "0007_familiar_agent_research",
+        "0008_familiar_research_plans",
     )
 
 
@@ -873,6 +1107,8 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0004_structured_evidence",
         "0005_page_label_calibration",
         "0006_embedding_provider_identity",
+        "0007_familiar_agent_research",
+        "0008_familiar_research_plans",
     )
     with open_connection(db_path) as connection:
         assert (

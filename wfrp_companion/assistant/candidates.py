@@ -5,6 +5,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from dataclasses import replace
 
+from wfrp_companion.assistant import research
 from wfrp_companion.assistant.evidence import EvidenceCandidate
 from wfrp_companion.assistant.evidence import load_page_range_label
 from wfrp_companion.assistant.evidence import load_page_text_from_connection
@@ -19,6 +20,7 @@ from wfrp_companion.library.page_labels import load_calibrated_printed_page_labe
 from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
 from wfrp_companion.search.fts import build_fts_query, search_exact
 from wfrp_companion.source_objects.embeddings import cosine_similarity
+from wfrp_companion.source_objects.embeddings import embedding_source_snapshot_sha256
 from wfrp_companion.source_objects.embeddings import source_object_embeddings_current
 from wfrp_companion.source_objects.embeddings import vector_from_blob
 from wfrp_companion.source_objects.embedding_providers import (
@@ -39,6 +41,18 @@ class LinkedEvidenceTarget:
     page_row: sqlite3.Row | None = None
 
 
+@dataclass(frozen=True)
+class CandidateCollectionResult:
+    candidates: tuple[EvidenceCandidate, ...]
+    diagnostics: research.RetrievalDiagnostics
+
+
+@dataclass(frozen=True)
+class VectorSearchResult:
+    candidates: tuple[EvidenceCandidate, ...]
+    status: str
+
+
 def collect_evidence_candidates(
     config: AppConfig,
     *,
@@ -46,8 +60,45 @@ def collect_evidence_candidates(
     query_plan: QueryPlan,
     per_candidate_limit: int,
 ) -> tuple[EvidenceCandidate, ...]:
+    return collect_evidence_candidates_with_diagnostics(
+        config,
+        source_book_ids=source_book_ids,
+        query_plan=query_plan,
+        per_candidate_limit=per_candidate_limit,
+    ).candidates
+
+
+def collect_evidence_candidates_with_diagnostics(
+    config: AppConfig,
+    *,
+    source_book_ids: tuple[str, ...],
+    query_plan: QueryPlan,
+    per_candidate_limit: int,
+) -> CandidateCollectionResult:
+    channel_counts = {
+        "page_fts": 0,
+        "source_object_fts": 0,
+        "source_object_scan": 0,
+        "vector": 0,
+        "page_lookup": 0,
+        "table_stat_lookup": 0,
+    }
+    channel_skip_reasons: dict[str, str] = {}
     if not source_book_ids:
-        return ()
+        return CandidateCollectionResult(
+            candidates=(),
+            diagnostics=research.RetrievalDiagnostics(
+                channel_counts=channel_counts,
+                channel_skip_reasons={"scope": "no_source_books"},
+                vector_status=vector_status_for_empty_scope(config),
+                candidate_count_before_fusion=0,
+                candidate_count_after_fusion=0,
+                reranked_count=0,
+                selected_count=0,
+                page_lookup_attempted=False,
+                validation_status="not_evaluated",
+            ),
+        )
     candidates: list[EvidenceCandidate] = []
     with initialize_database(config.db_path) as connection:
         for candidate_query in query_plan.candidates:
@@ -64,23 +115,68 @@ def collect_evidence_candidates(
                 )
                 if candidate is not None:
                     candidates.append(candidate)
-            for candidate in search_source_object_candidates(
+                    channel_counts["page_fts"] += 1
+            source_object_fts_candidates = search_source_object_fts_candidates(
                 connection,
                 candidate_query,
                 book_ids=source_book_ids,
                 limit=per_candidate_limit,
-            ):
+            )
+            if source_object_fts_candidates:
+                source_object_candidates = source_object_fts_candidates
+                channel_counts["source_object_fts"] += len(source_object_candidates)
+            else:
+                source_object_candidates = search_source_object_like_candidates(
+                    connection,
+                    candidate_query,
+                    book_ids=source_book_ids,
+                    limit=per_candidate_limit,
+                )
+                channel_counts["source_object_scan"] += len(source_object_candidates)
+            for candidate in source_object_candidates:
                 candidates.append(candidate)
         vector_query = " ".join((*query_plan.terms, *query_plan.expanded_terms))
-        for candidate in search_vector_candidates(
+        vector_result = search_vector_candidates_with_status(
             connection,
             vector_query,
             book_ids=source_book_ids,
             limit=per_candidate_limit,
             config=config,
-        ):
+        )
+        vector_candidates = vector_result.candidates
+        channel_counts["vector"] = len(vector_candidates)
+        vector_status = vector_result.status
+        if vector_status != "ran":
+            channel_skip_reasons["vector"] = vector_status
+        for candidate in vector_candidates:
             candidates.append(candidate)
-    return reciprocal_rank_fuse(candidates)
+    fused_candidates = reciprocal_rank_fuse(candidates)
+    return CandidateCollectionResult(
+        candidates=fused_candidates,
+        diagnostics=research.RetrievalDiagnostics(
+            channel_counts=channel_counts,
+            channel_skip_reasons=channel_skip_reasons,
+            vector_status=vector_status,
+            candidate_count_before_fusion=len(candidates),
+            candidate_count_after_fusion=len(fused_candidates),
+            reranked_count=0,
+            selected_count=0,
+            page_lookup_attempted=False,
+            validation_status="not_evaluated",
+        ),
+    )
+
+
+def vector_status_for_empty_scope(config: AppConfig) -> str:
+    return "disabled" if config.embedding_provider == "disabled" else "missing_embeddings"
+
+
+def vector_channel_status(config: AppConfig, *, candidate_count: int) -> str:
+    if config.embedding_provider == "disabled":
+        return "disabled"
+    if candidate_count > 0:
+        return "ran"
+    return "missing_embeddings"
 
 def keep_best_candidate(
     candidates: dict[str, EvidenceCandidate],
@@ -320,28 +416,54 @@ def search_vector_candidates(
     limit: int,
     config: AppConfig,
 ) -> tuple[EvidenceCandidate, ...]:
+    return search_vector_candidates_with_status(
+        connection,
+        query_text,
+        book_ids=book_ids,
+        limit=limit,
+        config=config,
+    ).candidates
+
+
+def search_vector_candidates_with_status(
+    connection: sqlite3.Connection,
+    query_text: str,
+    *,
+    book_ids: Collection[str],
+    limit: int,
+    config: AppConfig,
+) -> VectorSearchResult:
     selected_book_ids = tuple(book_ids)
     if not selected_book_ids:
-        return ()
+        return VectorSearchResult(candidates=(), status=vector_status_for_empty_scope(config))
     try:
         provider = resolve_embedding_provider(config)
     except UnsupportedEmbeddingProviderError:
-        return ()
+        return VectorSearchResult(candidates=(), status="provider_error")
     if provider is None:
-        return ()
+        return VectorSearchResult(candidates=(), status="disabled")
     current_book_ids = tuple(
         book_id
         for book_id in selected_book_ids
         if source_object_embeddings_current(connection, book_id, config=config)
     )
     if not current_book_ids:
-        return ()
+        return VectorSearchResult(
+            candidates=(),
+            status=vector_unavailable_status(
+                connection,
+                selected_book_ids,
+                provider_name=provider.provider_name,
+                model_name=provider.model_name,
+                dimensions=provider.dimensions,
+            ),
+        )
     try:
         query_vector = provider.embed_query(query_text)
     except (EmbeddingProviderError, EmbeddingDimensionError):
-        return ()
+        return VectorSearchResult(candidates=(), status="provider_error")
     if not any(query_vector):
-        return ()
+        return VectorSearchResult(candidates=(), status="ran_no_candidates")
     placeholders = ",".join("?" for _ in current_book_ids)
     rows = connection.execute(
         f"""
@@ -422,7 +544,52 @@ def search_vector_candidates(
                 ),
             )
         )
-    return tuple(candidates)
+    status = "ran" if candidates else "ran_no_candidates"
+    return VectorSearchResult(candidates=tuple(candidates), status=status)
+
+
+def vector_unavailable_status(
+    connection: sqlite3.Connection,
+    book_ids: tuple[str, ...],
+    *,
+    provider_name: str,
+    model_name: str,
+    dimensions: int,
+) -> str:
+    placeholders = ",".join("?" for _ in book_ids)
+    rows = connection.execute(
+        f"""
+        select book_id,
+               vector_status,
+               vector_snapshot_sha256,
+               embedding_provider,
+               embedding_model,
+               embedding_dimensions
+        from book_retrieval_status
+        where book_id in ({placeholders})
+        """,
+        book_ids,
+    ).fetchall()
+    if not rows:
+        return "missing_embeddings"
+    for row in rows:
+        if row["vector_status"] == "failed":
+            return "provider_error"
+    for row in rows:
+        if row["vector_status"] != "indexed":
+            return "stale_embeddings"
+        if row["vector_snapshot_sha256"] != embedding_source_snapshot_sha256(
+            connection,
+            row["book_id"],
+        ):
+            return "stale_embeddings"
+        if row["embedding_provider"] != provider_name:
+            return "stale_embeddings"
+        if row["embedding_model"] != model_name:
+            return "stale_embeddings"
+        if int(row["embedding_dimensions"] or 0) != dimensions:
+            return "stale_embeddings"
+    return "missing_embeddings"
 
 
 def evidence_candidate_from_source_object_row(
