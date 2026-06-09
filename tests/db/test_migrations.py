@@ -599,6 +599,30 @@ def test_familiar_research_plan_migration_repairs_temporary_fk_target(
         )
 
 
+def test_familiar_research_plan_migration_leaves_no_temporary_schema_references(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-agent-clean-schema.sqlite"
+    create_legacy_phase6_database(db_path)
+    with open_connection(db_path) as connection:
+        for migration_id in migrations.MIGRATION_IDS:
+            apply_migration(connection, migration_id)
+
+        stale_schema_rows = connection.execute(
+            """
+            select type, name, tbl_name, sql
+            from sqlite_master
+            where sql like '%before_%'
+               or sql like '%bad_fk%'
+               or name like '%before_%'
+               or name like '%bad_fk%'
+            """
+        ).fetchall()
+        assert stale_schema_rows == []
+        assert connection.execute("pragma integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("pragma foreign_key_check").fetchall() == []
+
+
 def test_embedding_provider_identity_migration_backfills_legacy_vectors(
     tmp_path: Path,
 ) -> None:

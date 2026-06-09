@@ -194,7 +194,7 @@ def run_research(
         )
         tool_rounds_used += 1
         progress.extend(outcome.progress_events)
-        accepted_hits.extend(outcome.validation.accepted_hits)
+        extend_unique_hits(accepted_hits, outcome.validation.accepted_hits)
         record_requirement_validation_outcome(
             accepted_hits_by_requirement,
             partial_hits_by_requirement,
@@ -202,7 +202,7 @@ def run_research(
             outcome.validation,
         )
         if outcome.validation.status == "partial":
-            partial_hits.extend(partial_hits_from_judgments(outcome.validation))
+            extend_unique_hits(partial_hits, partial_hits_from_judgments(outcome.validation))
         final_retrieval_run_id = outcome.tool_result.retrieval_run_id
         final_diagnostics = outcome.tool_result.diagnostics
         last_validation_status = outcome.validation.status
@@ -291,7 +291,7 @@ def run_research(
         )
         tool_rounds_used += 1
         progress.extend(outcome.progress_events)
-        accepted_hits.extend(outcome.validation.accepted_hits)
+        extend_unique_hits(accepted_hits, outcome.validation.accepted_hits)
         record_requirement_validation_outcome(
             accepted_hits_by_requirement,
             partial_hits_by_requirement,
@@ -299,7 +299,7 @@ def run_research(
             outcome.validation,
         )
         if outcome.validation.status == "partial":
-            partial_hits.extend(partial_hits_from_judgments(outcome.validation))
+            extend_unique_hits(partial_hits, partial_hits_from_judgments(outcome.validation))
         final_retrieval_run_id = outcome.tool_result.retrieval_run_id
         final_diagnostics = outcome.tool_result.diagnostics
         last_validation_status = outcome.validation.status
@@ -1045,12 +1045,39 @@ def record_requirement_validation_outcome(
     requirement_id: str,
     validation: evidence_validation.EvidenceValidationResult,
 ) -> None:
-    accepted_hits_by_requirement.setdefault(requirement_id, []).extend(
-        validation.accepted_hits
+    extend_unique_hits(
+        accepted_hits_by_requirement.setdefault(requirement_id, []),
+        validation.accepted_hits,
     )
-    partial_hits_by_requirement.setdefault(requirement_id, []).extend(
-        partial_hits_from_judgments(validation)
+    extend_unique_hits(
+        partial_hits_by_requirement.setdefault(requirement_id, []),
+        partial_hits_from_judgments(validation),
     )
+
+
+def extend_unique_hits(
+    target: list[RetrievedHit],
+    hits: Sequence[RetrievedHit],
+) -> None:
+    seen = {evidence_key(hit) for hit in target}
+    for hit in hits:
+        key = evidence_key(hit)
+        if key in seen:
+            continue
+        seen.add(key)
+        target.append(hit)
+
+
+def unique_hits(hits: Sequence[RetrievedHit]) -> tuple[RetrievedHit, ...]:
+    unique: list[RetrievedHit] = []
+    extend_unique_hits(unique, hits)
+    return tuple(unique)
+
+
+def evidence_key(hit: RetrievedHit) -> tuple[str, str]:
+    if hit.source_object_id is not None:
+        return ("source_object", hit.source_object_id)
+    return ("page", hit.page_id)
 
 
 def public_tool_arguments(
@@ -1171,7 +1198,7 @@ def tool_definitions() -> tuple[provider.ProviderToolDefinition, ...]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "requirement_id": {"type": "string"},
+                    "requirement_id": agent_planning.requirement_id_schema(),
                     "query": {"type": "string"},
                     "intent": {"type": "string"},
                     "subject": {"type": ["string", "null"]},
@@ -1187,7 +1214,7 @@ def tool_definitions() -> tuple[provider.ProviderToolDefinition, ...]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "requirement_id": {"type": "string"},
+                    "requirement_id": agent_planning.requirement_id_schema(),
                     "book_id": {"type": ["string", "null"]},
                     "book_title_hint": {"type": ["string", "null"]},
                     "printed_page_label": {"type": ["string", "null"]},
@@ -1213,7 +1240,7 @@ def tool_definitions() -> tuple[provider.ProviderToolDefinition, ...]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "requirement_id": {"type": "string"},
+                    "requirement_id": agent_planning.requirement_id_schema(),
                     "source_object_id": {"type": "string"},
                     "intent": {"type": "string"},
                 },
@@ -1240,7 +1267,7 @@ def tool_definitions() -> tuple[provider.ProviderToolDefinition, ...]:
                     },
                     "requirement_ids": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": agent_planning.requirement_id_schema(),
                         "minItems": 1,
                         "maxItems": 6,
                     },
@@ -1389,13 +1416,14 @@ def record_accepted_evidence_retrieval_run(
     diagnostics: research.RetrievalDiagnostics | None,
     evidence_status: str,
 ) -> str:
-    source_book_ids = tuple(sorted({hit.book_id for hit in accepted_hits}))
+    unique_accepted_hits = unique_hits(accepted_hits)
+    source_book_ids = tuple(sorted({hit.book_id for hit in unique_accepted_hits}))
     accepted_diagnostics = (
         diagnostics
         if diagnostics is None
         else replace(
             diagnostics,
-            selected_count=len(accepted_hits),
+            selected_count=len(unique_accepted_hits),
             validation_status=evidence_status,
         )
     )
@@ -1405,7 +1433,7 @@ def record_accepted_evidence_retrieval_run(
         message_id=result.user_message.id,
         source_set_id=research_run.source_set_id,
         query=f"accepted evidence for {query}",
-        hits=renumber_hits(accepted_hits),
+        hits=renumber_hits(unique_accepted_hits),
         source_book_ids=source_book_ids,
         diagnostics=accepted_diagnostics,
         intent=research_run.intent,
@@ -1418,7 +1446,7 @@ def record_accepted_evidence_retrieval_run(
         validation_status=evidence_status,
         validation_summary={
             "status": evidence_status,
-            "accepted": len(accepted_hits),
+            "accepted": len(unique_accepted_hits),
             "partial": 0,
             "rejected": 0,
             "reason_codes": ["accepted_evidence"],

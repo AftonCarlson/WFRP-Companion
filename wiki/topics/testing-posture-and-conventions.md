@@ -183,6 +183,16 @@ source-set routes, exact-search routes, chat routes, and the page-text,
 source-set, search, API, dev, migration, and source-object extraction CLI
 entrypoints.
 
+Familiar research-agent regressions also cover provider-shaped short
+requirement ids such as `r1`, matching parser validation against published tool
+schemas and persisted `familiar_research_plans` / `familiar_tool_calls` /
+`familiar_evidence_judgments` rows, published parser bounds such as term-list
+limits in provider tool schemas, and deduplication of repeated accepted
+evidence before requirement-ledger counting or final `retrieval_hits`
+persistence. Migration regressions include a schema sentinel that fails if
+rebuilt SQLite tables retain temporary `_before_` or `_bad_fk` foreign-key
+references.
+
 Retrieval-specific tests now also cover RRF deterministic ordering,
 same-channel dedupe before fusion-rank assignment, weak lexical-only
 rejection, exact table/object-type query preservation, deterministic reranker

@@ -25,6 +25,10 @@ Current Familiar implementation:
 - Accepted plans are stored in `familiar_research_plans`; tool calls and
   evidence judgments carry `research_plan_id` and `requirement_id` so the app
   can audit which requirement each retrieval attempt served.
+- Familiar requirement ids are provider-facing plan contract fields, not
+  database-internal names. The parser and tool schemas share one published
+  pattern and explicitly accept short provider ids such as `r1`, while still
+  rejecting unsafe shapes such as hyphenated ids.
 - Chat requests may include `reader_context` from the active Grimoire tab:
   active book id, active PDF page number, optional printed page label, and open
   book ids. Familiar treats this only as a routing hint for page-aware
@@ -47,6 +51,11 @@ Current Familiar implementation:
   met its own `min_accepted_hits`.** Accepted evidence is tracked per
   requirement, so one successful retrieval cannot prematurely satisfy a
   multi-requirement plan.
+- Accepted evidence is deduplicated by the same key that `retrieval_hits`
+  enforces for a single run: source-object id when present, otherwise page id.
+  Repeated provider lookups can waste tool rounds, but they must not inflate a
+  requirement ledger or crash final accepted-evidence persistence with duplicate
+  hit rows.
 - Weak or empty evidence can trigger bounded provider-directed tool actions.
   The backend validates tool names, requirement ids, argument/requirement
   equality, scope, evidence status, and max tool rounds before any local side

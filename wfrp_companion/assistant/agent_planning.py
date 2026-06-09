@@ -50,7 +50,8 @@ TOOL_NAMES = {
     "lookup_source_object",
     "finish_research",
 }
-REQUIREMENT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
+REQUIREMENT_ID_PATTERN = r"^[a-z][a-z0-9_]{1,63}$"
+REQUIREMENT_ID_RE = re.compile(REQUIREMENT_ID_PATTERN)
 MAX_TERMS = 12
 MAX_TEXT_CHARS = 240
 MAX_PLAN_SUMMARY_CHARS = 500
@@ -392,15 +393,19 @@ def planning_tool_parameters() -> dict[str, object]:
     return strict_object(
         {
             "intent": {"type": "string", "enum": sorted(RESEARCH_INTENTS)},
-            "plan_summary": {"type": "string"},
+            "plan_summary": bounded_string_schema(
+                max_chars=MAX_PLAN_SUMMARY_CHARS,
+            ),
             "subject": subject_schema(),
             "requirements": {
                 "type": "array",
                 "items": requirement_schema(),
+                "maxItems": 6,
             },
             "planned_actions": {
                 "type": "array",
                 "items": planned_action_schema(),
+                "maxItems": 4,
             },
         }
     )
@@ -409,13 +414,13 @@ def planning_tool_parameters() -> dict[str, object]:
 def subject_schema() -> dict[str, object]:
     return strict_object(
         {
-            "canonical": {"type": ["string", "null"]},
-            "surface": {"type": ["string", "null"]},
+            "canonical": bounded_string_schema(nullable=True),
+            "surface": bounded_string_schema(nullable=True),
             "include_terms": string_array_schema(),
             "exclude_terms": string_array_schema(),
             "book_title_hints": string_array_schema(),
             "page_hints": string_array_schema(),
-            "notes": {"type": ["string", "null"]},
+            "notes": bounded_string_schema(nullable=True),
         }
     )
 
@@ -423,13 +428,13 @@ def subject_schema() -> dict[str, object]:
 def requirement_schema() -> dict[str, object]:
     return strict_object(
         {
-            "id": {"type": "string"},
+            "id": requirement_id_schema(),
             "requirement_type": {"type": "string", "enum": sorted(REQUIREMENT_TYPES)},
             "subject": subject_schema(),
             "required_terms": string_array_schema(),
             "excluded_terms": string_array_schema(),
-            "object_type_hints": string_array_schema(),
-            "min_accepted_hits": {"type": "integer"},
+            "object_type_hints": string_array_schema(max_items=8),
+            "min_accepted_hits": {"type": "integer", "minimum": 1, "maximum": 6},
             "required": {"type": "boolean"},
         }
     )
@@ -439,7 +444,7 @@ def planned_action_schema() -> dict[str, object]:
     return strict_object(
         {
             "tool_name": {"type": "string", "enum": sorted(TOOL_NAMES)},
-            "requirement_id": {"type": ["string", "null"]},
+            "requirement_id": requirement_id_schema(nullable=True),
             "purpose": {"type": "string"},
             "arguments": action_arguments_schema(),
         }
@@ -449,31 +454,53 @@ def planned_action_schema() -> dict[str, object]:
 def action_arguments_schema() -> dict[str, object]:
     return strict_object(
         {
-            "query": {"type": ["string", "null"]},
-            "intent": {"type": ["string", "null"]},
-            "subject": {"type": ["string", "null"]},
+            "query": bounded_string_schema(nullable=True),
+            "intent": bounded_string_schema(nullable=True),
+            "subject": bounded_string_schema(nullable=True),
             "limit": {"type": ["integer", "null"]},
-            "book_id": {"type": ["string", "null"]},
-            "book_title_hint": {"type": ["string", "null"]},
-            "printed_page_label": {"type": ["string", "null"]},
+            "book_id": bounded_string_schema(nullable=True),
+            "book_title_hint": bounded_string_schema(nullable=True),
+            "printed_page_label": bounded_string_schema(nullable=True),
             "pdf_page_number": {"type": ["integer", "null"]},
-            "subject_hint": {"type": ["string", "null"]},
-            "source_object_id": {"type": ["string", "null"]},
+            "subject_hint": bounded_string_schema(nullable=True),
+            "source_object_id": bounded_string_schema(nullable=True),
             "include_terms": string_array_schema(),
             "exclude_terms": string_array_schema(),
             "object_type_hints": string_array_schema(),
             "book_title_hints": string_array_schema(),
             "page_hints": string_array_schema(),
-            "status": {"type": ["string", "null"]},
-            "reason": {"type": ["string", "null"]},
-            "satisfied_requirement_ids": string_array_schema(),
-            "unmet_requirement_ids": string_array_schema(),
+            "status": bounded_string_schema(nullable=True),
+            "reason": bounded_string_schema(nullable=True),
+            "satisfied_requirement_ids": string_array_schema(max_items=6),
+            "unmet_requirement_ids": string_array_schema(max_items=6),
         }
     )
 
 
-def string_array_schema() -> dict[str, object]:
-    return {"type": "array", "items": {"type": "string"}}
+def string_array_schema(*, max_items: int = MAX_TERMS) -> dict[str, object]:
+    return {
+        "type": "array",
+        "items": bounded_string_schema(max_chars=MAX_TEXT_CHARS),
+        "maxItems": max_items,
+    }
+
+
+def bounded_string_schema(
+    *,
+    max_chars: int = MAX_TEXT_CHARS,
+    nullable: bool = False,
+) -> dict[str, object]:
+    return {
+        "type": ["string", "null"] if nullable else "string",
+        "maxLength": max_chars,
+    }
+
+
+def requirement_id_schema(*, nullable: bool = False) -> dict[str, object]:
+    return {
+        "type": ["string", "null"] if nullable else "string",
+        "pattern": REQUIREMENT_ID_PATTERN,
+    }
 
 
 def strict_object(properties: dict[str, object]) -> dict[str, object]:

@@ -12,6 +12,7 @@ from wfrp_companion.assistant import agent_planning
 from wfrp_companion.assistant import chat_store
 from wfrp_companion.assistant import context_resolution
 from wfrp_companion.assistant import conversation_context
+from wfrp_companion.assistant import evidence_validation
 from wfrp_companion.assistant import familiar_agent
 from wfrp_companion.assistant import provider
 from wfrp_companion.assistant import research
@@ -983,6 +984,87 @@ def test_familiar_runs_hybrid_search_and_filters_final_citations(
         ("rejected", "subject_mismatch", plan_id, "harpy_stats"),
     ]
     assert retrieval_metadata["validation_status"] == "sufficient"
+
+
+def test_familiar_accepts_provider_short_requirement_ids(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    provider_instance = PlanThenFinalProvider(
+        plan_payload=plan_payload(query="orc stats", subject="orc", requirement_id="r1")
+    )
+    observed_tool_call_ids: list[str] = []
+
+    def fake_search_library(**kwargs):
+        observed_tool_call_ids.append(kwargs["tool_call_id"])
+        retrieved_hit = hit(rank=1, subject="orc")
+        retrieval_run_id = chat_store.record_retrieval_run(
+            config,
+            thread_id=kwargs["thread_id"],
+            message_id=kwargs["message_id"],
+            source_set_id="rules-core",
+            query=kwargs["query"],
+            hits=(retrieved_hit,),
+            source_book_ids=("bestiary",),
+            diagnostics=diagnostics("accepted"),
+            tool_call_id=kwargs["tool_call_id"],
+            attempt_number=kwargs["attempt_number"],
+            intent=kwargs["intent"],
+            resolved_query=kwargs["query"],
+            tool_name="search_library",
+        )
+        return research_tools.SearchLibraryResult(
+            retrieval_run_id=retrieval_run_id,
+            query=kwargs["query"],
+            source_set_id="rules-core",
+            source_book_ids=("bestiary",),
+            hits=(retrieved_hit,),
+            diagnostics=diagnostics("accepted"),
+        )
+
+    monkeypatch.setattr(research_tools, "search_library", fake_search_library)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="orc stats",
+            idempotency_key="send-agent-short-requirement-id",
+            provider_factory=lambda _: provider_instance,
+        )
+    )
+
+    assert len(observed_tool_call_ids) == 1
+    assert [event.type for event in events] == [
+        "accepted",
+        "research_started",
+        "research_plan",
+        "tool_call",
+        "retrieval",
+        "tool_result",
+        "evidence_validation",
+        "delta",
+        "completed",
+    ]
+    with open_connection(config.db_path) as connection:
+        plan_requirement = json.loads(
+            connection.execute(
+                "select requirements_json from familiar_research_plans"
+            ).fetchone()["requirements_json"]
+        )[0]
+        tool_row = connection.execute(
+            "select requirement_id from familiar_tool_calls"
+        ).fetchone()
+        judgment_row = connection.execute(
+            "select requirement_id from familiar_evidence_judgments"
+        ).fetchone()
+
+    assert plan_requirement["id"] == "r1"
+    assert tool_row["requirement_id"] == "r1"
+    assert judgment_row["requirement_id"] == "r1"
 
 
 def test_familiar_tool_call_trace_uses_public_scrubbed_arguments(
@@ -2539,3 +2621,93 @@ def test_execute_tool_and_validate_uses_compatibility_validation(
     )
 
     assert outcome.validation.status == "sufficient"
+
+
+def test_requirement_validation_outcome_deduplicates_accepted_hits() -> None:
+    accepted_hits_by_requirement: dict[str, list[RetrievedHit]] = {"r1": []}
+    partial_hits_by_requirement: dict[str, list[RetrievedHit]] = {"r1": []}
+    accepted_hit = hit(
+        rank=1,
+        subject="orc",
+        source_object_id="bestiary:orc-statline",
+    )
+    validation = evidence_validation.EvidenceValidationResult(
+        status="sufficient",
+        judgments=(),
+        accepted_hits=(accepted_hit, accepted_hit),
+    )
+
+    familiar_agent.record_requirement_validation_outcome(
+        accepted_hits_by_requirement,
+        partial_hits_by_requirement,
+        "r1",
+        validation,
+    )
+    familiar_agent.record_requirement_validation_outcome(
+        accepted_hits_by_requirement,
+        partial_hits_by_requirement,
+        "r1",
+        validation,
+    )
+
+    assert accepted_hits_by_requirement["r1"] == [accepted_hit]
+
+
+def test_accepted_evidence_retrieval_run_deduplicates_hits_before_persisting(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    thread = chat_service.chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="orc stats",
+        idempotency_key="send-agent-accepted-evidence-dedupe",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    research_run = chat_store.create_familiar_research_run(
+        config,
+        model_run_id=queued.model_run.id,
+        raw_query="orc stats",
+        resolved_query="orc statline",
+        intent="statline_lookup",
+        max_tool_rounds=4,
+    )
+    result = chat_store.SendChatResult(
+        thread=thread,
+        user_message=queued.user_message,
+        assistant_message=None,
+        model_run=queued.model_run,
+        citations=(),
+    )
+
+    retrieval_run_id = familiar_agent.record_accepted_evidence_retrieval_run(
+        config,
+        result=result,
+        research_run=research_run,
+        query="orc statline",
+        accepted_hits=(hit(rank=1, subject="orc"), hit(rank=2, subject="orc")),
+        diagnostics=diagnostics("sufficient"),
+        evidence_status="sufficient",
+    )
+
+    with open_connection(config.db_path) as connection:
+        persisted_hits = connection.execute(
+            """
+            select page_id, rank
+            from retrieval_hits
+            where retrieval_run_id = ?
+            """,
+            (retrieval_run_id,),
+        ).fetchall()
+        metadata = json.loads(
+            connection.execute(
+                "select metadata_json from retrieval_runs where id = ?",
+                (retrieval_run_id,),
+            ).fetchone()["metadata_json"]
+        )
+
+    assert [tuple(row) for row in persisted_hits] == [("bestiary:101", 1)]
+    assert metadata["selected_count"] == 1

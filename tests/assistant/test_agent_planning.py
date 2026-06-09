@@ -82,6 +82,23 @@ def test_parse_valid_research_plan_normalizes_and_round_trips() -> None:
     assert parsed.to_json() == valid_plan_payload()
 
 
+def test_parse_research_plan_accepts_short_provider_requirement_ids() -> None:
+    payload = valid_plan_payload()
+    payload["requirements"][0]["id"] = "r1"
+    payload["planned_actions"][0]["requirement_id"] = "r1"
+
+    parsed = agent_planning.parse_research_plan(
+        payload,
+        research_run_id="research-1",
+        plan_id="plan-1",
+        revision=1,
+        provider_call_id="call-plan",
+    )
+
+    assert parsed.requirements[0].id == "r1"
+    assert parsed.planned_actions[0].requirement_id == "r1"
+
+
 @pytest.mark.parametrize(
     ("mutator", "message"),
     (
@@ -361,6 +378,56 @@ def test_planning_tool_schema_is_strict_for_nested_objects() -> None:
     assert_object_is_strict(action_item)
     arguments_schema = action_item["properties"]["arguments"]
     assert_object_is_strict(arguments_schema)
+
+
+def test_planning_tool_schema_publishes_requirement_id_pattern() -> None:
+    schema = agent_planning.planning_tool_definition().parameters
+    requirement_item = schema["properties"]["requirements"]["items"]
+    action_item = schema["properties"]["planned_actions"]["items"]
+
+    assert requirement_item["properties"]["id"]["pattern"] == (
+        agent_planning.REQUIREMENT_ID_PATTERN
+    )
+    assert action_item["properties"]["requirement_id"]["pattern"] == (
+        agent_planning.REQUIREMENT_ID_PATTERN
+    )
+
+
+def test_planning_tool_schema_publishes_parser_bounds() -> None:
+    schema = agent_planning.planning_tool_definition().parameters
+    properties = schema["properties"]
+    requirement_array = properties["requirements"]
+    requirement_item = requirement_array["items"]
+    planned_action_array = properties["planned_actions"]
+    action_item = planned_action_array["items"]
+
+    assert properties["plan_summary"]["maxLength"] == (
+        agent_planning.MAX_PLAN_SUMMARY_CHARS
+    )
+    assert requirement_array["maxItems"] == 6
+    assert planned_action_array["maxItems"] == 4
+    assert requirement_item["properties"]["min_accepted_hits"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 6,
+    }
+    assert requirement_item["properties"]["object_type_hints"]["maxItems"] == 8
+    assert (
+        requirement_item["properties"]["subject"]["properties"]["include_terms"][
+            "maxItems"
+        ]
+        == agent_planning.MAX_TERMS
+    )
+    assert (
+        requirement_item["properties"]["required_terms"]["maxItems"]
+        == agent_planning.MAX_TERMS
+    )
+    assert (
+        action_item["properties"]["arguments"]["properties"]["include_terms"][
+            "maxItems"
+        ]
+        == agent_planning.MAX_TERMS
+    )
 
 
 def assert_object_is_strict(schema: object) -> None:
