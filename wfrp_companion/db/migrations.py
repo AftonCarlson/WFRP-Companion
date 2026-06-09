@@ -57,6 +57,8 @@ def apply_pending_migrations(db_path: Path) -> MigrationSummary:
                 continue
             apply_migration(connection, migration_id)
             applied.append(migration_id)
+        repair_familiar_research_plans_if_needed(connection)
+        repair_familiar_plan_dependent_tables_if_needed(connection)
         table_counts = collect_table_counts(connection)
 
     return MigrationSummary(
@@ -272,13 +274,9 @@ def apply_familiar_agent_research(connection: sqlite3.Connection) -> None:
 
 
 def apply_familiar_research_plans(connection: sqlite3.Connection) -> None:
-    execute_sql_script(
-        connection,
-        (
-            MIGRATION_DIR / f"{FAMILIAR_RESEARCH_PLANS_MIGRATION_ID}.sql"
-        ).read_text(encoding="utf-8"),
-    )
     rebuild_familiar_research_runs_if_needed(connection)
+    connection.execute(FAMILIAR_RESEARCH_PLANS_TABLE_SQL)
+    repair_familiar_research_plans_if_needed(connection)
     rebuild_familiar_tool_calls_if_needed(connection)
     rebuild_familiar_evidence_judgments_if_needed(connection)
     create_familiar_research_plan_indexes(connection)
@@ -692,6 +690,182 @@ def rebuild_familiar_tool_calls_if_needed(connection: sqlite3.Connection) -> Non
         """
     )
     connection.execute("drop table familiar_tool_calls_before_0008")
+
+
+def repair_familiar_research_plans_if_needed(connection: sqlite3.Connection) -> None:
+    if not table_exists(connection, "familiar_research_plans"):
+        return
+    if "familiar_research_runs_before_0008" not in table_sql(
+        connection,
+        "familiar_research_plans",
+    ):
+        return
+
+    drop_familiar_research_indexes(connection)
+    connection.execute(
+        "alter table familiar_research_plans rename to familiar_research_plans_bad_fk"
+    )
+    connection.execute(FAMILIAR_RESEARCH_PLANS_TABLE_SQL)
+    connection.execute(
+        """
+        insert into familiar_research_plans (
+          id,
+          research_run_id,
+          revision,
+          status,
+          intent,
+          plan_summary,
+          subject_json,
+          requirements_json,
+          planned_actions_json,
+          provider_call_id,
+          validation_errors_json,
+          created_at,
+          updated_at
+        )
+        select
+          id,
+          research_run_id,
+          revision,
+          status,
+          intent,
+          plan_summary,
+          subject_json,
+          requirements_json,
+          planned_actions_json,
+          provider_call_id,
+          validation_errors_json,
+          created_at,
+          updated_at
+        from familiar_research_plans_bad_fk
+        """
+    )
+    connection.execute("drop table familiar_research_plans_bad_fk")
+    if (
+        "research_plan_id" in column_names(connection, "familiar_tool_calls")
+        and "research_plan_id"
+        in column_names(connection, "familiar_evidence_judgments")
+    ):
+        create_familiar_research_plan_indexes(connection)
+
+
+def repair_familiar_plan_dependent_tables_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    repaired = False
+    if "familiar_research_plans_bad_fk" in table_sql(
+        connection,
+        "familiar_tool_calls",
+    ):
+        drop_familiar_research_indexes(connection)
+        connection.execute(
+            "alter table familiar_tool_calls rename to familiar_tool_calls_bad_fk"
+        )
+        connection.execute(FAMILIAR_TOOL_CALLS_TABLE_SQL)
+        connection.execute(
+            """
+            insert into familiar_tool_calls (
+              id,
+              research_run_id,
+              research_plan_id,
+              requirement_id,
+              purpose,
+              step_number,
+              call_index,
+              provider_call_id,
+              tool_name,
+              arguments_json,
+              argument_hash,
+              status,
+              retrieval_run_id,
+              output_summary_json,
+              error_code,
+              error_message,
+              created_at,
+              updated_at,
+              completed_at
+            )
+            select
+              id,
+              research_run_id,
+              research_plan_id,
+              requirement_id,
+              purpose,
+              step_number,
+              call_index,
+              provider_call_id,
+              tool_name,
+              arguments_json,
+              argument_hash,
+              status,
+              retrieval_run_id,
+              output_summary_json,
+              error_code,
+              error_message,
+              created_at,
+              updated_at,
+              completed_at
+            from familiar_tool_calls_bad_fk
+            """
+        )
+        connection.execute("drop table familiar_tool_calls_bad_fk")
+        repaired = True
+    if "familiar_research_plans_bad_fk" in table_sql(
+        connection,
+        "familiar_evidence_judgments",
+    ):
+        drop_familiar_research_indexes(connection)
+        connection.execute(
+            """
+            alter table familiar_evidence_judgments
+            rename to familiar_evidence_judgments_bad_fk
+            """
+        )
+        connection.execute(FAMILIAR_EVIDENCE_JUDGMENTS_TABLE_SQL)
+        connection.execute(
+            """
+            insert into familiar_evidence_judgments (
+              id,
+              research_run_id,
+              research_plan_id,
+              requirement_id,
+              retrieval_run_id,
+              retrieval_hit_id,
+              source_object_id,
+              book_id,
+              printed_page_label,
+              requirement_type,
+              status,
+              reason_code,
+              reasons_json,
+              subject_constraint_json,
+              constraint_status,
+              created_at
+            )
+            select
+              id,
+              research_run_id,
+              research_plan_id,
+              requirement_id,
+              retrieval_run_id,
+              retrieval_hit_id,
+              source_object_id,
+              book_id,
+              printed_page_label,
+              requirement_type,
+              status,
+              reason_code,
+              reasons_json,
+              subject_constraint_json,
+              constraint_status,
+              created_at
+            from familiar_evidence_judgments_bad_fk
+            """
+        )
+        connection.execute("drop table familiar_evidence_judgments_bad_fk")
+        repaired = True
+    if repaired:
+        create_familiar_research_plan_indexes(connection)
 
 
 def rebuild_familiar_evidence_judgments_if_needed(
@@ -1164,6 +1338,29 @@ create table familiar_tool_calls (
   check(call_index >= 0),
   check(length(tool_name) > 0),
   check(length(argument_hash) > 0)
+)
+"""
+
+
+FAMILIAR_RESEARCH_PLANS_TABLE_SQL = """
+create table if not exists familiar_research_plans (
+  id text primary key,
+  research_run_id text not null references familiar_research_runs(id) on delete cascade,
+  revision integer not null,
+  status text not null,
+  intent text not null,
+  plan_summary text not null,
+  subject_json text not null default '{}',
+  requirements_json text not null default '[]',
+  planned_actions_json text not null default '[]',
+  provider_call_id text,
+  validation_errors_json text not null default '[]',
+  created_at text not null,
+  updated_at text not null,
+  check(revision >= 1),
+  check(status in ('proposed', 'accepted', 'rejected', 'superseded')),
+  check(length(intent) > 0),
+  check(length(plan_summary) > 0)
 )
 """
 

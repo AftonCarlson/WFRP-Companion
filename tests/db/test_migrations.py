@@ -496,6 +496,14 @@ def test_familiar_research_plans_migration_rebuilds_agent_tables(
         run_sql = migrations.table_sql(connection, "familiar_research_runs")
         assert "deciding" in run_sql
         assert migrations.table_exists(connection, "familiar_research_plans")
+        plan_foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_research_plans)"
+        ).fetchall()
+        assert any(row["table"] == "familiar_research_runs" for row in plan_foreign_keys)
+        assert "familiar_research_runs_before_0008" not in migrations.table_sql(
+            connection,
+            "familiar_research_plans",
+        )
         assert "research_plan_id" in migrations.column_names(
             connection,
             "familiar_tool_calls",
@@ -525,6 +533,69 @@ def test_familiar_research_plans_migration_rebuilds_agent_tables(
                 ("0008_familiar_research_plans",),
             ).fetchone()
             is not None
+        )
+
+
+def test_familiar_research_plan_migration_repairs_temporary_fk_target(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-agent-bad-fk.sqlite"
+    create_legacy_phase6_database(db_path)
+    with open_connection(db_path) as connection:
+        migrations.repair_familiar_research_plans_if_needed(connection)
+        for migration_id in (
+            "0001_phase_7_source_objects",
+            "0002_source_map_retrieval",
+            "0003_vector_retrieval",
+            "0004_structured_evidence",
+            "0005_page_label_calibration",
+            "0006_embedding_provider_identity",
+            "0007_familiar_agent_research",
+        ):
+            apply_migration(connection, migration_id)
+
+        connection.execute(migrations.FAMILIAR_RESEARCH_PLANS_TABLE_SQL)
+        migrations.rebuild_familiar_research_runs_if_needed(connection)
+        migrations.rebuild_familiar_tool_calls_if_needed(connection)
+        migrations.rebuild_familiar_evidence_judgments_if_needed(connection)
+
+        assert "familiar_research_runs_before_0008" in migrations.table_sql(
+            connection,
+            "familiar_research_plans",
+        )
+        assert "familiar_research_plans_bad_fk" not in migrations.table_sql(
+            connection,
+            "familiar_tool_calls",
+        )
+
+        migrations.repair_familiar_research_plans_if_needed(connection)
+        migrations.repair_familiar_plan_dependent_tables_if_needed(connection)
+
+        plan_foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_research_plans)"
+        ).fetchall()
+        tool_foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_tool_calls)"
+        ).fetchall()
+        judgment_foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_evidence_judgments)"
+        ).fetchall()
+        assert any(row["table"] == "familiar_research_runs" for row in plan_foreign_keys)
+        assert any(row["table"] == "familiar_research_plans" for row in tool_foreign_keys)
+        assert any(
+            row["table"] == "familiar_research_plans" for row in judgment_foreign_keys
+        )
+        assert "familiar_research_runs_before_0008" not in migrations.table_sql(
+            connection,
+            "familiar_research_plans",
+        )
+        assert "familiar_research_plans_bad_fk" not in migrations.table_sql(
+            connection,
+            "familiar_tool_calls",
+        )
+        assert "familiar_research_plans_bad_fk" not in migrations.table_sql(
+            connection,
+            "familiar_evidence_judgments",
         )
 
 
