@@ -69,6 +69,10 @@ def test_config_from_args_preserves_openai_runtime_settings(
     monkeypatch.setenv("WFRP_CHAT_CONTEXT_HIT_LIMIT", "2")
     monkeypatch.setenv("WFRP_CHAT_CONTEXT_CHAR_LIMIT", "300")
     monkeypatch.setenv("WFRP_CHAT_CONTEXT_WINDOW_CHARS", "100")
+    monkeypatch.setenv("WFRP_CHAT_PROMPT_HISTORY_TURN_LIMIT", "5")
+    monkeypatch.setenv("WFRP_CHAT_PROMPT_HISTORY_CHAR_LIMIT", "700")
+    monkeypatch.setenv("WFRP_CHAT_RETRIEVAL_HISTORY_TURN_LIMIT", "3")
+    monkeypatch.setenv("WFRP_CHAT_RETRIEVAL_QUERY_CHAR_LIMIT", "450")
 
     config = serve_api.config_from_args(
         serve_api.build_parser().parse_args(["--data-dir", str(tmp_path / "data")])
@@ -80,6 +84,10 @@ def test_config_from_args_preserves_openai_runtime_settings(
     assert config.chat_context_hit_limit == 2
     assert config.chat_context_char_limit == 300
     assert config.chat_context_window_chars == 100
+    assert config.chat_prompt_history_turn_limit == 5
+    assert config.chat_prompt_history_char_limit == 700
+    assert config.chat_retrieval_history_turn_limit == 3
+    assert config.chat_retrieval_query_char_limit == 450
 
 
 def test_run_uvicorn_delegates_to_uvicorn_run(monkeypatch) -> None:

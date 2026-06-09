@@ -66,6 +66,7 @@ class OpenAIProvider:
                 for message in messages
             ],
             stream=True,
+            store=False,
             extra_headers={"X-Client-Request-Id": request_id},
         )
         for event in stream:

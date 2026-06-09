@@ -266,6 +266,61 @@ Phase 7 PR10 adds printed page-label calibration/backfill:
 - Label lookup is a display/citation layer after retrieval selection; it does
   not expand source scope and cannot introduce unchecked-book evidence.
 
+Phase 7 PR11 adds Familiar prompt history and history-aware retrieval planning:
+
+- `wfrp_companion/assistant/conversation_context.py` builds the app-owned
+  conversation context for each Familiar run. It loads only prior completed
+  logical turns in the same thread, applies configurable turn/character
+  limits, and returns separate prompt-history and retrieval-query views.
+- Provider-side memory remains disabled. `OpenAIProvider` sends Responses API
+  requests with `store=False` and does not use provider conversation IDs or
+  `previous_response_id`; SQLite chat messages/model runs remain the durable
+  source of truth.
+- Chat history is **not evidence**. It may resolve pronouns or follow-up intent,
+  but factual WFRP claims still have to come from the current checked-book
+  retrieved evidence and citations.
+- Self-contained retrieval queries stay unchanged. Only follow-up/reference
+  queries add compact salient chat terms to the retrieval query, and the raw
+  user query is still stored separately from the planned retrieval query in
+  `retrieval_runs.metadata_json`. Familiar does not copy full prior assistant
+  answers into retrieval planning; failure-style answers that say retrieved
+  evidence was missing are skipped as retrieval-query context so wrong-source
+  detours do not snowball.
+- Familiar still resolves enabled books from the thread's active source set at
+  run time. Source maps, candidate generation, reranking, prompt context,
+  retrieval metadata, and citations remain constrained to that checked-book
+  snapshot.
+- The chat read model now collapses retries into one visible logical turn:
+  completed retries win, active retries are visible over failed attempts, and
+  otherwise the newest failed run is shown.
+- The browser history drawer loads saved threads, restores logical turns, and
+  disables thread switching while a stream is active.
+
+Follow-up stat/table retrieval repair on 2026-06-06 tightened the current
+structured-evidence path:
+
+- Structural query words such as `stat`, `block`, `table`, and `chart` are no
+  longer edit-distance expanded into unrelated source-map aliases. This keeps
+  `stat block` from matching `black` while preserving ordinary plural/OCR
+  variants for non-structural terms.
+- Source-object extraction now recognizes WFRP-style OCR stat profiles with
+  pipe/percent main and secondary profile rows, plus range charts such as the
+  Core Rules hit-location table. Range charts get chart-searchable table and
+  table-row text, and the hit-location OCR title is normalized for retrieval.
+- The extractor version is `structured-evidence-v4`; existing local databases
+  must rerun `tools/extract_source_objects.py`, then rebuild source-object FTS
+  and source maps, to pick up the repaired table/stat objects.
+- Deterministic reranking now gives accepted typed table/chart and stat/profile
+  evidence a structural-intent boost, so complete source objects outrank prose
+  that merely mentions the requested table or stat block. Structural stat/table
+  requests must still match the named entity terms: if the user asks for the
+  `Black Knight` stat block, `Black Orc Statistics` is rejected even though it
+  matches `black` and has a stat profile.
+- Inherited chapter headings and repeated running headers can still help route
+  lexical candidates, but they cannot be the only match that admits a
+  multi-term entity result into prompt context. This prevents unrelated
+  subsections in a chapter from supplying wrong stat-like evidence.
+
 ## Answer Contract
 
 [coverage: high]
@@ -303,6 +358,12 @@ books and section-aware evidence labels such as object title, heading path, and
 printed page/page-range labels. Unchecked books are explicitly out of scope in
 the system prompt.
 
+Phase 7 PR11 prompt construction can include bounded prior chat messages before
+the current question. The system prompt explicitly says that recent chat is
+only for conversational references and user intent; it is not retrieved
+rules/evidence. Current retrieved context remains the only basis for cited WFRP
+claims.
+
 ## Streaming Provider Loop
 
 [coverage: high]
@@ -320,6 +381,11 @@ Familiar streams output through the backend-owned endpoint
 `wfrp_companion/assistant/provider.py` wraps the OpenAI Responses API and maps
 OpenAI text delta/completed events into app-owned events. The API key is read
 from `OPENAI_API_KEY` on the backend only.
+
+If a client disconnects after a run has been accepted but before completion,
+the backend marks the active `model_runs` row as `failed` with
+`stream_interrupted` instead of leaving it stuck in `queued`, `retrieving`, or
+`calling_model`.
 
 The Familiar frontend renders streamed assistant text through a safe local
 markdown renderer for common model output structures: headings, paragraphs,

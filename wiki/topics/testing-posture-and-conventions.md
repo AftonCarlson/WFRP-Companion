@@ -14,7 +14,8 @@ retrieval, Phase 7 PR4 retrieval-module split, and Phase 7 PR5 durable
 source-map/profile ownership, Phase 7 PR6 source-object search backfill, and
 Phase 7 PR7 retrieval rank fusion/reranker protocol, Phase 7 PR8 local
 vector retrieval channel, Phase 7 PR9 structured source-object evidence, and
-Phase 7 PR10 printed page-label calibration/backfill.
+Phase 7 PR10 printed page-label calibration/backfill, and Phase 7 PR11
+Familiar prompt history/history-aware retrieval planning.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -94,6 +95,7 @@ Current focused test files:
 - `tests/api/test_source_set_routes.py`
 - `tests/assistant/test_chat_service.py`
 - `tests/assistant/test_chat_store.py`
+- `tests/assistant/test_conversation_context.py`
 - `tests/assistant/test_prompts.py`
 - `tests/assistant/test_provider.py`
 - `tests/assistant/test_retrieval.py`
@@ -182,15 +184,29 @@ Structured-evidence tests cover `glossary_entry` and `glossary_definition`
 schema/migration support, table/table-row extraction and parent links,
 stat/profile extraction and links, index/glossary/cross-reference extraction,
 extractor-version invalidation, duplicate same-page table-row ID prevention,
-derived source-object links and count updates, table-row citations resolving to
-parent table page ranges, stat-block retrieval resolving to complete profiles,
-index routing to deterministic target sections or page-only target pages,
-glossary evidence retaining definition context without fake disjoint page
-ranges, and link traversal refusing unchecked-book targets. Page-label tests
-cover offset-anchor calibration, roman/front-matter preservation, snapshot
-drift anchor reuse, manual-review conflict suppression, exact/search
-source-object/linked-page citation labels, safe count-only CLI failure output,
-and reloaded chat citation labels/ranges.
+WFRP-style pipe/percent stat profiles, range-chart table extraction with OCR
+title normalization, derived source-object links and count updates, table-row
+citations resolving to parent table page ranges, stat-block retrieval resolving
+to complete profiles, structural query terms refusing unsafe fuzzy expansion,
+typed chart/table evidence outranking prose mentions, heading/running-header
+only entity matches being rejected, index routing to deterministic target
+sections or page-only target pages, glossary evidence retaining definition
+context without fake disjoint page ranges, link traversal refusing unchecked-book
+targets, duplicate equivalent rule-section ID avoidance, and safe historical
+retrieval-hit detachment when source objects are replaced. Page-label tests
+cover offset-anchor calibration,
+roman/front-matter preservation, snapshot drift anchor reuse, manual-review
+conflict suppression, exact/search source-object/linked-page citation labels,
+safe count-only CLI failure output, and reloaded chat citation labels/ranges.
+Conversation-context tests cover
+bounded prior completed-turn selection, failed/active/current-message
+exclusion, retry anchoring before the original user message, prompt-history
+budgeting, self-contained retrieval queries staying unchanged, follow-up
+retrieval-query contextualization and caps, compact salient history terms,
+assistant failure-answer filtering for retrieval planning, disabled history
+limits, provider `store=False`, prompt history/evidence separation, retrieval
+metadata for planned queries, stream-interruption cleanup, and logical retry
+collapse in chat API/frontend read models.
 
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
@@ -202,9 +218,9 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-06 reported 436 tests
+The latest full backend verification command on 2026-06-06 reported 469 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
-entrypoints. The latest frontend verification reported 127 Vitest tests
+entrypoints. The latest frontend verification reported 131 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful
 production build, and two Playwright browser e2e tests passing.
 

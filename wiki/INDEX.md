@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-06 Page-label calibration/backfill
+Last compiled: 2026-06-06 Familiar conversation context
 
 ## Topics
 

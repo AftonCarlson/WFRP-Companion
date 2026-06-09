@@ -4,7 +4,13 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from wfrp_companion.assistant import chat_store, prompts, provider, retrieval
+from wfrp_companion.assistant import (
+    chat_store,
+    conversation_context,
+    prompts,
+    provider,
+    retrieval,
+)
 from wfrp_companion.config import AppConfig
 
 
@@ -127,10 +133,16 @@ def stream_queued_result(
             from_statuses=("queued",),
             to_status="retrieving",
         )
+        conversation = conversation_context.build_conversation_context(
+            config,
+            thread_id=result.thread.id,
+            current_user_message_id=result.user_message.id,
+            current_user_content=content,
+        )
         context = retrieval.retrieve_context(
             config,
             result.thread.id,
-            content,
+            conversation.retrieval_query,
             hit_limit=config.chat_context_hit_limit,
             total_char_limit=config.chat_context_char_limit,
             window_chars=config.chat_context_window_chars,
@@ -145,6 +157,10 @@ def stream_queued_result(
             source_book_ids=context.source_book_ids,
             source_map=context.source_map,
             candidates=context.candidates,
+            retrieval_query=conversation.retrieval_query,
+            history_message_ids=conversation.history_message_ids,
+            history_turn_count=conversation.history_turn_count,
+            history_strategy=conversation.history_strategy,
         )
         retrieved = chat_store.attach_retrieval_run(
             config,
@@ -164,7 +180,7 @@ def stream_queued_result(
             question=content,
             hits=context.hits,
             source_map=context.source_map,
-            recent_messages=(),
+            recent_messages=conversation.prompt_messages,
             context_char_limit=config.chat_context_char_limit,
         )
         provider_messages = tuple(
@@ -205,6 +221,14 @@ def stream_queued_result(
             output_tokens=output_tokens,
         )
         yield event_from_result("completed", completed)
+    except GeneratorExit:
+        chat_store.fail_model_run(
+            config,
+            result.model_run.id,
+            error_code="stream_interrupted",
+            error_message="Chat stream ended before the model run completed.",
+        )
+        raise
     except provider.ProviderUnavailableError as error:
         failed = chat_store.fail_model_run(
             config,

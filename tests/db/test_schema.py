@@ -162,6 +162,10 @@ def test_load_config_uses_local_defaults(tmp_path: Path) -> None:
     assert config.openai_model == "gpt-5.4-mini"
     assert config.openai_timeout_seconds == 60
     assert config.chat_context_hit_limit == 6
+    assert config.chat_prompt_history_turn_limit == 6
+    assert config.chat_prompt_history_char_limit == 2500
+    assert config.chat_retrieval_history_turn_limit == 3
+    assert config.chat_retrieval_query_char_limit == 900
     assert config.embedding_provider == "disabled"
     assert config.embedding_model == "local-hash-v1"
     assert config.embedding_dimensions == 64
@@ -180,6 +184,10 @@ def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
             "WFRP_CHAT_CONTEXT_HIT_LIMIT": "3",
             "WFRP_CHAT_CONTEXT_CHAR_LIMIT": "1200",
             "WFRP_CHAT_CONTEXT_WINDOW_CHARS": "400",
+            "WFRP_CHAT_PROMPT_HISTORY_TURN_LIMIT": "4",
+            "WFRP_CHAT_PROMPT_HISTORY_CHAR_LIMIT": "800",
+            "WFRP_CHAT_RETRIEVAL_HISTORY_TURN_LIMIT": "2",
+            "WFRP_CHAT_RETRIEVAL_QUERY_CHAR_LIMIT": "500",
             "WFRP_EMBEDDING_PROVIDER": "local-hash",
             "WFRP_EMBEDDING_MODEL": "local-hash-test",
             "WFRP_EMBEDDING_DIMENSIONS": "16",
@@ -197,6 +205,10 @@ def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
     assert config.chat_context_hit_limit == 3
     assert config.chat_context_char_limit == 1200
     assert config.chat_context_window_chars == 400
+    assert config.chat_prompt_history_turn_limit == 4
+    assert config.chat_prompt_history_char_limit == 800
+    assert config.chat_retrieval_history_turn_limit == 2
+    assert config.chat_retrieval_query_char_limit == 500
     assert config.embedding_provider == "local-hash"
     assert config.embedding_model == "local-hash-test"
     assert config.embedding_dimensions == 16

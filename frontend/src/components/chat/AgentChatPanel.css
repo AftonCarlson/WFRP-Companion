@@ -47,6 +47,34 @@
   line-height: 1.4;
 }
 
+.agent-chat__history-list {
+  display: grid;
+  gap: 5px;
+  max-height: min(260px, 55vh);
+  overflow-y: auto;
+}
+
+.agent-chat__history-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 7px;
+  color: var(--color-text);
+  background: #10171a;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  text-align: left;
+}
+
+.agent-chat__history-item span {
+  color: var(--color-muted);
+  font-size: 0.76rem;
+}
+
+.agent-chat__history-item:disabled {
+  color: var(--color-muted);
+}
+
 .agent-chat__transcript {
   min-height: 0;
   overflow-y: auto;

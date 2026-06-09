@@ -370,6 +370,8 @@ def create_provider_unavailable_retry(
         failed_run = model_run_row(connection, model_run_id)
         if failed_run["status"] != "failed" or failed_run["user_message_id"] is None:
             raise ModelRunNotRetryableError(f"Model run is not retryable: {model_run_id}")
+        if has_active_or_completed_logical_successor(connection, failed_run):
+            raise ModelRunNotRetryableError(f"Model run is not retryable: {model_run_id}")
 
         now = utc_timestamp()
         retry_id = new_id("run")
@@ -439,6 +441,8 @@ def create_queued_retry(
         ).fetchone()
         if active_retry is not None:
             return result_for_model_run(connection, active_retry["id"])
+        if has_active_or_completed_logical_successor(connection, failed_run):
+            raise ModelRunNotRetryableError(f"Model run is not retryable: {model_run_id}")
 
         now = utc_timestamp()
         retry_id = new_id("run")
@@ -623,6 +627,10 @@ def record_retrieval_run(
     source_book_ids: Sequence[str] = (),
     source_map: Sequence[object] = (),
     candidates: Sequence[str] = (),
+    retrieval_query: str | None = None,
+    history_message_ids: Sequence[str] = (),
+    history_turn_count: int = 0,
+    history_strategy: str = "none",
 ) -> str:
     retrieval_run_id = new_id("retrieval")
     now = utc_timestamp()
@@ -630,6 +638,10 @@ def record_retrieval_run(
         source_book_ids=source_book_ids,
         source_map=source_map,
         candidates=candidates,
+        retrieval_query=retrieval_query,
+        history_message_ids=history_message_ids,
+        history_turn_count=history_turn_count,
+        history_strategy=history_strategy,
     )
     with initialize_database(config.db_path) as connection:
         thread_row(connection, thread_id)
@@ -755,12 +767,25 @@ def retrieval_run_metadata(
     source_book_ids: Sequence[str],
     source_map: Sequence[object],
     candidates: Sequence[str],
+    retrieval_query: str | None = None,
+    history_message_ids: Sequence[str] = (),
+    history_turn_count: int = 0,
+    history_strategy: str = "none",
 ) -> dict[str, object]:
-    return {
+    metadata: dict[str, object] = {
         "source_book_ids": list(source_book_ids),
         "source_map": [source_map_entry_to_metadata(entry) for entry in source_map],
         "candidates": list(candidates),
     }
+    if retrieval_query is not None:
+        metadata["retrieval_query"] = retrieval_query
+    if history_message_ids:
+        metadata["history_message_ids"] = list(history_message_ids)
+    if history_turn_count:
+        metadata["history_turn_count"] = history_turn_count
+    if history_strategy != "none":
+        metadata["history_strategy"] = history_strategy
+    return metadata
 
 
 def source_map_entry_to_metadata(entry: object) -> dict[str, object]:
@@ -871,7 +896,10 @@ def result_for_model_run(
         thread=thread_from_row(thread_row(connection, row["thread_id"])),
         user_message=message_from_row(user_row),
         assistant_message=None if assistant_row is None else message_from_row(assistant_row),
-        model_run=model_run_from_row(row),
+        model_run=model_run_from_row(
+            row,
+            retryable=is_model_run_retryable(connection, row),
+        ),
         citations=citations_for_model_run(connection, row),
     )
 
@@ -890,11 +918,26 @@ def load_turns_from_connection(
         """,
         (thread_id,),
     ).fetchall()
-    turns: list[ChatTurn] = []
+    selected_rows: dict[str, sqlite3.Row] = {}
+    selected_user_rows: dict[str, sqlite3.Row] = {}
+    user_order: list[str] = []
     for row in rows:
         user_row = message_row(connection, row["user_message_id"])
         if user_row is None:
             continue
+        user_message_id = row["user_message_id"]
+        if user_message_id not in selected_rows:
+            selected_rows[user_message_id] = row
+            selected_user_rows[user_message_id] = user_row
+            user_order.append(user_message_id)
+            continue
+        if logical_turn_key(row) >= logical_turn_key(selected_rows[user_message_id]):
+            selected_rows[user_message_id] = row
+            selected_user_rows[user_message_id] = user_row
+    turns: list[ChatTurn] = []
+    for user_message_id in user_order:
+        row = selected_rows[user_message_id]
+        user_row = selected_user_rows[user_message_id]
         assistant_row = (
             None
             if row["assistant_message_id"] is None
@@ -906,11 +949,136 @@ def load_turns_from_connection(
                 assistant_message=None
                 if assistant_row is None
                 else message_from_row(assistant_row),
-                model_run=model_run_from_row(row),
+                model_run=model_run_from_row(
+                    row,
+                    retryable=is_model_run_retryable(connection, row),
+                ),
                 citations=citations_for_model_run(connection, row),
             )
         )
     return tuple(turns)
+
+
+def logical_turn_key(row: sqlite3.Row) -> tuple[int, str, str]:
+    status = row["status"]
+    if status == "completed":
+        return (3, row["completed_at"] or row["updated_at"], row["id"])
+    if status in {"queued", "retrieving", "calling_model"}:
+        return (2, row["created_at"], row["id"])
+    return (1, row["created_at"], row["id"])
+
+
+def load_completed_turn_messages_before_user_message(
+    connection: sqlite3.Connection,
+    *,
+    thread_id: str,
+    before_user_message_id: str,
+    max_turns: int,
+) -> tuple[ChatMessage, ...]:
+    if max_turns <= 0:
+        return ()
+    current_user = message_row(connection, before_user_message_id)
+    if current_user is None:
+        raise ModelRunNotRetryableError(
+            f"Chat message not found: {before_user_message_id}"
+        )
+    rows = connection.execute(
+        """
+        select
+          user_msg.id as user_message_id,
+          user_msg.thread_id as user_thread_id,
+          user_msg.content as user_content,
+          user_msg.created_at as user_created_at,
+          assistant_msg.id as assistant_message_id,
+          assistant_msg.thread_id as assistant_thread_id,
+          assistant_msg.content as assistant_content,
+          assistant_msg.created_at as assistant_created_at
+        from model_runs
+        join chat_messages as user_msg
+          on user_msg.id = model_runs.user_message_id
+        join chat_messages as assistant_msg
+          on assistant_msg.id = model_runs.assistant_message_id
+        where model_runs.thread_id = ?
+          and model_runs.status = 'completed'
+          and model_runs.user_message_id is not null
+          and model_runs.assistant_message_id is not null
+          and model_runs.completed_at is not null
+          and (
+            user_msg.created_at < ?
+            or (
+              user_msg.created_at = ?
+              and user_msg.id < ?
+            )
+          )
+          and (
+            assistant_msg.created_at < ?
+            or (
+              assistant_msg.created_at = ?
+              and assistant_msg.id < ?
+            )
+          )
+          and not exists (
+            select 1
+            from model_runs as newer_completed
+            join chat_messages as newer_assistant_msg
+              on newer_assistant_msg.id = newer_completed.assistant_message_id
+            where newer_completed.thread_id = model_runs.thread_id
+              and newer_completed.user_message_id = model_runs.user_message_id
+              and newer_completed.status = 'completed'
+              and newer_completed.completed_at is not null
+              and (
+                newer_assistant_msg.created_at < ?
+                or (
+                  newer_assistant_msg.created_at = ?
+                  and newer_assistant_msg.id < ?
+                )
+              )
+              and (
+                newer_completed.completed_at > model_runs.completed_at
+                or (
+                  newer_completed.completed_at = model_runs.completed_at
+                  and newer_completed.id > model_runs.id
+                )
+              )
+          )
+        order by user_msg.created_at desc, user_msg.id desc
+        limit ?
+        """,
+        (
+            thread_id,
+            current_user["created_at"],
+            current_user["created_at"],
+            before_user_message_id,
+            current_user["created_at"],
+            current_user["created_at"],
+            before_user_message_id,
+            current_user["created_at"],
+            current_user["created_at"],
+            before_user_message_id,
+            max_turns,
+        ),
+    ).fetchall()
+    messages: list[ChatMessage] = []
+    for row in reversed(rows):
+        messages.append(
+            ChatMessage(
+                id=row["user_message_id"],
+                thread_id=row["user_thread_id"],
+                role="user",
+                content=row["user_content"],
+                created_at=row["user_created_at"],
+            )
+        )
+        messages.append(
+            ChatMessage(
+                id=row["assistant_message_id"],
+                thread_id=row["assistant_thread_id"],
+                role="assistant",
+                content=row["assistant_content"],
+                created_at=row["assistant_created_at"],
+            )
+        )
+    return tuple(messages)
 
 
 def citations_for_model_run(
@@ -1047,7 +1215,33 @@ def message_from_row(row: sqlite3.Row) -> ChatMessage:
     )
 
 
-def model_run_from_row(row: sqlite3.Row) -> ModelRun:
+def is_model_run_retryable(connection: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    if row["status"] != "failed" or row["user_message_id"] is None:
+        return False
+    return not has_active_or_completed_logical_successor(connection, row)
+
+
+def has_active_or_completed_logical_successor(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> bool:
+    if row["user_message_id"] is None:
+        return False
+    successor = connection.execute(
+        """
+        select 1
+        from model_runs
+        where user_message_id = ?
+          and id <> ?
+          and status in ('queued', 'retrieving', 'calling_model', 'completed')
+        limit 1
+        """,
+        (row["user_message_id"], row["id"]),
+    ).fetchone()
+    return successor is not None
+
+
+def model_run_from_row(row: sqlite3.Row, *, retryable: bool | None = None) -> ModelRun:
     return ModelRun(
         id=row["id"],
         thread_id=row["thread_id"],
@@ -1063,5 +1257,5 @@ def model_run_from_row(row: sqlite3.Row) -> ModelRun:
         error_message=row["error_message"],
         input_tokens=row["input_tokens"],
         output_tokens=row["output_tokens"],
-        retryable=row["status"] == "failed",
+        retryable=row["status"] == "failed" if retryable is None else retryable,
     )

@@ -1,5 +1,95 @@
 # Wiki Compile Log
 
+## 2026-06-06 Follow-Up Retrieval Hang Repair
+
+- Debugged a live Familiar turn where `aucassin is his name` appeared to hang.
+  The backend eventually completed, but retrieval spent about 50 seconds before
+  the model call because the history-aware planner expanded the short
+  correction into a long query containing the previous assistant's wrong
+  Black Orc/Career Compendium detour.
+- Changed follow-up retrieval planning to use compact salient chat terms and
+  skip failure-style assistant answers as retrieval-query context. The raw
+  user message is still preserved separately in retrieval metadata.
+- Tightened structural stat/table reranking so lexical candidates must match
+  the named entity terms, not just object words like `stat block`. Typed
+  stat/profile objects now outrank phrase-only sections for explicit stat
+  requests, while table-row and chart retrieval stay covered.
+- Stream interruption during an active Familiar run now marks the model run
+  `failed` with `stream_interrupted` instead of leaving a stale `retrieving`
+  run behind.
+- Live checks after the fix reduced the Aucassin follow-up retrieval shape to
+  compact Barony-scoped candidates, put the Barony Black Knight profile ahead
+  of Black Orc/generic career stats, kept Gor Statistics first for Gors, and
+  kept the Core Rules Hit Location table first for hit-location chart queries.
+- Verification: `ruff check .` passed; the full backend coverage gate reported
+  469 tests passing with one existing Starlette/httpx deprecation warning and
+  100.00% coverage.
+
+## 2026-06-06 Stat/Table Retrieval Repair
+
+- Repaired Familiar stat-block/table retrieval after live QA showed missing
+  Gor stats, missing hit-location chart output, and wrong stat-ish Black
+  Knight context.
+- Blocked structural query terms such as `block`, `stat`, `table`, and
+  `chart` from fuzzy source-map expansion, preventing `stat block` queries
+  from drifting into `black` results.
+- Expanded deterministic source-object extraction for WFRP-style OCR layouts:
+  pipe/percent stat profiles with main/secondary rows, range charts such as
+  hit-location tables, OCR-normalized `Hit Location` table titles, and
+  chart-searchable table/table-row text. The extractor version is now
+  `structured-evidence-v4`.
+- Updated deterministic reranking so table/chart and stat/profile requests get
+  typed-evidence boosts after semantic acceptance, and inherited chapter
+  headings/running headers can route candidates but cannot be the only reason
+  multi-term entity evidence enters prompt context.
+- Local maintenance rebuilt source objects for all 26 books with zero failures,
+  refreshed source-object FTS/source maps, and left all 26 books indexed with
+  current source maps. Live retrieval now returns `Old World Bestiary` Gor
+  Statistics first for `give me the stat block for gors`, returns the Core
+  Rules `Hit Location` table first for `can you give me the hit location
+  chart`, and no longer includes the p45/p47 unrelated Black Knight
+  wrong-stat sections.
+- Verification run for this repair: full Python tests reported 461 tests
+  passing with one existing Starlette/httpx deprecation warning and 100.00%
+  coverage; `ruff check .` passed.
+
+## 2026-06-06 Familiar Conversation Context
+
+- Added bounded app-owned conversation context for Familiar in
+  `wfrp_companion/assistant/conversation_context.py`. Prompt history now uses
+  only prior completed logical turns from the same thread, while failed,
+  active, and current user messages are excluded.
+- Added history-aware retrieval planning for follow-up/reference-resolution
+  queries. Self-contained queries stay unchanged; follow-ups store the raw user
+  message separately from the planned retrieval query and history metadata in
+  `retrieval_runs.metadata_json`.
+- Kept chat history out of the evidence layer. Recent chat can clarify user
+  intent, but source maps, candidates, reranking, prompt evidence, metadata,
+  and citations remain scoped to the current checked-book snapshot.
+- Disabled provider-side persistence by sending OpenAI Responses API calls with
+  `store=False` and no provider conversation chaining.
+- Updated the chat read model and frontend history drawer so saved threads load
+  logical turns, successful retries replace failed visible turns, and streaming
+  updates target the correct `model_run.id`.
+- Independent review found edge cases in prompt-history turn limits, retrieval
+  history metadata, stale failed-run retryability after completed retries,
+  frontend stream targeting, and over-broad follow-up detection. All were fixed
+  with focused regressions before final verification.
+- Follow-up live-data fix: source-object replacement now detaches and dedupes
+  historical retrieval hits before old source objects are deleted, preventing
+  same-run/page fallback uniqueness collisions during re-extraction. The
+  extractor also gives overlapping equivalent rule sections unique stable IDs,
+  fixing the Tome of Salvation duplicate-ID failure.
+- Local maintenance after the fix extracted/indexed all 26 books, rebuilt
+  source maps for all 26 books, and restored Children of the Horned Rat as the
+  top source for live `skaven` retrieval.
+- Verification run for this pass: full Python tests reported 454 tests passing
+  with one existing Starlette/httpx deprecation warning and 100.00% coverage;
+  `ruff check .` passed; frontend coverage reported 131 Vitest tests passing
+  above configured thresholds; frontend production build passed with the
+  existing large PDF worker chunk warning; Playwright e2e reported 2 tests
+  passing with the existing `NO_COLOR`/`FORCE_COLOR` warnings.
+
 ## 2026-06-06 Printed Page-Label Calibration/Backfill
 
 - Added migration `0005_page_label_calibration` to create

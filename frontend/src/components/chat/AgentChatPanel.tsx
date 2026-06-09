@@ -1,5 +1,8 @@
 import { Menu, Send } from "lucide-react";
 import {
+  useCallback,
+  useEffect,
+  useRef,
   useState,
   type Dispatch,
   type FormEvent,
@@ -13,6 +16,9 @@ import type {
   ChatCitationResponse,
   ChatMessageResponse,
   ChatStreamEvent,
+  ChatThreadDetailResponse,
+  ChatThreadResponse,
+  ChatTurnResponse,
   ModelRunResponse,
 } from "../../types/api";
 import { MarkdownText } from "./MarkdownText";
@@ -63,8 +69,41 @@ export function AgentChatPanel({
   const [message, setMessage] = useState("");
   const [threadId, setThreadId] = useState<string | null>(null);
   const [turns, setTurns] = useState<TranscriptTurn[]>([]);
+  const [historyThreads, setHistoryThreads] = useState<ChatThreadResponse[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [panelError, setPanelError] = useState<string | null>(null);
+  const sendingRef = useRef(false);
+  const activeStreamThreadIdRef = useRef<string | null>(null);
+
+  const loadHistoryThreads = useCallback(
+    async (signal?: AbortSignal) => {
+      setHistoryLoading(true);
+      setHistoryError(null);
+      try {
+        const response = await client.listChatThreads({ signal });
+        setHistoryThreads(response.threads);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        setHistoryError(errorMessage(error));
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [client],
+  );
+
+  useEffect(() => {
+    if (!historyOpen) {
+      return;
+    }
+    const controller = new AbortController();
+    void loadHistoryThreads(controller.signal);
+    return () => controller.abort();
+  }, [historyOpen, loadHistoryThreads]);
 
   async function ensureThread(): Promise<string> {
     if (threadId) {
@@ -77,14 +116,16 @@ export function AgentChatPanel({
 
   async function sendCurrentMessage() {
     const content = message.trim();
-    if (!content || sending) {
+    if (!content || sendingRef.current) {
       return;
     }
+    sendingRef.current = true;
     setSending(true);
     setPanelError(null);
     setMessage("");
     try {
       const activeThreadId = await ensureThread();
+      activeStreamThreadIdRef.current = activeThreadId;
       const idempotencyKey =
         globalThis.crypto?.randomUUID?.() ?? `send-${Date.now()}`;
       await client.streamChatMessage(activeThreadId, {
@@ -98,7 +139,33 @@ export function AgentChatPanel({
       }
       setPanelError(errorMessage(error));
     } finally {
+      activeStreamThreadIdRef.current = null;
+      sendingRef.current = false;
       setSending(false);
+      if (historyOpen) {
+        void loadHistoryThreads();
+      }
+    }
+  }
+
+  async function selectHistoryThread(selectedThreadId: string) {
+    if (sendingRef.current) {
+      return;
+    }
+    setPanelError(null);
+    setHistoryError(null);
+    try {
+      const detail = await client.getChatThread(selectedThreadId);
+      if (sendingRef.current) {
+        return;
+      }
+      setThreadId(detail.thread.id);
+      setTurns(threadDetailToTranscriptTurns(detail));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      setHistoryError(errorMessage(error));
     }
   }
 
@@ -135,6 +202,20 @@ export function AgentChatPanel({
   }
 
   function handleStreamEvent(event: ChatStreamEvent) {
+    const activeStreamThreadId = activeStreamThreadIdRef.current;
+    const eventThreadId =
+      event.thread?.id ??
+      event.model_run?.thread_id ??
+      event.user_message?.thread_id ??
+      event.assistant_message?.thread_id ??
+      null;
+    if (
+      activeStreamThreadId &&
+      eventThreadId &&
+      eventThreadId !== activeStreamThreadId
+    ) {
+      return;
+    }
     if (event.type === "accepted" && event.user_message) {
       const userMessage = event.user_message;
       setTurns((currentTurns) => [
@@ -155,34 +236,38 @@ export function AgentChatPanel({
         return currentTurns;
       }
       const nextTurns = [...currentTurns];
-      const lastTurn = nextTurns[nextTurns.length - 1];
+      const targetIndex = targetTurnIndex(nextTurns, event);
+      if (targetIndex < 0) {
+        return currentTurns;
+      }
+      const targetTurn = nextTurns[targetIndex];
       if (event.type === "delta" && event.text_delta) {
-        nextTurns[nextTurns.length - 1] = {
-          ...lastTurn,
-          assistantContent: lastTurn.assistantContent + event.text_delta,
+        nextTurns[targetIndex] = {
+          ...targetTurn,
+          assistantContent: targetTurn.assistantContent + event.text_delta,
         };
       } else if (event.type === "completed") {
-        nextTurns[nextTurns.length - 1] = {
-          ...lastTurn,
+        nextTurns[targetIndex] = {
+          ...targetTurn,
           assistantContent:
-            event.assistant_message?.content || lastTurn.assistantContent,
-          citations: event.citations ?? lastTurn.citations,
-          modelRun: event.model_run ?? lastTurn.modelRun,
+            event.assistant_message?.content || targetTurn.assistantContent,
+          citations: event.citations ?? targetTurn.citations,
+          modelRun: event.model_run ?? targetTurn.modelRun,
         };
       } else if (event.type === "failed") {
-        nextTurns[nextTurns.length - 1] = {
-          ...lastTurn,
-          citations: event.citations ?? lastTurn.citations,
+        nextTurns[targetIndex] = {
+          ...targetTurn,
+          citations: event.citations ?? targetTurn.citations,
           errorMessage:
             event.error_message ??
             event.model_run?.error_message ??
             "Familiar could not complete the response.",
-          modelRun: event.model_run ?? lastTurn.modelRun,
+          modelRun: event.model_run ?? targetTurn.modelRun,
         };
       } else if (event.type === "retrieval") {
-        nextTurns[nextTurns.length - 1] = {
-          ...lastTurn,
-          citations: event.citations ?? lastTurn.citations,
+        nextTurns[targetIndex] = {
+          ...targetTurn,
+          citations: event.citations ?? targetTurn.citations,
         };
       }
       return nextTurns;
@@ -208,7 +293,27 @@ export function AgentChatPanel({
       {historyOpen ? (
         <div className="agent-chat__history">
           <strong>Chat history</strong>
-          <p>Chat persistence arrives in the agent phase.</p>
+          {historyLoading ? <p>Loading...</p> : null}
+          {historyError ? <p>{historyError}</p> : null}
+          {!historyLoading && !historyError && historyThreads.length === 0 ? (
+            <p>No saved chats yet.</p>
+          ) : null}
+          {historyThreads.length ? (
+            <div className="agent-chat__history-list">
+              {historyThreads.map((thread) => (
+                <button
+                  className="agent-chat__history-item"
+                  disabled={sending}
+                  key={thread.id}
+                  onClick={() => void selectHistoryThread(thread.id)}
+                  type="button"
+                >
+                  <strong>{thread.title || "Familiar Chat"}</strong>
+                  <span>{formatThreadUpdatedAt(thread.updated_at)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
       <div className="agent-chat__transcript" role="log" aria-label="Agent transcript">
@@ -303,4 +408,54 @@ function citationButtonLabel(citation: ChatCitationResponse) {
     return `Open ${citation.title} printed page ${citation.page_label}`;
   }
   return `Open ${citation.title} page ${citation.page_number}`;
+}
+
+function threadDetailToTranscriptTurns(
+  detail: ChatThreadDetailResponse,
+): TranscriptTurn[] {
+  return detail.turns.map(turnResponseToTranscriptTurn);
+}
+
+function turnResponseToTranscriptTurn(turn: ChatTurnResponse): TranscriptTurn {
+  return {
+    id: turn.model_run.id,
+    userMessage: turn.user_message,
+    assistantContent: turn.assistant_message?.content ?? "",
+    citations: turn.citations,
+    errorMessage:
+      turn.model_run.error_message ??
+      (turn.model_run.status === "failed"
+        ? "Familiar could not complete the response."
+        : null),
+    modelRun: turn.model_run,
+  };
+}
+
+function targetTurnIndex(
+  turns: TranscriptTurn[],
+  event: ChatStreamEvent,
+): number {
+  if (event.model_run?.id) {
+    const index = turns.findIndex(
+      (turn) => turn.modelRun?.id === event.model_run?.id,
+    );
+    if (index >= 0) {
+      return index;
+    }
+    return -1;
+  }
+  return turns.length - 1;
+}
+
+function formatThreadUpdatedAt(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(timestamp);
 }

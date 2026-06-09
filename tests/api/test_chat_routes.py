@@ -247,6 +247,36 @@ def test_retry_route_reuses_user_message_and_is_idempotent(tmp_path: Path) -> No
     assert count_rows(config, "model_runs") == 2
 
 
+def test_thread_detail_route_collapses_successful_retry(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    app = create_app(config)
+    client = TestClient(app)
+    thread_id = client.post("/api/chat/threads", json={}).json()["id"]
+    failed = client.post(
+        f"/api/chat/threads/{thread_id}/messages",
+        json={"content": "What is fear?", "idempotency_key": "send-1"},
+    ).json()
+    app.state.assistant_provider_factory = lambda _: FakeProvider()
+
+    retry = client.post(
+        f"/api/chat/model-runs/{failed['model_run']['id']}/retry",
+        json={"idempotency_key": "retry-1"},
+    )
+    detail = client.get(f"/api/chat/threads/{thread_id}")
+
+    assert retry.status_code == 200
+    assert retry.json()["assistant_message"]["content"] == "Rules answer."
+    assert detail.status_code == 200
+    assert len(detail.json()["turns"]) == 1
+    turn = detail.json()["turns"][0]
+    assert turn["user_message"]["id"] == failed["user_message"]["id"]
+    assert turn["assistant_message"]["content"] == "Rules answer."
+    assert turn["model_run"]["id"] == retry.json()["model_run"]["id"]
+    assert turn["model_run"]["status"] == "completed"
+    assert turn["model_run"]["retryable"] is False
+
+
 def test_chat_routes_map_missing_resources_and_validation(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_books(config)

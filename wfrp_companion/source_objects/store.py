@@ -13,7 +13,7 @@ from wfrp_companion.db.migrations import apply_pending_migrations
 from wfrp_companion.source_objects.models import SourceObject
 
 
-SOURCE_OBJECT_EXTRACTOR_VERSION = "structured-evidence-v1"
+SOURCE_OBJECT_EXTRACTOR_VERSION = "structured-evidence-v4"
 
 
 @dataclass(frozen=True)
@@ -648,6 +648,10 @@ def replace_book_source_objects(
     now: str,
 ) -> None:
     with connection:
+        detach_retrieval_hits_for_source_object_replacement(
+            connection,
+            book_id=book_id,
+        )
         connection.execute("delete from source_object_search where book_id = ?", (book_id,))
         connection.execute(
             """
@@ -779,6 +783,60 @@ def replace_book_source_objects(
             """,
             (now, now, job_id),
         )
+
+
+def detach_retrieval_hits_for_source_object_replacement(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+) -> None:
+    rows = connection.execute(
+        """
+        select
+          retrieval_hits.id,
+          retrieval_hits.retrieval_run_id,
+          retrieval_hits.page_id,
+          retrieval_hits.source_object_id,
+          retrieval_hits.rank
+        from retrieval_hits
+        left join source_objects
+          on source_objects.id = retrieval_hits.source_object_id
+        where retrieval_hits.page_id in (
+            select id from pages where book_id = ?
+          )
+          and (
+            retrieval_hits.source_object_id is null
+            or source_objects.book_id = ?
+          )
+        order by
+          retrieval_hits.retrieval_run_id,
+          retrieval_hits.page_id,
+          case when retrieval_hits.source_object_id is null then 0 else 1 end,
+          retrieval_hits.rank,
+          retrieval_hits.id
+        """,
+        (book_id, book_id),
+    ).fetchall()
+    seen_fallback_keys: set[tuple[str, str]] = set()
+    duplicate_hit_ids: list[str] = []
+    for row in rows:
+        key = (row["retrieval_run_id"], row["page_id"])
+        if key in seen_fallback_keys:
+            duplicate_hit_ids.append(row["id"])
+            continue
+        seen_fallback_keys.add(key)
+    for hit_id in duplicate_hit_ids:
+        connection.execute("delete from retrieval_hits where id = ?", (hit_id,))
+    connection.execute(
+        """
+        update retrieval_hits
+        set source_object_id = null
+        where source_object_id in (
+          select id from source_objects where book_id = ?
+        )
+        """,
+        (book_id,),
+    )
 
 
 def write_derived_source_object_links(

@@ -7,6 +7,7 @@ from typing import Protocol
 
 from wfrp_companion.assistant.evidence import EvidenceCandidate
 from wfrp_companion.assistant.query_planner import QueryPlan
+from wfrp_companion.assistant.query_planner import STRUCTURAL_QUERY_TERMS
 from wfrp_companion.assistant.query_planner import meaningful_tokens
 from wfrp_companion.assistant.query_planner import term_variants
 from wfrp_companion.assistant.query_planner import terms_are_close
@@ -71,8 +72,19 @@ class DeterministicReranker:
                 all_terms,
                 candidate_relevance_text(candidate),
             )
-            has_phrase_match = phrase_matches(query_plan.terms, candidate.context_text)
+            has_phrase_match = phrase_matches(
+                query_plan.terms,
+                candidate_phrase_relevance_text(candidate),
+            )
             if len(matched_terms) < required_overlap and not has_phrase_match:
+                continue
+            if is_heading_path_only_match(candidate, query_plan, required_overlap):
+                continue
+            if not structural_query_matches_named_entity(
+                candidate,
+                query_plan,
+                matched_terms,
+            ):
                 continue
             reasons = list(candidate.rank_reasons)
             reasons.append(f"semantic_overlap:{','.join(matched_terms)}")
@@ -90,6 +102,10 @@ class DeterministicReranker:
                 reasons.append("phrase_match:query_terms")
             if candidate.source_object_id is not None:
                 score += PREFERRED_OBJECT_BOOSTS.get(candidate.object_type, 2.0)
+            structural_boost = structural_intent_boost(candidate, query_plan)
+            if structural_boost:
+                score += structural_boost
+                reasons.append(f"structural_intent_boost:{structural_boost:.1f}")
             if candidate.confidence is not None:
                 score += candidate.confidence * 2
             if candidate.base_score < 0:
@@ -261,6 +277,65 @@ def candidate_fusion_score(candidate: EvidenceCandidate) -> float:
     return 0.0
 
 
+def structural_intent_boost(candidate: EvidenceCandidate, query_plan: QueryPlan) -> float:
+    terms = set(query_plan.terms + query_plan.expanded_terms)
+    if {"table", "tables", "chart", "charts"}.intersection(terms) and candidate.object_type == "table":
+        return 14.0
+    if {
+        "block",
+        "blocks",
+        "profile",
+        "profiles",
+        "stat",
+        "stats",
+        "statistics",
+    }.intersection(terms):
+        if candidate.object_type == "stat_block":
+            return 14.0
+        if candidate.object_type in {"npc_profile", "monster_profile"}:
+            if any(
+                reason.startswith("linked_source_object:stat_block")
+                for reason in candidate.rank_reasons
+            ):
+                return 12.0
+            return 10.0
+    return 0.0
+
+
+def structural_query_matches_named_entity(
+    candidate: EvidenceCandidate,
+    query_plan: QueryPlan,
+    matched_terms: Sequence[str],
+) -> bool:
+    original_terms = tuple(dict.fromkeys(query_plan.terms))
+    all_terms = tuple(dict.fromkeys(query_plan.terms + query_plan.expanded_terms))
+    if not STRUCTURAL_QUERY_TERMS.intersection(all_terms):
+        return True
+    entity_terms = tuple(term for term in original_terms if term not in STRUCTURAL_QUERY_TERMS)
+    if not entity_terms:
+        return True
+    if len(entity_terms) == 1:
+        return entity_terms[0] in matched_terms
+    phrase_pairs = adjacent_entity_phrase_pairs(original_terms)
+    if phrase_pairs:
+        phrase_text = candidate_phrase_relevance_text(candidate)
+        return any(phrase_matches(pair, phrase_text) for pair in phrase_pairs)
+    matched_entities = tuple(term for term in matched_terms if term in entity_terms)
+    required_entities = min(2, len(entity_terms))
+    return len(matched_entities) >= required_entities
+
+
+def adjacent_entity_phrase_pairs(terms: Sequence[str]) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for left, right in zip(terms, terms[1:], strict=False):
+        if left in STRUCTURAL_QUERY_TERMS or right in STRUCTURAL_QUERY_TERMS:
+            continue
+        pair = (left, right)
+        if pair not in pairs:
+            pairs.append(pair)
+    return tuple(pairs)
+
+
 def required_semantic_overlap(query_plan: QueryPlan) -> int:
     unique_terms = tuple(dict.fromkeys((*query_plan.terms, *query_plan.expanded_terms)))
     if len(unique_terms) <= 1:
@@ -281,10 +356,67 @@ def candidate_relevance_text(candidate: EvidenceCandidate) -> str:
         if value
     )
 
+
+def candidate_direct_relevance_text(candidate: EvidenceCandidate) -> str:
+    return " ".join(
+        value
+        for value in (
+            candidate.title,
+            candidate_object_type_text(candidate),
+            candidate.object_title or "",
+            context_without_heading_lines(candidate),
+        )
+        if value
+    )
+
+
+def candidate_phrase_relevance_text(candidate: EvidenceCandidate) -> str:
+    return " ".join(
+        value
+        for value in (
+            candidate.object_title or "",
+            candidate_object_type_text(candidate),
+            context_without_heading_lines(candidate),
+        )
+        if value
+    )
+
+
+def is_heading_path_only_match(
+    candidate: EvidenceCandidate,
+    query_plan: QueryPlan,
+    required_overlap: int,
+) -> bool:
+    if candidate.source_object_id is None or len(query_plan.terms) < 2:
+        return False
+    heading_matches = semantic_overlaps(query_plan.terms, " ".join(candidate.heading_path))
+    if len(heading_matches) < required_overlap:
+        return False
+    direct_matches = semantic_overlaps(
+        query_plan.terms,
+        candidate_direct_relevance_text(candidate),
+    )
+    return len(direct_matches) < required_overlap
+
+
 def candidate_object_type_text(candidate: EvidenceCandidate) -> str:
     if candidate.source_object_id is None:
         return ""
     return candidate.object_type.replace("_", " ")
+
+
+def context_without_heading_lines(candidate: EvidenceCandidate) -> str:
+    if not candidate.heading_path:
+        return candidate.context_text
+    normalized_headings = {
+        " ".join(meaningful_tokens(heading)) for heading in candidate.heading_path
+    }
+    lines = [
+        line
+        for line in candidate.context_text.splitlines()
+        if " ".join(meaningful_tokens(line)) not in normalized_headings
+    ]
+    return "\n".join(lines)
 
 def phrase_matches(terms: Sequence[str], text: str) -> bool:
     if len(terms) < 2:

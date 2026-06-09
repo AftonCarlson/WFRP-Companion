@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -143,6 +144,10 @@ def test_record_retrieval_run_snapshots_source_books_in_relationship_table(
         source_book_ids=("barony", "missing-book", "core-rules"),
         source_map=(),
         candidates=("checked sources",),
+        retrieval_query="What sources are checked?\nchecked source context",
+        history_message_ids=("message-history-user", "message-history-assistant"),
+        history_turn_count=1,
+        history_strategy="followup_contextualized",
     )
 
     with open_connection(config.db_path) as connection:
@@ -161,6 +166,16 @@ def test_record_retrieval_run_snapshots_source_books_in_relationship_table(
         ).fetchall()
 
     assert '"source_book_ids": ["barony", "missing-book", "core-rules"]' in metadata
+    metadata_dict = json.loads(metadata)
+    assert metadata_dict["retrieval_query"] == (
+        "What sources are checked?\nchecked source context"
+    )
+    assert metadata_dict["history_message_ids"] == [
+        "message-history-user",
+        "message-history-assistant",
+    ]
+    assert metadata_dict["history_turn_count"] == 1
+    assert metadata_dict["history_strategy"] == "followup_contextualized"
     assert [tuple(row) for row in rows] == [
         ("rules-core", "barony", "Barony of the Damned"),
         ("rules-core", "core-rules", "Core Rules"),
@@ -316,6 +331,180 @@ def test_retry_helpers_reject_non_failed_runs_and_reuse_active_retry(
     )
 
     assert duplicate_active.model_run.id == active_retry.model_run.id
+
+
+def test_thread_detail_collapses_failed_run_after_active_retry(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    failed = chat_store.create_provider_unavailable_turn(
+        config,
+        thread.id,
+        content="What is fear?",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    active_retry = chat_store.create_queued_retry(
+        config,
+        failed.model_run.id,
+        idempotency_key="retry-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+
+    detail = chat_store.get_thread_detail(config, thread.id)
+
+    assert len(detail.turns) == 1
+    assert detail.turns[0].user_message.id == failed.user_message.id
+    assert detail.turns[0].model_run.id == active_retry.model_run.id
+    assert detail.turns[0].model_run.status == "queued"
+    assert detail.turns[0].model_run.retryable is False
+
+
+def test_thread_detail_replaces_older_failed_run_with_later_active_retry(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    failed = chat_store.create_provider_unavailable_turn(
+        config,
+        thread.id,
+        content="What is fear?",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    active_retry = chat_store.create_queued_retry(
+        config,
+        failed.model_run.id,
+        idempotency_key="retry-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            "update model_runs set created_at = ? where id = ?",
+            ("2026-06-06T00:00:01Z", failed.model_run.id),
+        )
+        connection.execute(
+            "update model_runs set created_at = ? where id = ?",
+            ("2026-06-06T00:00:02Z", active_retry.model_run.id),
+        )
+
+    detail = chat_store.get_thread_detail(config, thread.id)
+
+    assert len(detail.turns) == 1
+    assert detail.turns[0].model_run.id == active_retry.model_run.id
+
+
+def test_thread_detail_collapses_successful_retry_to_completed_turn(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    failed = chat_store.create_provider_unavailable_turn(
+        config,
+        thread.id,
+        content="What is fear?",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    retry = chat_store.create_queued_retry(
+        config,
+        failed.model_run.id,
+        idempotency_key="retry-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    chat_store.transition_model_run(
+        config,
+        retry.model_run.id,
+        from_statuses=("queued",),
+        to_status="calling_model",
+    )
+    completed_retry = chat_store.complete_model_run(
+        config,
+        retry.model_run.id,
+        content="Fear answer.",
+        provider_response_id="resp-1",
+        input_tokens=1,
+        output_tokens=2,
+    )
+
+    detail = chat_store.get_thread_detail(config, thread.id)
+
+    assert len(detail.turns) == 1
+    assert detail.turns[0].user_message.id == failed.user_message.id
+    assert detail.turns[0].assistant_message is not None
+    assert detail.turns[0].assistant_message.content == "Fear answer."
+    assert detail.turns[0].model_run.id == completed_retry.model_run.id
+    assert detail.turns[0].model_run.status == "completed"
+    assert detail.turns[0].model_run.retryable is False
+
+
+def test_completed_retry_makes_original_failed_run_non_retryable(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    failed = chat_store.create_provider_unavailable_turn(
+        config,
+        thread.id,
+        content="What is fear?",
+        idempotency_key="send-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    retry = chat_store.create_queued_retry(
+        config,
+        failed.model_run.id,
+        idempotency_key="retry-1",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    chat_store.transition_model_run(
+        config,
+        retry.model_run.id,
+        from_statuses=("queued",),
+        to_status="calling_model",
+    )
+    chat_store.complete_model_run(
+        config,
+        retry.model_run.id,
+        content="Fear answer.",
+        provider_response_id="resp-1",
+        input_tokens=1,
+        output_tokens=2,
+    )
+
+    with open_connection(config.db_path) as connection:
+        reloaded_failed = chat_store.result_for_model_run(
+            connection,
+            failed.model_run.id,
+        )
+
+    assert reloaded_failed.model_run.retryable is False
+    with pytest.raises(chat_store.ModelRunNotRetryableError):
+        chat_store.create_provider_unavailable_retry(
+            config,
+            failed.model_run.id,
+            idempotency_key="retry-provider-stale",
+            provider="openai",
+            model="gpt-5.4-mini",
+        )
+    with pytest.raises(chat_store.ModelRunNotRetryableError):
+        chat_store.create_queued_retry(
+            config,
+            failed.model_run.id,
+            idempotency_key="retry-queued-stale",
+            provider="openai",
+            model="gpt-5.4-mini",
+        )
 
 
 def test_model_run_transitions_validate_inputs_and_wrong_state_is_noop(
@@ -652,6 +841,35 @@ def test_result_loading_rejects_or_skips_orphaned_model_runs(tmp_path: Path) -> 
             """,
             (thread.id,),
         )
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              user_message_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+                updated_at
+            )
+            values ('null-user-run', ?, null, 'fake', 'fake-model',
+                    'queued', 'null-user-run', '2026-06-04T00:00:00Z',
+                    '2026-06-04T00:00:00Z')
+            """,
+            (thread.id,),
+        )
+        null_user_run = chat_store.model_run_row(connection, "null-user-run")
+
+        assert (
+            chat_store.has_active_or_completed_logical_successor(
+                connection,
+                null_user_run,
+            )
+            is False
+        )
+        assert chat_store.is_model_run_retryable(connection, null_user_run) is False
 
         with pytest.raises(chat_store.ModelRunNotRetryableError):
             chat_store.result_for_model_run(connection, "orphan-run")
