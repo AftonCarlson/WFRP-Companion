@@ -144,6 +144,8 @@ def insert_source_object(
     text: str,
     parent_object_id: str | None = None,
     metadata_json: str = "{}",
+    char_start: int | None = None,
+    char_end: int | None = None,
 ) -> None:
     connection.execute(
         """
@@ -157,6 +159,8 @@ def insert_source_object(
           heading_path_json,
           page_start,
           page_end,
+          char_start,
+          char_end,
           text,
           search_text,
           confidence,
@@ -166,7 +170,7 @@ def insert_source_object(
           created_at,
           updated_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.91, 'test', ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.91, 'test', ?, ?, ?, ?)
         """,
         (
             object_id,
@@ -178,6 +182,8 @@ def insert_source_object(
             json.dumps(list(heading_path)),
             page_start,
             page_end,
+            char_start,
+            char_end,
             text,
             " ".join((*heading_path, text)),
             f"sha-{object_id}",
@@ -3046,6 +3052,18 @@ def test_query_planner_generates_compound_and_plural_search_alternatives() -> No
     assert "harpy" in plan.candidates
 
 
+def test_query_planner_treats_stat_line_as_structural_statistics_intent() -> None:
+    plan = retrieval.plan_query("harpies stat line", ())
+
+    assert "harpy statistics" in plan.candidates
+    assert "harpy stat block" in plan.candidates
+    assert "harpy profile" in plan.candidates
+    assert "statistics" in plan.match_terms
+    assert "block" in plan.match_terms
+    assert "profile" not in plan.match_terms
+    assert "line" not in plan.match_terms
+
+
 def test_compound_plural_structural_query_retrieves_singular_stat_evidence(
     tmp_path: Path,
 ) -> None:
@@ -3088,6 +3106,267 @@ def test_compound_plural_structural_query_retrieves_singular_stat_evidence(
     assert [candidate.source_object_id for candidate, _score, _reasons in ranked] == [
         "bestiary:harpy-statistics"
     ]
+
+
+def test_stat_line_query_prefers_named_statistics_chunk_over_movement_line_noise(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Rules",
+            page_number=1,
+            text=(
+                "Harpies follow the flying movement line when retreating. "
+                "See the Harpy profile for movement details."
+            ),
+        )
+        insert_searchable_page(
+            connection,
+            book_id="bestiary",
+            title="Bestiary",
+            category="Rules",
+            page_number=12,
+            text=(
+                "Harpies are winged predators. Harpy Statistics Main Profile. "
+                "Hippogriff Statistics Main Profile."
+            ),
+        )
+        connection.execute("update books set search_status = 'indexed'")
+        insert_source_object(
+            connection,
+            object_id="core-rules:harpy-movement",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Flying Movement",
+            heading_path=("Movement",),
+            page_start=1,
+            page_end=1,
+            text=(
+                "Harpies follow the flying movement line when retreating. "
+                "See the Harpy profile for movement details."
+            ),
+        )
+        insert_source_object(
+            connection,
+            object_id="bestiary:harpy-statistics-heading",
+            book_id="bestiary",
+            page_id="bestiary:12",
+            object_type="page_chunk",
+            title="Page 12",
+            heading_path=("Page 12",),
+            page_start=12,
+            page_end=12,
+            text="Harpy Statistics",
+        )
+        insert_source_object(
+            connection,
+            object_id="bestiary:hippogriff-statistics",
+            book_id="bestiary",
+            page_id="bestiary:12",
+            object_type="npc_profile",
+            title="Hippogriff Statistics",
+            heading_path=("Creatures",),
+            page_start=12,
+            page_end=12,
+            text="Hippogriff Statistics Main Profile stat block.",
+        )
+    rebuild_source_object_search(config, force=True)
+
+    evidence_pool = retrieval.collect_evidence_candidates(
+        config,
+        source_book_ids=("core-rules", "bestiary"),
+        query_plan=retrieval.plan_query("harpies stat line", ()),
+        per_candidate_limit=10,
+    )
+    ranked = retrieval.rerank_candidates(
+        evidence_pool,
+        retrieval.plan_query("harpies stat line", ()),
+    )
+
+    assert ranked
+    assert ranked[0][0].source_object_id == "bestiary:harpy-statistics-heading"
+    assert "core-rules:harpy-movement" not in [
+        candidate.source_object_id for candidate, _score, _reasons in ranked
+    ]
+    assert "bestiary:hippogriff-statistics" not in [
+        candidate.source_object_id for candidate, _score, _reasons in ranked
+    ]
+
+
+def test_short_page_chunk_candidate_uses_bounded_surrounding_page_context(
+    tmp_path: Path,
+) -> None:
+    page_text = (
+        "Harpies are winged predators. "
+        "Harpy Statistics Main Profile WS BS S T Ag Int WP Fel. "
+        "Secondary Profile A W SB TB M Mag IP FP. "
+        "Skills: Dodge Blow."
+    )
+    heading_start = page_text.index("Harpy Statistics")
+    heading_end = heading_start + len("Harpy Statistics")
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="bestiary",
+            title="Bestiary",
+            category="Rules",
+            page_number=12,
+            text=page_text,
+        )
+        connection.execute("update books set search_status = 'indexed'")
+        insert_source_object(
+            connection,
+            object_id="bestiary:harpy-statistics-heading",
+            book_id="bestiary",
+            page_id="bestiary:12",
+            object_type="page_chunk",
+            title="Page 12",
+            heading_path=("Page 12",),
+            page_start=12,
+            page_end=12,
+            text="Harpy Statistics",
+            char_start=heading_start,
+            char_end=heading_end,
+        )
+    rebuild_source_object_search(config, force=True)
+
+    with initialize_database(config.db_path) as connection:
+        candidates = retrieval.search_source_object_candidates(
+            connection,
+            "harpy statistics",
+            book_ids=("bestiary",),
+            limit=5,
+        )
+
+    assert candidates[0].source_object_id == "bestiary:harpy-statistics-heading"
+    assert candidates[0].context_text != "Harpy Statistics"
+    assert "Main Profile WS BS" in candidates[0].context_text
+    assert "Secondary Profile" in candidates[0].context_text
+
+
+def test_short_page_chunk_context_falls_back_when_page_text_missing(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="bestiary",
+            title="Bestiary",
+            category="Rules",
+            page_number=12,
+            text="Harpy Statistics Main Profile.",
+        )
+        connection.execute("update books set search_status = 'indexed'")
+        insert_source_object(
+            connection,
+            object_id="bestiary:harpy-statistics-heading",
+            book_id="bestiary",
+            page_id="bestiary:12",
+            object_type="page_chunk",
+            title="Page 12",
+            heading_path=("Page 12",),
+            page_start=12,
+            page_end=12,
+            text="Harpy Statistics",
+            char_start=0,
+            char_end=16,
+        )
+        connection.execute("delete from page_text where page_id = 'bestiary:12'")
+        row = connection.execute(
+            "select * from source_objects where id = 'bestiary:harpy-statistics-heading'"
+        ).fetchone()
+
+        assert retrieval_candidates.source_object_context_text(connection, row) == (
+            "Harpy Statistics"
+        )
+
+
+def test_context_around_span_handles_empty_and_end_biased_windows() -> None:
+    assert (
+        retrieval_candidates.context_around_span(
+            "0123456789",
+            start=1,
+            end=10,
+            max_chars=5,
+        )
+        == "56789"
+    )
+    assert (
+        retrieval_candidates.context_around_span(
+            "0123456789",
+            start=4,
+            end=5,
+            max_chars=0,
+        )
+        == ""
+    )
+
+
+def test_structural_entity_match_ignores_page_snippet_from_neighbor_object() -> None:
+    candidate = retrieval.EvidenceCandidate(
+        book_id="bestiary",
+        title="Bestiary",
+        category="Rules",
+        page_id="bestiary:12",
+        page_number=12,
+        pdf_page_number=12,
+        page_label=None,
+        page_start=12,
+        page_end=12,
+        page_range_label=None,
+        snippet="Harpy Statistics",
+        base_score=-10,
+        context_text="Hippogriff Statistics Main Profile stat block.",
+        channel="page_fts_resolved",
+        source_object_id="bestiary:hippogriff-statistics",
+        object_type="npc_profile",
+        object_title="Hippogriff Statistics",
+        heading_path=("Creatures",),
+        confidence=0.9,
+        rank_reasons=("candidate:page_fts_resolved",),
+    )
+
+    assert retrieval.rerank_candidates(
+        (candidate,),
+        retrieval.plan_query("harpies stat line", ()),
+    ) == ()
+
+
+def test_structural_entity_match_rejects_wrong_titled_rule_section_body_overlap() -> None:
+    candidate = retrieval.EvidenceCandidate(
+        book_id="companion",
+        title="Companion",
+        category="Rules",
+        page_id="companion:12",
+        page_number=12,
+        pdf_page_number=12,
+        page_label=None,
+        page_start=12,
+        page_end=12,
+        page_range_label=None,
+        snippet="Harpies Statistics",
+        base_score=-10,
+        context_text="This mermaid discussion compares Harpies Statistics.",
+        channel="source_object_fts",
+        source_object_id="companion:mermaids",
+        object_type="rule_section",
+        object_title="MERMAIDS",
+        heading_path=("Creatures", "MERMAIDS"),
+        confidence=0.9,
+        rank_reasons=("candidate:source_object_fts",),
+    )
+
+    assert retrieval.rerank_candidates(
+        (candidate,),
+        retrieval.plan_query("harpies stat line", ()),
+    ) == ()
 
 
 def test_keep_best_candidate_replaces_weaker_page_candidate() -> None:

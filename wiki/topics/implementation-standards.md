@@ -91,11 +91,18 @@ The current codebase has working local implementations for steps 1 through 6:
   `profile`, and close variants) authoritative as object-intent signals. Do
   not edit-distance expand them into unrelated source-map aliases.
 - Use bounded deterministic sparse query normalization for retrieval recall:
-  split common structural compounds such as `statblock` and `hit-location`,
-  generate singular/plural FTS candidates, and keep reranker match terms
-  concept-level so variants do not double-count relevance.
+  split common structural compounds such as `statblock`, `statline`, and
+  `hit-location`, generate singular/plural FTS candidates, and keep reranker
+  match terms concept-level so variants do not double-count relevance.
 - Fix retrieval vocabulary gaps with general query/object/indexing rules, not
   entity-specific aliases for one creature, NPC, table, or book.
+- For named stat/profile/table requests, validate the named entity against the
+  selected source object itself. Do not let page snippets or incidental body
+  mentions from neighboring objects prove that a titled object is the requested
+  creature, NPC, or table.
+- Short fallback `page_chunk` source objects may expand to a bounded page
+  window around their source span, but should not dump whole pages into prompt
+  context.
 - Let inherited chapter headings and OCR running headers help candidate
   routing, but do not let heading-only matches admit multi-term entity evidence
   into Familiar prompt context.

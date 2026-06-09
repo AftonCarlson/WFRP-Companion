@@ -1,5 +1,32 @@
 # Wiki Compile Log
 
+## 2026-06-08 Stat-Line Retrieval Follow-Up
+
+- Debugged the live `harpies stat line` failure. The previous sparse
+  normalization fix handled `statblock` but not the common `stat line` wording.
+- Root causes: `line` was counted as a content/entity term, page-level snippets
+  could validate the wrong neighboring source object, wrong-titled sections
+  could pass from incidental body overlap, and the actual Harpy Statistics
+  fallback chunk carried only a tiny heading instead of nearby page context.
+- Added `stat line`/`statline` query normalization that generates statistics,
+  stat-block, and profile sparse candidates while only counting
+  statistics/block as stat-line relevance terms.
+- Tightened structural named-entity validation so titled source objects must
+  match the requested entity through their own title/heading/object label;
+  page chunks and table/table-row evidence can still use body context because
+  their titles are often generic or row-local.
+- Short `page_chunk` evidence now expands to a bounded page window around its
+  stored character span, preserving prompt budgets while giving heading-only
+  fallback chunks usable nearby context.
+- Live QA now returns Old World Bestiary page 100 / Harpy Statistics as the
+  only selected evidence item for `harpies stat line`. The local OCR text still
+  appears incomplete for parts of the table, so Familiar should not invent
+  missing stat cells.
+- Verification run for this repair: retrieval tests reported 59 passing; the
+  full backend coverage gate reported 503 tests passing with one existing
+  Starlette/httpx deprecation warning and 100.00% coverage; `ruff check .`
+  passed.
+
 ## 2026-06-08 Sparse Retrieval Query Normalization
 
 - Repaired a live Familiar miss where `give me the statblock for gors` produced

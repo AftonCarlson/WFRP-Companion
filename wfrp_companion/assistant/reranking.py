@@ -7,8 +7,11 @@ from typing import Protocol
 
 from wfrp_companion.assistant.evidence import EvidenceCandidate
 from wfrp_companion.assistant.query_planner import QueryPlan
+from wfrp_companion.assistant.query_planner import STAT_LINE_FILLER_TERMS
 from wfrp_companion.assistant.query_planner import STRUCTURAL_QUERY_TERMS
+from wfrp_companion.assistant.query_planner import has_stat_line_intent
 from wfrp_companion.assistant.query_planner import meaningful_tokens
+from wfrp_companion.assistant.query_planner import split_query_sequence
 from wfrp_companion.assistant.query_planner import term_variants
 from wfrp_companion.assistant.query_planner import terms_are_close
 
@@ -311,18 +314,32 @@ def structural_query_matches_named_entity(
     all_terms = tuple(dict.fromkeys(query_plan.match_terms))
     if not STRUCTURAL_QUERY_TERMS.intersection(all_terms):
         return True
-    entity_terms = tuple(term for term in original_terms if term not in STRUCTURAL_QUERY_TERMS)
+    entity_terms = structural_query_entity_terms(query_plan)
     if not entity_terms:
         return True
+    entity_matches = semantic_overlaps(
+        entity_terms,
+        candidate_entity_relevance_text(candidate),
+    )
     if len(entity_terms) == 1:
-        return entity_terms[0] in matched_terms
+        return entity_terms[0] in entity_matches
     phrase_pairs = adjacent_entity_phrase_pairs(original_terms)
     if phrase_pairs:
         phrase_text = candidate_phrase_relevance_text(candidate)
         return any(phrase_matches(pair, phrase_text) for pair in phrase_pairs)
-    matched_entities = tuple(term for term in matched_terms if term in entity_terms)
     required_entities = min(2, len(entity_terms))
-    return len(matched_entities) >= required_entities
+    return len(entity_matches) >= required_entities
+
+
+def structural_query_entity_terms(query_plan: QueryPlan) -> tuple[str, ...]:
+    original_terms = tuple(dict.fromkeys(query_plan.terms))
+    stat_line_intent = has_stat_line_intent(split_query_sequence(original_terms))
+    return tuple(
+        term
+        for term in original_terms
+        if term not in STRUCTURAL_QUERY_TERMS
+        and not (stat_line_intent and term in STAT_LINE_FILLER_TERMS)
+    )
 
 
 def adjacent_entity_phrase_pairs(terms: Sequence[str]) -> tuple[tuple[str, str], ...]:
@@ -365,6 +382,24 @@ def candidate_direct_relevance_text(candidate: EvidenceCandidate) -> str:
             candidate_object_type_text(candidate),
             candidate.object_title or "",
             context_without_heading_lines(candidate),
+        )
+        if value
+    )
+
+
+def candidate_entity_relevance_text(candidate: EvidenceCandidate) -> str:
+    if candidate.source_object_id is None or candidate.object_type in {
+        "page_chunk",
+        "table",
+        "table_row",
+    }:
+        return candidate_direct_relevance_text(candidate)
+    return " ".join(
+        value
+        for value in (
+            candidate.object_title or "",
+            candidate_object_type_text(candidate),
+            " ".join(candidate.heading_path),
         )
         if value
     )
