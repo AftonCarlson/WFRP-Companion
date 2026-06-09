@@ -9,6 +9,7 @@ from wfrp_companion.assistant import (
     conversation_context,
     familiar_agent,
     provider,
+    research,
 )
 from wfrp_companion.assistant import retrieval
 from wfrp_companion.config import AppConfig
@@ -53,6 +54,7 @@ def stream_chat_message(
     thread_id: str,
     content: str,
     idempotency_key: str,
+    reader_context: research.ReaderContext | None = None,
     provider_factory: ProviderFactory | None = None,
 ) -> Iterable[ChatStreamEvent]:
     result = chat_store.create_queued_turn(
@@ -67,6 +69,7 @@ def stream_chat_message(
         config,
         result=result,
         content=content,
+        reader_context=reader_context,
         provider_factory=provider_factory,
     )
 
@@ -98,7 +101,8 @@ def stream_queued_result(
     *,
     result: chat_store.SendChatResult,
     content: str,
-    provider_factory: ProviderFactory | None,
+    reader_context: research.ReaderContext | None = None,
+    provider_factory: ProviderFactory | None = None,
 ) -> Iterable[ChatStreamEvent]:
     yield event_from_result("accepted", result)
 
@@ -149,6 +153,7 @@ def stream_queued_result(
             result=result,
             content=content,
             conversation=conversation,
+            reader_context=reader_context,
             response_provider=response_provider,
         )
         retrieved = (

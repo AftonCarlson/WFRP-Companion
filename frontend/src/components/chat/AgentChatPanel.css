@@ -186,6 +186,27 @@
   gap: 6px;
 }
 
+.agent-chat__trace {
+  padding: 6px 7px;
+  color: var(--color-muted);
+  background: #111b1e;
+  border: 1px solid #26343a;
+  border-radius: 5px;
+  font-size: 0.78rem;
+}
+
+.agent-chat__trace summary {
+  cursor: pointer;
+  color: #a8b8b1;
+}
+
+.agent-chat__trace ol {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0 0;
+  padding-left: 19px;
+}
+
 .agent-chat__composer {
   min-height: 0;
   height: 100%;

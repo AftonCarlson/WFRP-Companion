@@ -11,7 +11,8 @@ import {
   PdfReaderPanel,
 } from "./components/pdf/PdfReaderPanel";
 import { useInitialWorkspaceData } from "./hooks/useInitialWorkspaceData";
-import type { SourceSetBookResponse } from "./types/api";
+import type { WorkspaceLayout } from "./state/workspaceState";
+import type { ReaderContextRequest, SourceSetBookResponse } from "./types/api";
 import "./App.css";
 
 export default function App() {
@@ -48,6 +49,7 @@ export default function App() {
               viewMode: "single",
             })
           }
+          readerContext={readerContextFromLayout(context.layout)}
         />
       )}
       agentHeaderControls={() => (
@@ -95,4 +97,21 @@ export default function App() {
       )}
     />
   );
+}
+
+function readerContextFromLayout(
+  layout: WorkspaceLayout,
+): ReaderContextRequest | null {
+  const activeTab =
+    layout.openPdfTabs.find((tab) => tab.id === layout.activePdfTabId) ??
+    layout.openPdfTabs[0] ??
+    null;
+  if (!activeTab && layout.openPdfTabs.length === 0) {
+    return null;
+  }
+  return {
+    active_book_id: activeTab?.bookId ?? null,
+    active_pdf_page_number: activeTab?.pageNumber ?? null,
+    open_book_ids: layout.openPdfTabs.map((tab) => tab.bookId),
+  };
 }

@@ -8,6 +8,7 @@ import type {
   ExactSearchResponse,
   HealthResponse,
   PageTextResponse,
+  ReaderContextRequest,
   RetrievalStatusResponse,
   SendChatMessageResponse,
   SourceSetBookResponse,
@@ -22,6 +23,7 @@ export type RequestOptions = {
 export type StreamChatMessageOptions = {
   content: string;
   idempotency_key?: string;
+  reader_context?: ReaderContextRequest | null;
   onEvent: (event: ChatStreamEvent) => void;
   signal?: AbortSignal;
 };
@@ -175,6 +177,7 @@ export const apiClient = {
     threadId: string,
     content: string,
     idempotencyKey: string,
+    readerContext?: ReaderContextRequest | null,
   ): Promise<SendChatMessageResponse> {
     return requestJson<SendChatMessageResponse>(
       `/api/chat/threads/${encodeURIComponent(threadId)}/messages`,
@@ -183,7 +186,11 @@ export const apiClient = {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ content, idempotency_key: idempotencyKey }),
+        body: JSON.stringify({
+          content,
+          idempotency_key: idempotencyKey,
+          ...(readerContext ? { reader_context: readerContext } : {}),
+        }),
       },
     );
   },
@@ -221,6 +228,9 @@ export const apiClient = {
           body: JSON.stringify({
             content: options.content,
             idempotency_key: options.idempotency_key,
+            ...(options.reader_context
+              ? { reader_context: options.reader_context }
+              : {}),
           }),
           signal: options.signal,
         },

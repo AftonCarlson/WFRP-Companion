@@ -219,6 +219,69 @@ def test_stream_message_can_emit_model_deltas_and_completed_event(
     assert count_rows(config, "model_runs") == 1
 
 
+def test_send_message_passes_reader_context_to_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    client = TestClient(create_app(config))
+    thread_id = client.post("/api/chat/threads", json={}).json()["id"]
+    captured: dict[str, object] = {}
+
+    def fake_stream_chat_message(config_arg, **kwargs):
+        captured.update(kwargs)
+        result = chat_store.create_provider_unavailable_turn(
+            config_arg,
+            kwargs["thread_id"],
+            content=kwargs["content"],
+            idempotency_key=kwargs["idempotency_key"],
+            provider="openai",
+            model=config_arg.openai_model,
+        )
+        yield chat_routes.chat_service.event_from_result(
+            "failed",
+            result,
+            error_message="fake failure",
+        )
+
+    monkeypatch.setattr(
+        chat_routes.chat_service,
+        "stream_chat_message",
+        fake_stream_chat_message,
+    )
+
+    response = client.post(
+        f"/api/chat/threads/{thread_id}/messages",
+        json={
+            "content": "it's on pg 99",
+            "idempotency_key": "send-reader-context",
+            "reader_context": {
+                "active_book_id": "core-rules",
+                "active_pdf_page_number": 134,
+                "active_printed_page_label": "99",
+                "open_book_ids": ["core-rules", "barony"],
+            },
+        },
+    )
+    invalid_response = client.post(
+        f"/api/chat/threads/{thread_id}/messages",
+        json={
+            "content": "bad page",
+            "idempotency_key": "send-bad-reader-context",
+            "reader_context": {"active_pdf_page_number": 0},
+        },
+    )
+
+    assert response.status_code == 200
+    reader_context = captured["reader_context"]
+    assert reader_context.active_book_id == "core-rules"
+    assert reader_context.active_pdf_page_number == 134
+    assert reader_context.active_printed_page_label == "99"
+    assert reader_context.open_book_ids == ("core-rules", "barony")
+    assert invalid_response.status_code == 422
+
+
 def test_retry_route_reuses_user_message_and_is_idempotent(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_books(config)

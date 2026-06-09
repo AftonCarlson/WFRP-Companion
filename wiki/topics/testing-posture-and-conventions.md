@@ -233,11 +233,12 @@ metadata for planned queries, stream-interruption cleanup, and logical retry
 collapse in chat API/frontend read models.
 
 Familiar research-agent tests cover thread-context subject preservation,
-follow-up resolution, page-aware recovery, bounded tool rounds, provider tool
-call planning, tool argument validation, accepted-only final retrieval runs,
-partial/rejected evidence traces, evidence-status transitions, research run
-and tool-call persistence, retrieval diagnostics metadata, stream event
-mapping, and final prompt construction from accepted evidence only.
+follow-up resolution, page-aware recovery, reader-context page hints, bounded
+tool rounds, provider tool call planning, tool argument validation,
+accepted-only final retrieval runs, partial/rejected evidence traces,
+evidence-status transitions, research run and tool-call persistence, retrieval
+diagnostics metadata, stream event mapping, and final prompt construction from
+accepted evidence only.
 
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
@@ -245,13 +246,15 @@ behavior, Library/Search tabs, grouped book sections, per-book source-set
 toggles, section-level Library bulk toggles, absence of noisy per-book
 readiness labels, search result full text expansion/error handling, Grimoire
 tab, page, zoom, and view-mode behavior, two-page spread math, guarded PDF.js
-rendering/retry and cancellation behavior, Familiar shell behavior, safe
+rendering/retry and cancellation behavior, Familiar shell behavior, Familiar
+reader-context request payloads, expandable research trace rendering, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
-browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
+browser e2e flows for Library/Search/Grimoire/Familiar page-aware chat plus
+panel overflow.
 
-The latest full backend verification command on 2026-06-09 reported 560 tests
+The latest full backend verification command on 2026-06-09 reported 563 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
-entrypoints. The latest frontend verification reported 133 Vitest tests
+entrypoints. The latest frontend verification reported 137 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful
 production build, and 2 Playwright e2e tests passing.
 

@@ -209,6 +209,57 @@ describe("apiClient", () => {
     );
   });
 
+  it("includes reader context in chat message requests when supplied", async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"type":"completed"}\n'));
+        controller.close();
+      },
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+      .mockResolvedValueOnce(new Response(body, { status: 200 }));
+    const readerContext = {
+      active_book_id: "core-rules",
+      active_pdf_page_number: 134,
+      open_book_ids: ["core-rules", "bestiary"],
+    };
+
+    await apiClient.sendChatMessage("thread 1", "Hi", "send-1", readerContext);
+    await apiClient.streamChatMessage("thread 1", {
+      content: "Hi",
+      idempotency_key: "send-2",
+      reader_context: readerContext,
+      onEvent: () => {},
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/chat/threads/thread%201/messages",
+      expect.objectContaining({
+        body: JSON.stringify({
+          content: "Hi",
+          idempotency_key: "send-1",
+          reader_context: readerContext,
+        }),
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/chat/threads/thread%201/messages/stream",
+      expect.objectContaining({
+        body: JSON.stringify({
+          content: "Hi",
+          idempotency_key: "send-2",
+          reader_context: readerContext,
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
   it("streams a final buffered chat event without a trailing newline", async () => {
     const body = new ReadableStream({
       start(controller) {

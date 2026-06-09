@@ -394,6 +394,157 @@ describe("AgentChatPanel", () => {
     expect(opened).toEqual(["core-rules"]);
   });
 
+  it("sends reader context and renders research trace events", async () => {
+    const user = userEvent.setup();
+    const readerContext = {
+      active_book_id: "core-rules",
+      active_pdf_page_number: 134,
+      open_book_ids: ["core-rules"],
+    };
+    const streamChatMessage = vi.fn(async (threadId, options) => {
+      options.onEvent({
+        type: "accepted",
+        user_message: {
+          id: "m1",
+          thread_id: threadId,
+          role: "user",
+          content: options.content,
+          created_at: "now",
+        },
+        model_run: modelRun("retrieving"),
+      });
+      options.onEvent({
+        type: "research_started",
+        metadata: { resolved_query: "harpy statline" },
+      });
+      options.onEvent({
+        type: "tool_call",
+        metadata: {
+          tool_name: "search_library",
+          arguments: { query: "harpy statline" },
+        },
+      });
+      options.onEvent({
+        type: "tool_result",
+        metadata: {
+          hit_count: 1,
+          diagnostics: { vector_status: "ran" },
+        },
+      });
+      options.onEvent({
+        type: "evidence_validation",
+        metadata: {
+          evidence_status: "sufficient",
+          accepted_hit_count: 1,
+        },
+      });
+      options.onEvent({
+        type: "completed",
+        assistant_message: {
+          id: "m2",
+          thread_id: threadId,
+          role: "assistant",
+          content: "Harpy answer.",
+          created_at: "later",
+        },
+        model_run: modelRun("completed"),
+        citations: [],
+      });
+    });
+    const client = chatClient({ streamChatMessage });
+    renderApp(
+      <AgentChatPanel
+        client={client}
+        historyOpen={false}
+        readerContext={readerContext}
+      />,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "harpy");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(streamChatMessage).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        content: "harpy",
+        reader_context: readerContext,
+      }),
+    );
+    const summary = (
+      await screen.findAllByText("Evidence sufficient; 1 accepted")
+    )[0];
+    await user.click(summary);
+    expect(screen.getByText('Researching "harpy statline"')).toBeInTheDocument();
+    expect(
+      screen.getByText('Running hybrid search for "harpy statline"'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Tool returned 1 candidate(s); vector ran"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders fallback research trace labels for non-search tool events", async () => {
+    const user = userEvent.setup();
+    const client = chatClient({
+      async streamChatMessage(threadId, options) {
+        options.onEvent({
+          type: "accepted",
+          user_message: {
+            id: "m1",
+            thread_id: threadId,
+            role: "user",
+            content: options.content,
+            created_at: "now",
+          },
+          model_run: modelRun("retrieving"),
+        });
+        options.onEvent({ type: "research_started", metadata: {} });
+        options.onEvent({
+          type: "tool_call",
+          metadata: {
+            tool_name: "open_page",
+            arguments: { pdf_page_number: 77 },
+          },
+        });
+        options.onEvent({
+          type: "tool_call",
+          metadata: { tool_name: "open_page", arguments: {} },
+        });
+        options.onEvent({
+          type: "tool_call",
+          metadata: { tool_name: "lookup_source_object", arguments: {} },
+        });
+        options.onEvent({
+          type: "tool_call",
+          metadata: { tool_name: "roll_dice", arguments: [] },
+        });
+        options.onEvent({ type: "tool_call", metadata: {} });
+        options.onEvent({ type: "tool_result", metadata: {} });
+        options.onEvent({
+          type: "evidence_validation",
+          metadata: { evidence_status: "partial" },
+        });
+        options.onEvent({ type: "failed", error_message: "No evidence." });
+      },
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={false} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "trace");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    const summary = (await screen.findAllByText("Research failed"))[0];
+    await user.click(summary);
+    expect(screen.getByText("Research started")).toBeInTheDocument();
+    expect(screen.getByText("Opening page 77")).toBeInTheDocument();
+    expect(screen.getByText("Opening source page")).toBeInTheDocument();
+    expect(screen.getByText("Inspecting source object")).toBeInTheDocument();
+    expect(screen.getByText("Running roll_dice")).toBeInTheDocument();
+    expect(screen.getByText("Running research tool")).toBeInTheDocument();
+    expect(screen.getByText("Tool returned results")).toBeInTheDocument();
+    expect(screen.getByText("Evidence partial")).toBeInTheDocument();
+    expect(screen.getByText("No evidence.")).toBeInTheDocument();
+  });
+
   it("ignores stream updates for unknown model run ids", async () => {
     const user = userEvent.setup();
     const client = chatClient({

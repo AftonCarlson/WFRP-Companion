@@ -21,7 +21,7 @@ from wfrp_companion.api.schemas import (
     SendChatMessageRequest,
     SendChatMessageResponse,
 )
-from wfrp_companion.assistant import chat_service, chat_store
+from wfrp_companion.assistant import chat_service, chat_store, research
 from wfrp_companion.library import source_sets
 
 
@@ -84,6 +84,7 @@ def send_message(
                 thread_id=thread_id,
                 content=request.content,
                 idempotency_key=request.idempotency_key or chat_store.new_id("send"),
+                reader_context=reader_context_from_request(request),
                 provider_factory=getattr(
                     app_request.app.state,
                     "assistant_provider_factory",
@@ -112,6 +113,7 @@ def stream_message(
                 thread_id=thread_id,
                 content=request.content,
                 idempotency_key=request.idempotency_key or chat_store.new_id("send"),
+                reader_context=reader_context_from_request(request),
                 provider_factory=getattr(
                     app_request.app.state,
                     "assistant_provider_factory",
@@ -225,6 +227,19 @@ def stream_event_response(event: chat_service.ChatStreamEvent) -> dict[str, obje
         "error_message": event.error_message,
         "metadata": event.metadata,
     }
+
+
+def reader_context_from_request(
+    request: SendChatMessageRequest,
+) -> research.ReaderContext | None:
+    if request.reader_context is None:
+        return None
+    return research.ReaderContext(
+        active_book_id=request.reader_context.active_book_id,
+        active_pdf_page_number=request.reader_context.active_pdf_page_number,
+        active_printed_page_label=request.reader_context.active_printed_page_label,
+        open_book_ids=tuple(request.reader_context.open_book_ids),
+    )
 
 
 def citation_response(citation: chat_store.ChatCitation) -> ChatCitationResponse:

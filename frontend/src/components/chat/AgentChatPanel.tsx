@@ -20,14 +20,18 @@ import type {
   ChatThreadResponse,
   ChatTurnResponse,
   ModelRunResponse,
+  ReaderContextRequest,
 } from "../../types/api";
 import { MarkdownText } from "./MarkdownText";
 import "./AgentChatPanel.css";
+
+const MAX_RESEARCH_TRACE_ITEMS = 12;
 
 export type AgentChatPanelProps = {
   client?: ApiClient;
   historyOpen?: boolean;
   onOpenCitation?: (citation: ChatCitationResponse) => void;
+  readerContext?: ReaderContextRequest | null;
 };
 
 export type AgentChatHeaderControlsProps = {
@@ -59,12 +63,14 @@ type TranscriptTurn = {
   citations: ChatCitationResponse[];
   errorMessage: string | null;
   modelRun: ModelRunResponse | null;
+  researchTrace: string[];
 };
 
 export function AgentChatPanel({
   client = apiClient,
   historyOpen = false,
   onOpenCitation,
+  readerContext = null,
 }: AgentChatPanelProps) {
   const [message, setMessage] = useState("");
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -131,6 +137,7 @@ export function AgentChatPanel({
       await client.streamChatMessage(activeThreadId, {
         content,
         idempotency_key: idempotencyKey,
+        reader_context: readerContext,
         onEvent: handleStreamEvent,
       });
     } catch (error) {
@@ -227,6 +234,7 @@ export function AgentChatPanel({
           citations: event.citations ?? [],
           errorMessage: event.error_message ?? null,
           modelRun: event.model_run ?? null,
+          researchTrace: [],
         },
       ]);
       return;
@@ -241,13 +249,15 @@ export function AgentChatPanel({
         return currentTurns;
       }
       const targetTurn = nextTurns[targetIndex];
+      const traceLabel = researchTraceLabel(event);
+      let updatedTurn = targetTurn;
       if (event.type === "delta" && event.text_delta) {
-        nextTurns[targetIndex] = {
+        updatedTurn = {
           ...targetTurn,
           assistantContent: targetTurn.assistantContent + event.text_delta,
         };
       } else if (event.type === "completed") {
-        nextTurns[targetIndex] = {
+        updatedTurn = {
           ...targetTurn,
           assistantContent:
             event.assistant_message?.content || targetTurn.assistantContent,
@@ -255,7 +265,7 @@ export function AgentChatPanel({
           modelRun: event.model_run ?? targetTurn.modelRun,
         };
       } else if (event.type === "failed") {
-        nextTurns[targetIndex] = {
+        updatedTurn = {
           ...targetTurn,
           citations: event.citations ?? targetTurn.citations,
           errorMessage:
@@ -265,11 +275,21 @@ export function AgentChatPanel({
           modelRun: event.model_run ?? targetTurn.modelRun,
         };
       } else if (event.type === "retrieval") {
-        nextTurns[targetIndex] = {
+        updatedTurn = {
           ...targetTurn,
           citations: event.citations ?? targetTurn.citations,
         };
       }
+      if (traceLabel) {
+        updatedTurn = {
+          ...updatedTurn,
+          researchTrace: appendResearchTrace(
+            updatedTurn.researchTrace,
+            traceLabel,
+          ),
+        };
+      }
+      nextTurns[targetIndex] = updatedTurn;
       return nextTurns;
     });
   }
@@ -348,6 +368,16 @@ export function AgentChatPanel({
                   Retry message
                 </button>
               </div>
+            ) : null}
+            {turn.researchTrace.length ? (
+              <details className="agent-chat__trace">
+                <summary>{lastTraceLabel(turn.researchTrace)}</summary>
+                <ol>
+                  {turn.researchTrace.map((item, index) => (
+                    <li key={`${item}:${index}`}>{item}</li>
+                  ))}
+                </ol>
+              </details>
             ) : null}
             {turn.citations.length ? (
               <div className="agent-chat__citations" aria-label="Citations">
@@ -428,6 +458,7 @@ function turnResponseToTranscriptTurn(turn: ChatTurnResponse): TranscriptTurn {
         ? "Familiar could not complete the response."
         : null),
     modelRun: turn.model_run,
+    researchTrace: [],
   };
 }
 
@@ -445,6 +476,93 @@ function targetTurnIndex(
     return -1;
   }
   return turns.length - 1;
+}
+
+function appendResearchTrace(currentTrace: string[], item: string): string[] {
+  if (currentTrace[currentTrace.length - 1] === item) {
+    return currentTrace;
+  }
+  return [...currentTrace, item].slice(-MAX_RESEARCH_TRACE_ITEMS);
+}
+
+function lastTraceLabel(trace: string[]): string {
+  return trace[trace.length - 1] ?? "Research trace";
+}
+
+function researchTraceLabel(event: ChatStreamEvent): string | null {
+  const metadata = event.metadata ?? {};
+  if (event.type === "research_started") {
+    const query = stringValue(metadata.resolved_query);
+    return query ? `Researching "${shortLabel(query)}"` : "Research started";
+  }
+  if (event.type === "tool_call") {
+    return toolCallTraceLabel(metadata);
+  }
+  if (event.type === "retrieval") {
+    return `Retrieved ${event.citations?.length ?? 0} candidate citation(s)`;
+  }
+  if (event.type === "tool_result") {
+    const hitCount = numberValue(metadata.hit_count);
+    const diagnostics = recordValue(metadata.diagnostics);
+    const vectorStatus = stringValue(diagnostics?.vector_status);
+    const base =
+      hitCount === null
+        ? "Tool returned results"
+        : `Tool returned ${hitCount} candidate(s)`;
+    return vectorStatus ? `${base}; vector ${vectorStatus}` : base;
+  }
+  if (event.type === "evidence_validation") {
+    const status = stringValue(metadata.evidence_status) ?? "unknown";
+    const accepted = numberValue(metadata.accepted_hit_count);
+    return accepted === null
+      ? `Evidence ${status}`
+      : `Evidence ${status}; ${accepted} accepted`;
+  }
+  if (event.type === "failed") {
+    return "Research failed";
+  }
+  return null;
+}
+
+function toolCallTraceLabel(metadata: Record<string, unknown>): string {
+  const toolName = stringValue(metadata.tool_name);
+  const argumentsRecord = recordValue(metadata.arguments);
+  if (toolName === "open_page") {
+    const printedPage = stringValue(argumentsRecord?.printed_page_label);
+    const pdfPage = numberValue(argumentsRecord?.pdf_page_number);
+    const page = printedPage ?? (pdfPage === null ? null : String(pdfPage));
+    return page ? `Opening page ${shortLabel(page)}` : "Opening source page";
+  }
+  if (toolName === "search_library") {
+    const query = stringValue(argumentsRecord?.query);
+    return query
+      ? `Running hybrid search for "${shortLabel(query)}"`
+      : "Running hybrid search";
+  }
+  if (toolName === "lookup_source_object") {
+    return "Inspecting source object";
+  }
+  return toolName ? `Running ${toolName}` : "Running research tool";
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function shortLabel(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 60 ? `${normalized.slice(0, 57)}...` : normalized;
 }
 
 function formatThreadUpdatedAt(value: string): string {

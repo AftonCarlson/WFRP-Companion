@@ -45,8 +45,13 @@ def run_research(
     content: str,
     conversation: ConversationContext,
     response_provider: object,
+    reader_context: research.ReaderContext | None = None,
 ) -> FamiliarResearchResult:
-    active_context = chat_store.get_chat_thread_context(config, result.thread.id)
+    active_context = merge_reader_context(
+        chat_store.get_chat_thread_context(config, result.thread.id),
+        reader_context,
+        thread_id=result.thread.id,
+    )
     resolved = context_resolution.resolve_research_request(
         content,
         active_context=active_context,
@@ -55,6 +60,13 @@ def run_research(
         resolved,
         conversation=conversation,
     )
+    metadata: dict[str, object] = {
+        "subject": resolved.subject,
+        "used_active_subject": resolved.used_active_subject,
+    }
+    reader_metadata = reader_context_metadata(reader_context)
+    if reader_metadata:
+        metadata["reader_context"] = reader_metadata
     research_run = chat_store.create_familiar_research_run(
         config,
         model_run_id=result.model_run.id,
@@ -62,10 +74,7 @@ def run_research(
         resolved_query=initial_query,
         intent=resolved.intent,
         max_tool_rounds=MAX_TOOL_ROUNDS,
-        metadata={
-            "subject": resolved.subject,
-            "used_active_subject": resolved.used_active_subject,
-        },
+        metadata=metadata,
     )
     progress: list[FamiliarProgressEvent] = [
         FamiliarProgressEvent(
@@ -75,6 +84,7 @@ def run_research(
                 "resolved_query": initial_query,
                 "intent": resolved.intent,
                 "subject": resolved.subject,
+                "reader_context": reader_metadata,
             },
         )
     ]
@@ -212,6 +222,63 @@ def run_research(
         final_prompt_messages=final_prompt_messages,
         progress_events=tuple(progress),
     )
+
+
+def merge_reader_context(
+    active_context: research.ChatThreadContext | None,
+    reader_context: research.ReaderContext | None,
+    *,
+    thread_id: str,
+) -> research.ChatThreadContext | None:
+    if reader_context is None:
+        return active_context
+    reader_metadata = reader_context_metadata(reader_context)
+    if not reader_metadata:
+        return active_context
+    if active_context is None:
+        return research.ChatThreadContext(
+            thread_id=thread_id,
+            active_subject=None,
+            active_intent=None,
+            active_book_id=reader_context.active_book_id,
+            active_printed_page_label=reader_context.active_printed_page_label,
+            active_pdf_page_number=reader_context.active_pdf_page_number,
+            active_source_object_id=None,
+            updated_from_message_id=None,
+            updated_from_model_run_id=None,
+            metadata={"reader_context": reader_metadata},
+            updated_at="",
+        )
+    return replace(
+        active_context,
+        active_book_id=reader_context.active_book_id or active_context.active_book_id,
+        active_printed_page_label=reader_context.active_printed_page_label
+        or active_context.active_printed_page_label,
+        active_pdf_page_number=reader_context.active_pdf_page_number
+        or active_context.active_pdf_page_number,
+        metadata={
+            **active_context.metadata,
+            "reader_context": reader_metadata,
+        },
+    )
+
+
+def reader_context_metadata(
+    reader_context: research.ReaderContext | None,
+) -> dict[str, object]:
+    if reader_context is None:
+        return {}
+    metadata: dict[str, object] = {}
+    if reader_context.active_book_id:
+        metadata["active_book_id"] = reader_context.active_book_id
+    if reader_context.active_pdf_page_number is not None:
+        metadata["active_pdf_page_number"] = reader_context.active_pdf_page_number
+    if reader_context.active_printed_page_label:
+        metadata["active_printed_page_label"] = reader_context.active_printed_page_label
+    open_book_ids = tuple(dict.fromkeys(reader_context.open_book_ids))
+    if open_book_ids:
+        metadata["open_book_ids"] = list(open_book_ids[:12])
+    return metadata
 
 
 @dataclass(frozen=True)

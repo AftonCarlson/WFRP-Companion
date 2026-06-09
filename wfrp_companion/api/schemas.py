@@ -172,9 +172,17 @@ class ChatCitationResponse(BaseModel):
     page_range_label: str | None = None
 
 
+class ReaderContextRequest(BaseModel):
+    active_book_id: str | None = None
+    active_pdf_page_number: int | None = Field(default=None, ge=1)
+    active_printed_page_label: str | None = None
+    open_book_ids: list[str] = Field(default_factory=list)
+
+
 class SendChatMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
     idempotency_key: str | None = None
+    reader_context: ReaderContextRequest | None = None
 
 
 class RetryModelRunRequest(BaseModel):

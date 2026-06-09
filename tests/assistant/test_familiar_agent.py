@@ -501,6 +501,112 @@ def test_familiar_uses_provider_requested_page_lookup_after_weak_search(
     ]
 
 
+def test_familiar_uses_reader_context_for_page_correction(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    provider_instance = FinalAnswerProvider(answer="Page-corrected answer.")
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="it's on pg 99",
+            idempotency_key="send-reader-page",
+            reader_context=research.ReaderContext(
+                active_book_id="bestiary",
+                active_pdf_page_number=101,
+                open_book_ids=("bestiary",),
+            ),
+            provider_factory=lambda _: provider_instance,
+        )
+    )
+
+    tool_event = next(event for event in events if event.type == "tool_call")
+    assert tool_event.metadata is not None
+    assert tool_event.metadata["tool_name"] == "open_page"
+    assert tool_event.metadata["arguments"] == {
+        "book_id": "bestiary",
+        "book_title_hint": None,
+        "printed_page_label": "99",
+        "pdf_page_number": None,
+        "subject_hint": None,
+        "intent": "rules_lookup",
+    }
+    assert events[-1].assistant_message is not None
+    assert events[-1].assistant_message.content == "Page-corrected answer."
+    assert events[-1].citations[0].book_id == "bestiary"
+    assert events[-1].citations[0].page_label == "99"
+    with open_connection(config.db_path) as connection:
+        row = connection.execute(
+            "select resolved_query, metadata_json from familiar_research_runs"
+        ).fetchone()
+    metadata = json.loads(row["metadata_json"])
+    assert row["resolved_query"] == "it's on pg 99 page 99"
+    assert metadata["reader_context"] == {
+        "active_book_id": "bestiary",
+        "active_pdf_page_number": 101,
+        "open_book_ids": ["bestiary"],
+    }
+
+
+def test_reader_context_merge_preserves_subject_and_tracks_reader_hint() -> None:
+    active_context = research.ChatThreadContext(
+        thread_id="thread-1",
+        active_subject="harpy",
+        active_intent="statline_lookup",
+        active_book_id="old-book",
+        active_printed_page_label="44",
+        active_pdf_page_number=46,
+        active_source_object_id="old-object",
+        updated_from_message_id="message-1",
+        updated_from_model_run_id="run-1",
+        metadata={"evidence_status": "sufficient"},
+        updated_at="2026-06-09T00:00:00Z",
+    )
+
+    unchanged = familiar_agent.merge_reader_context(
+        active_context,
+        None,
+        thread_id="thread-1",
+    )
+    empty = familiar_agent.merge_reader_context(
+        active_context,
+        research.ReaderContext(),
+        thread_id="thread-1",
+    )
+    merged = familiar_agent.merge_reader_context(
+        active_context,
+        research.ReaderContext(
+            active_book_id="bestiary",
+            active_pdf_page_number=101,
+            active_printed_page_label="99",
+            open_book_ids=("bestiary", "bestiary", "core-rules"),
+        ),
+        thread_id="thread-1",
+    )
+
+    assert unchanged is active_context
+    assert empty is active_context
+    assert merged is not None
+    assert merged.active_subject == "harpy"
+    assert merged.active_intent == "statline_lookup"
+    assert merged.active_book_id == "bestiary"
+    assert merged.active_printed_page_label == "99"
+    assert merged.active_pdf_page_number == 101
+    assert merged.metadata == {
+        "evidence_status": "sufficient",
+        "reader_context": {
+            "active_book_id": "bestiary",
+            "active_pdf_page_number": 101,
+            "active_printed_page_label": "99",
+            "open_book_ids": ["bestiary", "core-rules"],
+        },
+    }
+
+
 def test_familiar_finalizes_insufficient_after_empty_research(
     monkeypatch,
     tmp_path: Path,

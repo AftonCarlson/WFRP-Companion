@@ -154,6 +154,13 @@ export type ChatCitationResponse = {
   page_range_label?: string | null;
 };
 
+export type ReaderContextRequest = {
+  active_book_id?: string | null;
+  active_pdf_page_number?: number | null;
+  active_printed_page_label?: string | null;
+  open_book_ids?: string[];
+};
+
 export type SendChatMessageResponse = {
   thread: ChatThreadResponse;
   user_message: ChatMessageResponse;

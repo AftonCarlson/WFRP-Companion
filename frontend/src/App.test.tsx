@@ -140,6 +140,93 @@ it("opens a PDF tab from the library", async () => {
   expect(screen.getByTestId("pdf-canvas")).toBeInTheDocument();
 });
 
+it("sends active reader context with Familiar chat messages", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(apiClient, "createChatThread").mockResolvedValue({
+    id: "thread-1",
+    title: null,
+    active_source_set_id: "rules-core",
+    source_book_count: 1,
+    created_at: "now",
+    updated_at: "now",
+  });
+  const streamChatMessage = vi
+    .spyOn(apiClient, "streamChatMessage")
+    .mockImplementation(async (threadId, options) => {
+      options.onEvent({
+        type: "accepted",
+        user_message: {
+          id: "m1",
+          thread_id: threadId,
+          role: "user",
+          content: options.content,
+          created_at: "now",
+        },
+        model_run: {
+          id: "run-1",
+          thread_id: threadId,
+          user_message_id: "m1",
+          assistant_message_id: null,
+          retrieval_run_id: null,
+          retry_of_model_run_id: null,
+          status: "retrieving",
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          provider_response_id: null,
+          error_code: null,
+          error_message: null,
+          input_tokens: null,
+          output_tokens: null,
+          retryable: false,
+        },
+      });
+      options.onEvent({
+        type: "completed",
+        assistant_message: {
+          id: "m2",
+          thread_id: threadId,
+          role: "assistant",
+          content: "Answer.",
+          created_at: "later",
+        },
+        citations: [
+          {
+            book_id: "core-rules",
+            title: "Core Rules",
+            category: "Rules / Core",
+            page_id: "core-rules:2",
+            page_number: 2,
+            pdf_page_number: 2,
+            page_label: null,
+            snippet: "Answer citation.",
+            rank: 1,
+            score: 1,
+          },
+        ],
+      });
+    });
+  renderApp(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "Open Core Rules" }));
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "same page");
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+
+  expect(await screen.findByText("Answer.")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Open Core Rules page 2" }));
+  expect(screen.getByRole("spinbutton", { name: "Page number" })).toHaveValue(2);
+  expect(streamChatMessage).toHaveBeenCalledWith(
+    "thread-1",
+    expect.objectContaining({
+      content: "same page",
+      reader_context: {
+        active_book_id: "core-rules",
+        active_pdf_page_number: 1,
+        open_book_ids: ["core-rules"],
+      },
+    }),
+  );
+});
+
 it("reconciles enabled book count after a checkbox update", async () => {
   const user = userEvent.setup();
   renderApp(<App />);

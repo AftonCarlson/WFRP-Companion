@@ -21,6 +21,10 @@ Current Familiar implementation:
 - Each run resolves the user's request, preserves active follow-up context
   such as the current subject, records a `familiar_research_runs` row, and
   starts with a backend-selected tool.
+- Chat requests may include `reader_context` from the active Grimoire tab:
+  active book id, active PDF page number, optional printed page label, and open
+  book ids. Familiar treats this only as a routing hint for page-aware
+  recovery; it is not evidence and cannot satisfy citations by itself.
 - `search_library` is the default tool. It uses hybrid retrieval over the
   thread's checked source-book snapshot: page FTS, source-object FTS,
   source-object fallback scan, current local vector candidates when embeddings
@@ -46,6 +50,9 @@ Current Familiar implementation:
   books, source-object indexed books, table/stat indexed books, current
   vectorized books, vectorized enabled books, provider, dimensions, and
   aggregate vector status.
+- Familiar chat turns surface a compact expandable research trace from stream
+  events: research start, tool call, retrieval/candidate counts, vector status
+  when reported, evidence validation status, and failures.
 
 Historical phase notes below describe how the current system was assembled.
 
