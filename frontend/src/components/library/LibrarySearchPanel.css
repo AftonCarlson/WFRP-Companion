@@ -42,6 +42,10 @@
   gap: 8px;
 }
 
+.library-tab {
+  grid-template-rows: 34px auto minmax(0, 1fr);
+}
+
 .library-tab input,
 .search-tab input {
   width: 100%;
@@ -51,6 +55,16 @@
   border: 1px solid var(--color-border);
   border-radius: 5px;
   padding: 7px 9px;
+}
+
+.library-tab__semantic-status {
+  color: var(--color-muted);
+  background: #10171a;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .library-tab__list,

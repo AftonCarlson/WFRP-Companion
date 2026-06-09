@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-06 Familiar conversation context
+Last compiled: 2026-06-08 sparse retrieval query normalization
 
 ## Topics
 

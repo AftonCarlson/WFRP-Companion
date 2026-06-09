@@ -54,6 +54,16 @@ def table_names(connection: sqlite3.Connection) -> set[str]:
     return {row["name"] for row in rows}
 
 
+def column_names(connection: sqlite3.Connection, table_name: str) -> tuple[str, ...]:
+    rows = connection.execute(f"pragma table_info({table_name})").fetchall()
+    return tuple(row["name"] for row in rows)
+
+
+def index_columns(connection: sqlite3.Connection, index_name: str) -> tuple[str, ...]:
+    rows = connection.execute(f"pragma index_info({index_name})").fetchall()
+    return tuple(row["name"] for row in rows)
+
+
 def insert_folder(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
@@ -169,6 +179,10 @@ def test_load_config_uses_local_defaults(tmp_path: Path) -> None:
     assert config.embedding_provider == "disabled"
     assert config.embedding_model == "local-hash-v1"
     assert config.embedding_dimensions == 64
+    assert config.embedding_batch_size == 16
+    assert config.embedding_device is None
+    assert config.embedding_query_prompt_name is None
+    assert config.embedding_local_files_only is False
 
 
 def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
@@ -191,6 +205,10 @@ def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
             "WFRP_EMBEDDING_PROVIDER": "local-hash",
             "WFRP_EMBEDDING_MODEL": "local-hash-test",
             "WFRP_EMBEDDING_DIMENSIONS": "16",
+            "WFRP_EMBEDDING_BATCH_SIZE": "8",
+            "WFRP_EMBEDDING_DEVICE": "mps",
+            "WFRP_EMBEDDING_QUERY_PROMPT_NAME": "query",
+            "WFRP_EMBEDDING_LOCAL_FILES_ONLY": "1",
         },
         repo_root=tmp_path / "repo",
     )
@@ -212,6 +230,10 @@ def test_load_config_honors_environment_overrides(tmp_path: Path) -> None:
     assert config.embedding_provider == "local-hash"
     assert config.embedding_model == "local-hash-test"
     assert config.embedding_dimensions == 16
+    assert config.embedding_batch_size == 8
+    assert config.embedding_device == "mps"
+    assert config.embedding_query_prompt_name == "query"
+    assert config.embedding_local_files_only is True
 
 
 def test_initialize_database_creates_required_schema_and_wal(
@@ -236,6 +258,133 @@ def test_initialize_database_is_idempotent(tmp_path: Path) -> None:
 
     with open_connection(db_path) as connection:
         assert "books" in table_names(connection)
+
+
+def test_embedding_schema_tracks_provider_identity(tmp_path: Path) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        assert "embedding_provider" in column_names(
+            connection,
+            "book_retrieval_status",
+        )
+        assert "embedding_provider" in column_names(
+            connection,
+            "source_object_embeddings",
+        )
+        assert index_columns(
+            connection,
+            "ux_source_object_embeddings_current",
+        ) == (
+            "source_object_id",
+            "embedding_provider",
+            "embedding_model",
+            "embedding_dimensions",
+            "text_snapshot_sha256",
+        )
+
+        insert_folder(connection)
+        insert_book(connection)
+        insert_page(connection)
+        connection.execute(
+            """
+            insert into source_objects (
+              id,
+              book_id,
+              page_id,
+              object_type,
+              heading_path_json,
+              page_start,
+              page_end,
+              text,
+              search_text,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            )
+            values (
+              'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+              'core-rules',
+              'core-rules:1',
+              'rule_section',
+              '[]',
+              1,
+              1,
+              'Critical hits',
+              'Critical hits',
+              0.8,
+              'test',
+              'snapshot',
+              '2026-06-08T00:00:00Z',
+              '2026-06-08T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              vector_status,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'indexed',
+              'local-hash',
+              'shared-model-name',
+              16,
+              '2026-06-08T00:00:00Z'
+            )
+            """
+        )
+        for provider in ("local-hash", "sentence-transformers"):
+            connection.execute(
+                """
+                insert into source_object_embeddings (
+                  id,
+                  source_object_id,
+                  book_id,
+                  embedding_provider,
+                  embedding_model,
+                  embedding_dimensions,
+                  text_snapshot_sha256,
+                  vector_blob,
+                  created_at,
+                  updated_at
+                )
+                values (?, 'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+                        'core-rules', ?, 'shared-model-name', 16, 'snapshot',
+                        ?, '2026-06-08T00:00:00Z', '2026-06-08T00:00:00Z')
+                """,
+                (f"embedding:{provider}", provider, sqlite3.Binary(b"\0\0\0\0")),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into source_object_embeddings (
+                  id,
+                  source_object_id,
+                  book_id,
+                  embedding_provider,
+                  embedding_model,
+                  embedding_dimensions,
+                  text_snapshot_sha256,
+                  vector_blob,
+                  created_at,
+                  updated_at
+                )
+                values ('embedding:duplicate',
+                        'core-rules:p1-p1:rule_section:1:aaaaaaaaaaaa',
+                        'core-rules', 'local-hash', 'shared-model-name', 16,
+                        'snapshot', ?, '2026-06-08T00:00:00Z',
+                        '2026-06-08T00:00:00Z')
+                """,
+                (sqlite3.Binary(b"\0\0\0\0"),),
+            )
 
 
 def test_book_status_constraints_protect_lifecycle_state(tmp_path: Path) -> None:

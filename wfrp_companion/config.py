@@ -28,6 +28,10 @@ class AppConfig:
     embedding_provider: str = "disabled"
     embedding_model: str = "local-hash-v1"
     embedding_dimensions: int = 64
+    embedding_batch_size: int = 16
+    embedding_device: str | None = None
+    embedding_query_prompt_name: str | None = None
+    embedding_local_files_only: bool = False
 
 
 def project_root() -> Path:
@@ -71,4 +75,25 @@ def load_config(
         embedding_provider=source.get("WFRP_EMBEDDING_PROVIDER", "disabled"),
         embedding_model=source.get("WFRP_EMBEDDING_MODEL", "local-hash-v1"),
         embedding_dimensions=int(source.get("WFRP_EMBEDDING_DIMENSIONS", "64")),
+        embedding_batch_size=int(source.get("WFRP_EMBEDDING_BATCH_SIZE", "16")),
+        embedding_device=optional_env_text(source.get("WFRP_EMBEDDING_DEVICE")),
+        embedding_query_prompt_name=optional_env_text(
+            source.get("WFRP_EMBEDDING_QUERY_PROMPT_NAME")
+        ),
+        embedding_local_files_only=env_bool(
+            source.get("WFRP_EMBEDDING_LOCAL_FILES_ONLY"),
+        ),
     )
+
+
+def optional_env_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def env_bool(value: str | None, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().casefold() in {"1", "true", "yes", "on"}

@@ -19,10 +19,14 @@ from wfrp_companion.library.page_labels import load_calibrated_printed_page_labe
 from wfrp_companion.library.page_labels import load_calibrated_printed_page_range_label
 from wfrp_companion.search.fts import build_fts_query, search_exact
 from wfrp_companion.source_objects.embeddings import cosine_similarity
-from wfrp_companion.source_objects.embeddings import local_hash_embeddings_enabled
 from wfrp_companion.source_objects.embeddings import source_object_embeddings_current
-from wfrp_companion.source_objects.embeddings import text_embedding_vector
 from wfrp_companion.source_objects.embeddings import vector_from_blob
+from wfrp_companion.source_objects.embedding_providers import (
+    EmbeddingDimensionError,
+    EmbeddingProviderError,
+    UnsupportedEmbeddingProviderError,
+    resolve_embedding_provider,
+)
 
 
 @dataclass(frozen=True)
@@ -53,7 +57,7 @@ def collect_evidence_candidates(
                 candidate = evidence_candidate_from_page_hit(
                     connection,
                     hit,
-                    query_terms=query_plan.terms + query_plan.expanded_terms,
+                    query_terms=query_plan.match_terms,
                 )
                 if candidate is not None:
                     candidates.append(candidate)
@@ -314,7 +318,13 @@ def search_vector_candidates(
     config: AppConfig,
 ) -> tuple[EvidenceCandidate, ...]:
     selected_book_ids = tuple(book_ids)
-    if not selected_book_ids or not local_hash_embeddings_enabled(config):
+    if not selected_book_ids:
+        return ()
+    try:
+        provider = resolve_embedding_provider(config)
+    except UnsupportedEmbeddingProviderError:
+        return ()
+    if provider is None:
         return ()
     current_book_ids = tuple(
         book_id
@@ -323,10 +333,10 @@ def search_vector_candidates(
     )
     if not current_book_ids:
         return ()
-    query_vector = text_embedding_vector(
-        query_text,
-        dimensions=config.embedding_dimensions,
-    )
+    try:
+        query_vector = provider.embed_query(query_text)
+    except (EmbeddingProviderError, EmbeddingDimensionError):
+        return ()
     if not any(query_vector):
         return ()
     placeholders = ",".join("?" for _ in current_book_ids)
@@ -348,11 +358,14 @@ def search_vector_candidates(
         join books on books.id = source_objects.book_id
         join pages on pages.id = source_objects.page_id
         where source_objects.book_id in ({placeholders})
+          and source_object_embeddings.embedding_provider = ?
           and source_object_embeddings.embedding_model = ?
           and source_object_embeddings.embedding_dimensions = ?
+          and length(source_object_embeddings.vector_blob) = ?
           and source_object_embeddings.text_snapshot_sha256 =
               source_objects.text_snapshot_sha256
           and book_retrieval_status.vector_status = 'indexed'
+          and book_retrieval_status.embedding_provider = ?
           and book_retrieval_status.embedding_model = ?
           and book_retrieval_status.embedding_dimensions = ?
           and books.copy_status = 'copied'
@@ -361,21 +374,27 @@ def search_vector_candidates(
         """,
         (
             *current_book_ids,
-            config.embedding_model,
-            config.embedding_dimensions,
-            config.embedding_model,
-            config.embedding_dimensions,
+            provider.provider_name,
+            provider.model_name,
+            provider.dimensions,
+            provider.dimensions * 4,
+            provider.provider_name,
+            provider.model_name,
+            provider.dimensions,
         ),
     ).fetchall()
-    scored_rows = sorted(
-        (
-            (
-                cosine_similarity(query_vector, vector_from_blob(row["vector_blob"])),
-                row,
+    scored_rows: list[tuple[float, sqlite3.Row]] = []
+    for row in rows:
+        try:
+            similarity = cosine_similarity(
+                query_vector,
+                vector_from_blob(row["vector_blob"]),
             )
-            for row in rows
-        ),
-        key=lambda item: (-item[0], item[1]["page_start"], item[1]["id"]),
+        except ValueError:
+            continue
+        scored_rows.append((similarity, row))
+    scored_rows.sort(
+        key=lambda item: (-item[0], item[1]["page_start"], item[1]["id"])
     )
     candidates: list[EvidenceCandidate] = []
     for similarity, row in scored_rows[: max(1, min(limit, 100))]:
@@ -394,6 +413,8 @@ def search_vector_candidates(
                 candidate,
                 rank_reasons=(
                     *candidate.rank_reasons,
+                    f"vector_provider:{provider.provider_name}",
+                    f"vector_model:{provider.model_name}",
                     f"vector_similarity:{similarity:.6f}",
                 ),
             )

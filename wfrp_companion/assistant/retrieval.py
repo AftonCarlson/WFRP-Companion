@@ -27,6 +27,7 @@ from wfrp_companion.assistant.query_planner import meaningful_tokens as meaningf
 from wfrp_companion.assistant.query_planner import plan_query as plan_query
 from wfrp_companion.assistant.query_planner import query_candidates as query_candidates
 from wfrp_companion.assistant.query_planner import query_candidates_from_terms as query_candidates_from_terms
+from wfrp_companion.assistant.query_planner import query_match_terms as query_match_terms
 from wfrp_companion.assistant.query_planner import term_variants as term_variants
 from wfrp_companion.assistant.query_planner import terms_are_close as terms_are_close
 from wfrp_companion.assistant.reranking import candidate_relevance_text as candidate_relevance_text
@@ -95,7 +96,7 @@ def retrieve_context(
         if candidate.source_object_id is None:
             context_text = context_window(
                 context_text,
-                terms=list(query_plan.terms + query_plan.expanded_terms),
+                terms=list(query_plan.match_terms),
                 max_chars=window_chars,
             )
         if len(context_text) > remaining_chars:

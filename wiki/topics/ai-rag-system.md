@@ -207,6 +207,48 @@ Phase 7 PR8 adds a local vector candidate channel:
 - This phase does not add hosted embeddings, a hosted vector database, or a
   provider-backed/cross-encoder reranker.
 
+The local semantic embeddings phase upgrades that vector path from a smoke
+test to a real local provider boundary:
+
+- Migration `0006_embedding_provider_identity` makes both
+  `book_retrieval_status` and `source_object_embeddings` provider-aware, so
+  `local-hash` and `sentence-transformers` rows cannot collide.
+- `wfrp_companion/source_objects/embedding_providers.py` owns the provider
+  protocol, deterministic `local-hash` provider, and lazy
+  `sentence-transformers` provider.
+- The recommended semantic profile is
+  `WFRP_EMBEDDING_PROVIDER=sentence-transformers`,
+  `WFRP_EMBEDDING_MODEL=BAAI/bge-m3`, and
+  `WFRP_EMBEDDING_DIMENSIONS=1024`.
+- Sentence Transformers model instances are cached by model, device, and
+  local-files-only mode. Source-object text and query text are not cached.
+- Embedding rebuilds claim the job and mark `indexing` in short SQLite
+  transactions, compute vectors outside write transactions, recheck the
+  source-object snapshot, and only then replace rows for the same
+  book/provider/model/dimensions.
+- Vector currentness also requires the stored vector blob byte length to match
+  the configured dimensions, so malformed local rows cannot look current or
+  crash query-time scoring.
+- If source objects change during local inference, existing vector rows are
+  preserved, the book becomes `needs_refresh`, and the job is failed with a
+  bounded safe reason.
+- If local embedding inference fails after a rebuild job is claimed, both
+  `book_retrieval_status` and the matching `ingest_jobs` row are marked
+  failed with a bounded error and `completed_at`, so normal retry behavior does
+  not depend on stale-job recovery.
+- Query-time vector search resolves the configured provider, embeds the query
+  locally, filters by checked-book currentness, and records
+  `vector_provider:*`, `vector_model:*`, and `vector_similarity:*` rank
+  reasons before RRF/reranking.
+- Query-time provider dependency, runtime, or dimension failures are treated as
+  a missing vector channel for that retrieval run. Familiar still uses exact
+  page/object candidates rather than failing the model run.
+- `/api/books` exposes vector status, provider, and dimensions only; it does
+  not expose `embedding_model` because that user-configurable value can be a
+  local filesystem path. The Library UI shows one compact semantic-search
+  status summary. It does not expose raw vector errors, local paths, source
+  text, or per-book semantic badges.
+
 Phase 7 PR9 adds structured source-object evidence and link-aware evidence
 resolution:
 
@@ -320,6 +362,34 @@ structured-evidence path:
   lexical candidates, but they cannot be the only match that admits a
   multi-term entity result into prompt context. This prevents unrelated
   subsections in a chapter from supplying wrong stat-like evidence.
+
+Follow-up sparse query normalization repair on 2026-06-08 tightened the current
+hybrid retrieval path:
+
+- Query planning now produces bounded sparse alternatives for common structural
+  compounds and inflections. For example, `statblocks for harpies` can search
+  `stat block harpy`, and `statblock for gors` can search `stat block gor`,
+  without adding creature-specific aliases.
+- Planner `match_terms` are intentionally narrower than FTS candidates. They
+  split structural compounds such as `statblock` into `stat` and `block`, but
+  they do not add every plural/singular variant as a separate relevance term.
+  This prevents the deterministic reranker from double-counting one concept
+  such as `critical` plus `criticals`.
+- Exact page resolution and deterministic reranking use `match_terms`, so page
+  hits, object hits, and source-object link resolution apply the same
+  normalized structural intent. Dense vector query text stays close to the
+  user's original meaningful terms, keeping semantic embeddings from being
+  polluted by synthetic sparse variants.
+- Research grounding: this follows established hybrid IR/RAG practice: sparse
+  lexical search preserves exact term evidence, query expansion improves
+  candidate recall, and two-stage retrieval/reranking protects the prompt
+  budget. See SQLite FTS5 tokenizers, SPLADE sparse lexical retrieval,
+  Query2doc query expansion, and recent hybrid/two-stage RAG papers. The app
+  keeps this expansion deterministic and bounded because private rules lookup
+  needs auditable evidence rather than generated pseudo-book text.
+- Live QA after the repair confirmed that the original query
+  `give me the statblock for gors` retrieves Old World Bestiary page 84 / Gor
+  Statistics as the first evidence item under the checked 13-book source set.
 
 ## Answer Contract
 

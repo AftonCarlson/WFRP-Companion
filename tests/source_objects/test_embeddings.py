@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import struct
+import sys
+import types
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,10 +19,21 @@ from wfrp_companion.config import AppConfig
 from wfrp_companion.assistant import retrieval
 from wfrp_companion.db.connection import open_connection
 from wfrp_companion.db.migrations import apply_migration
+from wfrp_companion.source_objects import embedding_providers as provider_module
+from wfrp_companion.source_objects.embedding_providers import (
+    EmbeddingDimensionError,
+    EmbeddingProviderDependencyError,
+    EmbeddingProviderRuntimeError,
+    LocalHashEmbeddingProvider,
+    UnsupportedEmbeddingProviderError,
+    resolve_embedding_provider,
+)
 from wfrp_companion.source_objects.embeddings import (
     cosine_similarity,
     embedding_source_snapshot_sha256,
+    local_hash_embeddings_enabled,
     recover_stale_embedding_jobs,
+    rebuild_book_embeddings,
     rebuild_embeddings,
     source_object_embeddings_current,
     source_object_embeddings_job_id,
@@ -39,6 +52,240 @@ def local_embedding_config(tmp_path: Path):
         embedding_model="local-hash-test",
         embedding_dimensions=16,
     )
+
+
+def test_resolve_embedding_provider_disabled_local_and_unsupported(
+    tmp_path: Path,
+) -> None:
+    disabled = make_config(tmp_path)
+    assert resolve_embedding_provider(disabled) is None
+    assert not local_hash_embeddings_enabled(disabled)
+
+    config = local_embedding_config(tmp_path)
+    assert local_hash_embeddings_enabled(config)
+    provider = resolve_embedding_provider(config)
+
+    assert isinstance(provider, LocalHashEmbeddingProvider)
+    assert provider.provider_name == "local-hash"
+    assert provider.model_name == "local-hash-test"
+    assert provider.dimensions == 16
+    assert provider.embed_documents(("critical hit", "wyrdstone")) == (
+        text_embedding_vector("critical hit", dimensions=16),
+        text_embedding_vector("wyrdstone", dimensions=16),
+    )
+    assert provider.embed_query("critical hit") == text_embedding_vector(
+        "critical hit",
+        dimensions=16,
+    )
+
+    with pytest.raises(UnsupportedEmbeddingProviderError, match="custom"):
+        resolve_embedding_provider(replace(config, embedding_provider="custom"))
+
+
+def test_sentence_transformers_provider_uses_lazy_cached_model_and_encode_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    init_calls: list[tuple[str, dict[str, object]]] = []
+    encode_calls: list[tuple[object, dict[str, object]]] = []
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name_or_path: str, **kwargs: object) -> None:
+            init_calls.append((model_name_or_path, kwargs))
+
+        def encode(self, sentences: object, **kwargs: object) -> object:
+            encode_calls.append((sentences, kwargs))
+            if isinstance(sentences, str):
+                return [0.0, 1.0, 0.0]
+            return [[1.0, 0.0, 0.0] for _ in sentences]
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    config = replace(
+        local_embedding_config(tmp_path),
+        embedding_provider="sentence-transformers",
+        embedding_model="fake/bge-cache",
+        embedding_dimensions=3,
+        embedding_batch_size=2,
+        embedding_device="mps",
+        embedding_query_prompt_name="query",
+        embedding_local_files_only=True,
+    )
+
+    provider_one = resolve_embedding_provider(config)
+    provider_two = resolve_embedding_provider(config)
+
+    assert init_calls == []
+    assert provider_one is not None
+    assert provider_two is not None
+    assert provider_one.embed_documents(("alpha", "beta")) == (
+        (1.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0),
+    )
+    assert provider_two.embed_query("question") == (0.0, 1.0, 0.0)
+    assert init_calls == [
+        (
+            "fake/bge-cache",
+            {"device": "mps", "local_files_only": True},
+        )
+    ]
+    assert encode_calls == [
+        (
+            ("alpha", "beta"),
+            {"batch_size": 2, "normalize_embeddings": True},
+        ),
+        (
+            "question",
+            {
+                "batch_size": 1,
+                "normalize_embeddings": True,
+                "prompt_name": "query",
+            },
+        ),
+    ]
+
+
+def test_sentence_transformers_provider_reports_missing_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fail_import(module_name: str) -> object:
+        if module_name == "sentence_transformers":
+            raise ModuleNotFoundError("No module named 'sentence_transformers'")
+        raise AssertionError(module_name)
+
+    monkeypatch.setattr(provider_module.importlib, "import_module", fail_import)
+    config = replace(
+        local_embedding_config(tmp_path),
+        embedding_provider="sentence-transformers",
+        embedding_model="fake/missing-dependency",
+        embedding_dimensions=3,
+    )
+    provider = resolve_embedding_provider(config)
+
+    assert provider is not None
+    with pytest.raises(EmbeddingProviderDependencyError, match="sentence-transformers"):
+        provider.embed_query("critical hit")
+
+
+def test_sentence_transformers_provider_reports_model_load_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeSentenceTransformer:
+        def __init__(self, model_name_or_path: str, **kwargs: object) -> None:
+            raise OSError("cache miss")
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    config = replace(
+        local_embedding_config(tmp_path),
+        embedding_provider="sentence-transformers",
+        embedding_model="fake/cache-miss",
+        embedding_dimensions=3,
+    )
+    provider = resolve_embedding_provider(config)
+
+    assert provider is not None
+    with pytest.raises(EmbeddingProviderRuntimeError, match="Unable to load"):
+        provider.embed_query("critical hit")
+
+
+def test_sentence_transformers_provider_reports_encode_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeSentenceTransformer:
+        def __init__(self, model_name_or_path: str, **kwargs: object) -> None:
+            pass
+
+        def encode(self, sentences: object, **kwargs: object) -> object:
+            raise RuntimeError("encode failed")
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    config = replace(
+        local_embedding_config(tmp_path),
+        embedding_provider="sentence-transformers",
+        embedding_model="fake/encode-failure",
+        embedding_dimensions=3,
+    )
+    provider = resolve_embedding_provider(config)
+
+    assert provider is not None
+    with pytest.raises(EmbeddingProviderRuntimeError, match="Unable to encode"):
+        provider.embed_documents(("critical hit",))
+    with pytest.raises(EmbeddingProviderRuntimeError, match="Unable to encode query"):
+        provider.embed_query("critical hit")
+
+
+def test_sentence_transformers_provider_validates_vector_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeSentenceTransformer:
+        def __init__(self, model_name_or_path: str, **kwargs: object) -> None:
+            pass
+
+        def encode(self, sentences: object, **kwargs: object) -> object:
+            if isinstance(sentences, str):
+                return [1.0, 0.0]
+            return [[1.0, 0.0] for _ in sentences]
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    config = replace(
+        local_embedding_config(tmp_path),
+        embedding_provider="sentence-transformers",
+        embedding_model="fake/dimension-mismatch",
+        embedding_dimensions=3,
+    )
+    provider = resolve_embedding_provider(config)
+
+    assert provider is not None
+    with pytest.raises(EmbeddingDimensionError, match="expected 3 dimensions"):
+        provider.embed_documents(("critical hit",))
+
+
+def test_sentence_transformers_provider_handles_empty_and_array_like_results(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeArray:
+        def __init__(self, value: object) -> None:
+            self.value = value
+
+        def tolist(self) -> object:
+            return self.value
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name_or_path: str, **kwargs: object) -> None:
+            pass
+
+        def encode(self, sentences: object, **kwargs: object) -> object:
+            if isinstance(sentences, str):
+                return FakeArray([0.0, 1.0, 0.0])
+            return FakeArray([[1.0, 0.0, 0.0] for _ in sentences])
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    config = replace(
+        local_embedding_config(tmp_path),
+        embedding_provider="sentence-transformers",
+        embedding_model="fake/array-like",
+        embedding_dimensions=3,
+    )
+    provider = resolve_embedding_provider(config)
+
+    assert provider is not None
+    assert provider.embed_documents(()) == ()
+    assert provider.embed_documents(("critical hit",)) == ((1.0, 0.0, 0.0),)
+    assert provider.embed_query("critical hit") == (0.0, 1.0, 0.0)
 
 
 def test_rebuild_embeddings_is_disabled_by_default(tmp_path: Path) -> None:
@@ -87,15 +334,18 @@ def test_rebuild_embeddings_indexes_current_source_objects_and_skips_current(
     row = fetch_one(config, "select * from source_object_embeddings order by id limit 1")
     assert status["vector_status"] == "indexed"
     assert status["vector_snapshot_sha256"] == snapshot
+    assert status["embedding_provider"] == "local-hash"
     assert status["embedding_model"] == "local-hash-test"
     assert status["embedding_dimensions"] == 16
     assert job["status"] == "succeeded"
     assert job["idempotency_key"] == source_object_embeddings_job_id(
         "rules",
+        "local-hash",
         "local-hash-test",
         16,
         snapshot,
     )
+    assert row["embedding_provider"] == "local-hash"
     assert len(row["vector_blob"]) == 16 * struct.calcsize("<f")
     with open_connection(config.db_path) as connection:
         assert source_object_embeddings_current(connection, "rules", config=config)
@@ -135,6 +385,32 @@ def test_rebuild_embeddings_invalidates_when_source_object_text_changes(
     ]
     assert summary.indexed == 1
     assert before != after
+
+
+def test_source_object_embeddings_current_rejects_malformed_vector_blob(
+    tmp_path: Path,
+) -> None:
+    config = local_embedding_config(tmp_path)
+    insert_indexed_book(config)
+    extract_source_object_library(config)
+    assert rebuild_embeddings(config).indexed == 1
+
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update source_object_embeddings
+            set vector_blob = ?
+            where rowid = (
+              select rowid
+              from source_object_embeddings
+              order by rowid
+              limit 1
+            )
+            """,
+            (vector_blob((1.0,)),),
+        )
+
+        assert not source_object_embeddings_current(connection, "rules", config=config)
 
 
 def test_vector_candidates_are_filtered_to_checked_books(tmp_path: Path) -> None:
@@ -222,6 +498,74 @@ def test_vector_candidates_require_current_embedding_snapshot(tmp_path: Path) ->
             limit=10,
             config=config,
         ) == ()
+
+
+def test_vector_candidates_filter_embedding_provider(tmp_path: Path) -> None:
+    config = local_embedding_config(tmp_path)
+    insert_indexed_book(config)
+    extract_source_object_library(config)
+    assert rebuild_embeddings(config).indexed == 1
+
+    with open_connection(config.db_path) as connection:
+        row = connection.execute(
+            """
+            select
+              source_object_id,
+              book_id,
+              text_snapshot_sha256,
+              vector_blob
+            from source_object_embeddings
+            order by id
+            limit 1
+            """
+        ).fetchone()
+        connection.execute(
+            """
+            insert into source_object_embeddings (
+              id,
+              source_object_id,
+              book_id,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              text_snapshot_sha256,
+              vector_blob,
+              created_at,
+              updated_at
+            )
+            values (
+              'embedding:other-provider-current',
+              ?,
+              ?,
+              'other-provider',
+              ?,
+              ?,
+              ?,
+              ?,
+              '2026-06-08T00:00:00Z',
+              '2026-06-08T00:00:00Z'
+            )
+            """,
+            (
+                row["source_object_id"],
+                row["book_id"],
+                config.embedding_model,
+                config.embedding_dimensions,
+                row["text_snapshot_sha256"],
+                row["vector_blob"],
+            ),
+        )
+        candidates = retrieval.search_vector_candidates(
+            connection,
+            "critical hits",
+            book_ids=("rules",),
+            limit=10,
+            config=config,
+        )
+
+    candidate_ids = [candidate.source_object_id for candidate in candidates]
+    assert row["source_object_id"] in candidate_ids
+    assert candidate_ids.count(row["source_object_id"]) == 1
 
 
 def test_rebuild_embeddings_applies_pending_vector_migration_for_existing_db(
@@ -374,7 +718,27 @@ def test_embedding_book_filters_and_disabled_current_edges(tmp_path: Path) -> No
             "rules",
             config=replace(config, embedding_provider="disabled"),
         )
+        assert not source_object_embeddings_current(
+            connection,
+            "rules",
+            config=replace(config, embedding_provider="custom"),
+        )
         assert not source_object_embeddings_current(connection, "missing", config=config)
+        assert not source_object_embeddings_current(connection, "rules", config=config)
+
+
+def test_embedding_currentness_handles_none_provider_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = local_embedding_config(tmp_path)
+    insert_indexed_book(config)
+    monkeypatch.setattr(
+        "wfrp_companion.source_objects.embeddings.resolve_embedding_provider",
+        lambda config: None,
+    )
+
+    with open_connection(config.db_path) as connection:
         assert not source_object_embeddings_current(connection, "rules", config=config)
 
 
@@ -398,6 +762,7 @@ def test_rebuild_embeddings_reports_unsupported_provider_and_claim_conflict(
         snapshot = embedding_source_snapshot_sha256(connection, "rules")
         job_id = source_object_embeddings_job_id(
             "rules",
+            local_config.embedding_provider,
             local_config.embedding_model,
             local_config.embedding_dimensions,
             snapshot,
@@ -435,6 +800,50 @@ def test_embedding_currentness_detects_status_and_projection_mismatches(
     assert rebuild_embeddings(config).indexed == 1
 
     with open_connection(config.db_path) as connection:
+        source_object = connection.execute(
+            """
+            select id
+            from source_objects
+            where book_id = 'rules'
+            order by id
+            limit 1
+            """
+        ).fetchone()
+        connection.execute(
+            """
+            insert into source_object_embeddings (
+              id,
+              source_object_id,
+              book_id,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              text_snapshot_sha256,
+              vector_blob,
+              created_at,
+              updated_at
+            )
+            values (
+              'embedding:other-provider-stale',
+              ?,
+              'rules',
+              'other-provider',
+              ?,
+              ?,
+              'stale-snapshot',
+              ?,
+              '2026-06-08T00:00:00Z',
+              '2026-06-08T00:00:00Z'
+            )
+            """,
+            (
+                source_object["id"],
+                config.embedding_model,
+                config.embedding_dimensions,
+                vector_blob((0.0,) * config.embedding_dimensions),
+            ),
+        )
+        assert source_object_embeddings_current(connection, "rules", config=config)
         connection.execute(
             """
             update book_retrieval_status
@@ -457,10 +866,20 @@ def test_embedding_currentness_detects_status_and_projection_mismatches(
             """
             update book_retrieval_status
             set embedding_dimensions = ?,
-                vector_status = 'indexed'
+                vector_status = 'indexed',
+                embedding_provider = 'other-provider'
             where book_id = 'rules'
             """,
             (config.embedding_dimensions,),
+        )
+        assert not source_object_embeddings_current(connection, "rules", config=config)
+        connection.execute(
+            """
+            update book_retrieval_status
+            set embedding_provider = ?
+            where book_id = 'rules'
+            """,
+            (config.embedding_provider,),
         )
         connection.execute("delete from source_object_embeddings where rowid = 1")
         assert not source_object_embeddings_current(connection, "rules", config=config)
@@ -479,6 +898,269 @@ def test_embedding_currentness_detects_status_and_projection_mismatches(
             (empty_snapshot,),
         )
         assert not source_object_embeddings_current(connection, "rules", config=config)
+
+
+def test_rebuild_book_embeddings_computes_vectors_outside_write_transaction(
+    tmp_path: Path,
+) -> None:
+    config = local_embedding_config(tmp_path)
+    insert_indexed_book(config)
+    extract_source_object_library(config)
+
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into book_retrieval_status (book_id, updated_at)
+            values ('rules', '2026-06-08T00:00:00Z')
+            on conflict(book_id) do nothing
+            """
+        )
+        observed_transactions: list[bool] = []
+
+        class InspectingProvider:
+            provider_name = "local-hash"
+            model_name = "local-hash-test"
+            dimensions = 16
+
+            def embed_documents(self, texts):  # noqa: ANN001
+                observed_transactions.append(connection.in_transaction)
+                return tuple(
+                    text_embedding_vector(text, dimensions=self.dimensions)
+                    for text in texts
+                )
+
+            def embed_query(self, text: str) -> tuple[float, ...]:
+                return text_embedding_vector(text, dimensions=self.dimensions)
+
+        written = rebuild_book_embeddings(
+            connection,
+            book_id="rules",
+            config=config,
+            provider=InspectingProvider(),
+            now="2026-06-08T00:00:00Z",
+        )
+
+    assert written == 2
+    assert observed_transactions == [False]
+
+
+def test_rebuild_book_embeddings_marks_job_failed_when_provider_raises(
+    tmp_path: Path,
+) -> None:
+    config = local_embedding_config(tmp_path)
+    insert_indexed_book(config)
+    extract_source_object_library(config)
+
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into book_retrieval_status (book_id, updated_at)
+            values ('rules', '2026-06-08T00:00:00Z')
+            on conflict(book_id) do nothing
+            """
+        )
+
+        class FailingProvider:
+            provider_name = "local-hash"
+            model_name = "local-hash-test"
+            dimensions = 16
+
+            def embed_documents(self, texts):  # noqa: ANN001
+                raise RuntimeError("model load failed")
+
+            def embed_query(self, text: str) -> tuple[float, ...]:
+                return text_embedding_vector(text, dimensions=self.dimensions)
+
+        with pytest.raises(RuntimeError, match="model load failed"):
+            rebuild_book_embeddings(
+                connection,
+                book_id="rules",
+                config=config,
+                provider=FailingProvider(),
+                now="2026-06-08T00:00:00Z",
+            )
+
+        status = connection.execute(
+            """
+            select vector_status, last_error
+            from book_retrieval_status
+            where book_id = 'rules'
+            """
+        ).fetchone()
+        job = connection.execute(
+            """
+            select status, last_error, completed_at
+            from ingest_jobs
+            where job_type = 'rebuild_embeddings'
+            order by updated_at desc, id desc
+            limit 1
+            """
+        ).fetchone()
+
+    assert status["vector_status"] == "failed"
+    assert "RuntimeError: model load failed" in status["last_error"]
+    assert job["status"] == "failed"
+    assert "RuntimeError: model load failed" in job["last_error"]
+    assert job["completed_at"] is not None
+
+
+def test_rebuild_book_embeddings_preserves_rows_when_source_snapshot_drifts(
+    tmp_path: Path,
+) -> None:
+    config = local_embedding_config(tmp_path)
+    insert_indexed_book(config)
+    extract_source_object_library(config)
+    assert rebuild_embeddings(config).indexed == 1
+    with open_connection(config.db_path) as setup_connection:
+        before_rows = tuple(
+            (row["id"], row["updated_at"])
+            for row in setup_connection.execute(
+                """
+                select id, updated_at
+                from source_object_embeddings
+                order by id
+                """
+            ).fetchall()
+        )
+
+    with open_connection(config.db_path) as connection:
+
+        class DriftingProvider:
+            provider_name = "local-hash"
+            model_name = "local-hash-test"
+            dimensions = 16
+
+            def embed_documents(self, texts):  # noqa: ANN001
+                vectors = tuple(
+                    text_embedding_vector(text, dimensions=self.dimensions)
+                    for text in texts
+                )
+                connection.execute(
+                    """
+                    update source_objects
+                    set search_text = search_text || ' changed',
+                        text_snapshot_sha256 = 'changed-during-embedding'
+                    where book_id = 'rules'
+                      and page_start = 1
+                    """
+                )
+                return vectors
+
+            def embed_query(self, text: str) -> tuple[float, ...]:
+                return text_embedding_vector(text, dimensions=self.dimensions)
+
+        written = rebuild_book_embeddings(
+            connection,
+            book_id="rules",
+            config=config,
+            provider=DriftingProvider(),
+            now="2026-06-08T00:00:00Z",
+        )
+        after_rows = tuple(
+            (row["id"], row["updated_at"])
+            for row in connection.execute(
+                """
+                select id, updated_at
+                from source_object_embeddings
+                order by id
+                """
+            ).fetchall()
+        )
+        status = connection.execute(
+            """
+            select vector_status, last_error
+            from book_retrieval_status
+            where book_id = 'rules'
+            """
+        ).fetchone()
+        job = connection.execute(
+            """
+            select status, last_error
+            from ingest_jobs
+            where job_type = 'rebuild_embeddings'
+              and status = 'failed'
+            order by updated_at desc, id desc
+            limit 1
+            """
+        ).fetchone()
+
+    assert written == 0
+    assert after_rows == before_rows
+    assert status["vector_status"] == "needs_refresh"
+    assert "changed during embedding rebuild" in status["last_error"]
+    assert job["status"] == "failed"
+    assert "changed during embedding rebuild" in job["last_error"]
+
+
+def test_rebuild_embeddings_reports_snapshot_drift_without_marking_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = local_embedding_config(tmp_path)
+    insert_indexed_book(config)
+    extract_source_object_library(config)
+
+    def drift_rebuild(*args, **kwargs):  # noqa: ANN002, ANN003
+        return 0
+
+    monkeypatch.setattr(
+        "wfrp_companion.source_objects.embeddings.rebuild_book_embeddings",
+        drift_rebuild,
+    )
+
+    summary = rebuild_embeddings(config, force=True)
+
+    assert summary.indexed == 0
+    assert summary.failed == 1
+    assert summary.failures[0].reason == "Source objects changed during embedding rebuild."
+
+
+def test_rebuild_book_embeddings_rejects_status_changed_before_commit(
+    tmp_path: Path,
+) -> None:
+    config = local_embedding_config(tmp_path)
+    insert_indexed_book(config)
+    extract_source_object_library(config)
+
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into book_retrieval_status (book_id, updated_at)
+            values ('rules', '2026-06-08T00:00:00Z')
+            on conflict(book_id) do nothing
+            """
+        )
+
+        class StatusChangingProvider:
+            provider_name = "local-hash"
+            model_name = "local-hash-test"
+            dimensions = 16
+
+            def embed_documents(self, texts):  # noqa: ANN001
+                vectors = tuple(
+                    text_embedding_vector(text, dimensions=self.dimensions)
+                    for text in texts
+                )
+                connection.execute(
+                    """
+                    update book_retrieval_status
+                    set vector_status = 'needs_refresh'
+                    where book_id = 'rules'
+                    """
+                )
+                return vectors
+
+            def embed_query(self, text: str) -> tuple[float, ...]:
+                return text_embedding_vector(text, dimensions=self.dimensions)
+
+        with pytest.raises(RuntimeError, match="status changed"):
+            rebuild_book_embeddings(
+                connection,
+                book_id="rules",
+                config=config,
+                provider=StatusChangingProvider(),
+                now="2026-06-08T00:00:00Z",
+            )
 
 
 def test_stale_embedding_job_recovery_marks_status_for_retry(tmp_path: Path) -> None:

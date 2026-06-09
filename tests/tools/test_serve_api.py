@@ -73,6 +73,13 @@ def test_config_from_args_preserves_openai_runtime_settings(
     monkeypatch.setenv("WFRP_CHAT_PROMPT_HISTORY_CHAR_LIMIT", "700")
     monkeypatch.setenv("WFRP_CHAT_RETRIEVAL_HISTORY_TURN_LIMIT", "3")
     monkeypatch.setenv("WFRP_CHAT_RETRIEVAL_QUERY_CHAR_LIMIT", "450")
+    monkeypatch.setenv("WFRP_EMBEDDING_PROVIDER", "local-hash")
+    monkeypatch.setenv("WFRP_EMBEDDING_MODEL", "local-hash-test")
+    monkeypatch.setenv("WFRP_EMBEDDING_DIMENSIONS", "16")
+    monkeypatch.setenv("WFRP_EMBEDDING_BATCH_SIZE", "8")
+    monkeypatch.setenv("WFRP_EMBEDDING_DEVICE", "mps")
+    monkeypatch.setenv("WFRP_EMBEDDING_QUERY_PROMPT_NAME", "query")
+    monkeypatch.setenv("WFRP_EMBEDDING_LOCAL_FILES_ONLY", "true")
 
     config = serve_api.config_from_args(
         serve_api.build_parser().parse_args(["--data-dir", str(tmp_path / "data")])
@@ -88,6 +95,13 @@ def test_config_from_args_preserves_openai_runtime_settings(
     assert config.chat_prompt_history_char_limit == 700
     assert config.chat_retrieval_history_turn_limit == 3
     assert config.chat_retrieval_query_char_limit == 450
+    assert config.embedding_provider == "local-hash"
+    assert config.embedding_model == "local-hash-test"
+    assert config.embedding_dimensions == 16
+    assert config.embedding_batch_size == 8
+    assert config.embedding_device == "mps"
+    assert config.embedding_query_prompt_name == "query"
+    assert config.embedding_local_files_only is True
 
 
 def test_run_uvicorn_delegates_to_uvicorn_run(monkeypatch) -> None:

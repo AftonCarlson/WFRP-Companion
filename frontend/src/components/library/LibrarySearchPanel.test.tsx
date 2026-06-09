@@ -20,6 +20,9 @@ const book = {
   search_ready: true,
   fully_ready: false,
   needs_attention: false,
+  vector_status: "indexed",
+  embedding_provider: "sentence-transformers",
+  embedding_dimensions: 1024,
 };
 
 const sourceSetBook = {

@@ -23,6 +23,10 @@ class BookSummary:
     search_ready: bool
     fully_ready: bool
     needs_attention: bool
+    vector_status: str
+    embedding_provider: str | None
+    embedding_model: str | None
+    embedding_dimensions: int | None
 
 
 @dataclass(frozen=True)
@@ -93,7 +97,11 @@ BOOK_COLUMNS = """
   book_readiness.reader_ready,
   book_readiness.search_ready,
   book_readiness.fully_ready,
-  book_readiness.needs_attention
+  book_readiness.needs_attention,
+  coalesce(book_retrieval_status.vector_status, 'disabled') as vector_status,
+  book_retrieval_status.embedding_provider,
+  book_retrieval_status.embedding_model,
+  book_retrieval_status.embedding_dimensions
 """
 
 
@@ -104,6 +112,8 @@ def list_books(config: AppConfig) -> tuple[BookSummary, ...]:
             select {BOOK_COLUMNS}
             from books
             left join book_readiness on book_readiness.book_id = books.id
+            left join book_retrieval_status
+              on book_retrieval_status.book_id = books.id
             order by books.category, books.title, books.id
             """
         ).fetchall()
@@ -215,6 +225,8 @@ def book_row(connection: sqlite3.Connection, book_id: str) -> sqlite3.Row:
         select {BOOK_COLUMNS}
         from books
         left join book_readiness on book_readiness.book_id = books.id
+        left join book_retrieval_status
+          on book_retrieval_status.book_id = books.id
         where books.id = ?
         """,
         (book_id,),
@@ -253,6 +265,10 @@ def book_summary_from_row(row: sqlite3.Row) -> BookSummary:
         search_ready=bool(row["search_ready"]),
         fully_ready=bool(row["fully_ready"]),
         needs_attention=bool(row["needs_attention"]),
+        vector_status=row["vector_status"],
+        embedding_provider=row["embedding_provider"],
+        embedding_model=row["embedding_model"],
+        embedding_dimensions=row["embedding_dimensions"],
     )
 
 

@@ -12,9 +12,15 @@ from datetime import datetime, timedelta, timezone
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.db.migrations import apply_pending_migrations
+from wfrp_companion.source_objects.embedding_providers import (
+    EmbeddingProvider,
+    UnsupportedEmbeddingProviderError,
+    resolve_embedding_provider,
+)
 
 
 LOCAL_HASH_PROVIDER = "local-hash"
+SOURCE_OBJECTS_CHANGED_ERROR = "Source objects changed during embedding rebuild."
 
 
 @dataclass(frozen=True)
@@ -54,13 +60,15 @@ def local_hash_embeddings_enabled(config: AppConfig) -> bool:
 
 def source_object_embeddings_job_id(
     book_id: str,
+    embedding_provider: str,
     embedding_model: str,
     embedding_dimensions: int,
     source_object_snapshot: str,
 ) -> str:
     return (
         "rebuild_embeddings:"
-        f"{book_id}:{embedding_model}:{embedding_dimensions}:{source_object_snapshot}"
+        f"{book_id}:{embedding_provider}:{embedding_model}:"
+        f"{embedding_dimensions}:{source_object_snapshot}"
     )
 
 
@@ -174,9 +182,16 @@ def rebuild_embeddings(
         skipped_current = 0
         embeddings_written = 0
         failures: list[EmbeddingRebuildFailure] = []
+        try:
+            provider = resolve_embedding_provider(config)
+        except UnsupportedEmbeddingProviderError as exc:
+            provider = None
+            unsupported_error = str(exc)
+        else:
+            unsupported_error = None
         for book_id in discovered_book_ids:
-            if not local_hash_embeddings_enabled(config):
-                reason = f"Unsupported embedding provider: {config.embedding_provider}"
+            if unsupported_error is not None or provider is None:
+                reason = unsupported_error or "Embedding provider is disabled."
                 mark_embedding_failed(connection, book_id=book_id, error=reason, now=now)
                 failures.append(EmbeddingRebuildFailure(book_id, reason))
                 continue
@@ -191,6 +206,7 @@ def rebuild_embeddings(
                     connection,
                     book_id=book_id,
                     config=config,
+                    provider=provider,
                     now=utc_timestamp(),
                 )
             except Exception as exc:  # noqa: BLE001
@@ -202,6 +218,11 @@ def rebuild_embeddings(
                     now=utc_timestamp(),
                 )
                 failures.append(EmbeddingRebuildFailure(book_id, reason))
+                continue
+            if written == 0:
+                failures.append(
+                    EmbeddingRebuildFailure(book_id, SOURCE_OBJECTS_CHANGED_ERROR)
+                )
                 continue
             indexed += 1
             embeddings_written += written
@@ -224,13 +245,20 @@ def source_object_embeddings_current(
     *,
     config: AppConfig,
 ) -> bool:
-    if not local_hash_embeddings_enabled(config):
+    if not embeddings_enabled(config):
+        return False
+    try:
+        provider = resolve_embedding_provider(config)
+    except UnsupportedEmbeddingProviderError:
+        return False
+    if provider is None:
         return False
     snapshot = embedding_source_snapshot_sha256(connection, book_id)
     status = connection.execute(
         """
         select vector_status,
                vector_snapshot_sha256,
+               embedding_provider,
                embedding_model,
                embedding_dimensions
         from book_retrieval_status
@@ -244,9 +272,11 @@ def source_object_embeddings_current(
         return False
     if status["vector_snapshot_sha256"] != snapshot:
         return False
-    if status["embedding_model"] != config.embedding_model:
+    if status["embedding_provider"] != provider.provider_name:
         return False
-    if int(status["embedding_dimensions"] or 0) != config.embedding_dimensions:
+    if status["embedding_model"] != provider.model_name:
+        return False
+    if int(status["embedding_dimensions"] or 0) != provider.dimensions:
         return False
 
     source_count = source_object_count(connection, book_id)
@@ -262,10 +292,18 @@ def source_object_embeddings_current(
          and source_objects.text_snapshot_sha256 =
              source_object_embeddings.text_snapshot_sha256
         where source_object_embeddings.book_id = ?
+          and source_object_embeddings.embedding_provider = ?
           and source_object_embeddings.embedding_model = ?
           and source_object_embeddings.embedding_dimensions = ?
+          and length(source_object_embeddings.vector_blob) = ?
         """,
-        (book_id, config.embedding_model, config.embedding_dimensions),
+        (
+            book_id,
+            provider.provider_name,
+            provider.model_name,
+            provider.dimensions,
+            provider.dimensions * struct.calcsize("<f"),
+        ),
     ).fetchone()[0]
     if current_count != source_count:
         return False
@@ -277,6 +315,7 @@ def source_object_embeddings_current(
           on source_objects.id = source_object_embeddings.source_object_id
          and source_objects.book_id = source_object_embeddings.book_id
         where source_object_embeddings.book_id = ?
+          and source_object_embeddings.embedding_provider = ?
           and source_object_embeddings.embedding_model = ?
           and source_object_embeddings.embedding_dimensions = ?
           and (
@@ -285,7 +324,12 @@ def source_object_embeddings_current(
                source_object_embeddings.text_snapshot_sha256
           )
         """,
-        (book_id, config.embedding_model, config.embedding_dimensions),
+        (
+            book_id,
+            provider.provider_name,
+            provider.model_name,
+            provider.dimensions,
+        ),
     ).fetchone()[0]
     return stale_count == 0
 
@@ -304,137 +348,178 @@ def rebuild_book_embeddings(
     *,
     book_id: str,
     config: AppConfig,
+    provider: EmbeddingProvider,
     now: str,
 ) -> int:
     snapshot = embedding_source_snapshot_sha256(connection, book_id)
     job_id = source_object_embeddings_job_id(
         book_id,
-        config.embedding_model,
-        config.embedding_dimensions,
+        provider.provider_name,
+        provider.model_name,
+        provider.dimensions,
         snapshot,
     )
     if not claim_embedding_job(connection, book_id=book_id, job_id=job_id, now=now):
         raise RuntimeError("Embedding rebuild job is already running")
 
-    rows = connection.execute(
-        """
-        select id, book_id, search_text, text_snapshot_sha256
-        from source_objects
-        where book_id = ?
-        order by page_start, page_end, id
-        """,
-        (book_id,),
-    ).fetchall()
-    with connection:
-        connection.execute(
+    try:
+        rows = connection.execute(
             """
-            update book_retrieval_status
-            set vector_status = 'indexing',
-                vector_started_at = ?,
-                vector_snapshot_sha256 = ?,
-                embedding_model = ?,
-                embedding_dimensions = ?,
-                last_error = null,
-                updated_at = ?
+            select id, book_id, search_text, text_snapshot_sha256
+            from source_objects
             where book_id = ?
+            order by page_start, page_end, id
             """,
-            (
-                now,
-                snapshot,
-                config.embedding_model,
-                config.embedding_dimensions,
-                now,
-                book_id,
-            ),
-        )
-        connection.execute(
-            """
-            delete from source_object_embeddings
-            where book_id = ?
-              and embedding_model = ?
-              and embedding_dimensions = ?
-            """,
-            (book_id, config.embedding_model, config.embedding_dimensions),
-        )
-        for row in rows:
-            embedding_id = source_object_embedding_id(
-                row["id"],
-                config.embedding_model,
-                config.embedding_dimensions,
-                row["text_snapshot_sha256"],
-            )
-            vector = text_embedding_vector(
-                row["search_text"],
-                dimensions=config.embedding_dimensions,
-            )
+            (book_id,),
+        ).fetchall()
+        with connection:
             connection.execute(
                 """
-                insert into source_object_embeddings (
-                  id,
-                  source_object_id,
-                  book_id,
-                  embedding_model,
-                  embedding_dimensions,
-                  text_snapshot_sha256,
-                  vector_blob,
-                  created_at,
-                  updated_at
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                update book_retrieval_status
+                set vector_status = 'indexing',
+                    vector_started_at = ?,
+                    vector_snapshot_sha256 = ?,
+                    embedding_provider = ?,
+                    embedding_model = ?,
+                    embedding_dimensions = ?,
+                    last_error = null,
+                    updated_at = ?
+                where book_id = ?
                 """,
                 (
-                    embedding_id,
-                    row["id"],
-                    row["book_id"],
-                    config.embedding_model,
-                    config.embedding_dimensions,
-                    row["text_snapshot_sha256"],
-                    vector_blob(vector),
                     now,
+                    snapshot,
+                    provider.provider_name,
+                    provider.model_name,
+                    provider.dimensions,
                     now,
+                    book_id,
                 ),
             )
-        connection.execute(
-            """
-            update book_retrieval_status
-            set vector_status = 'indexed',
-                vector_snapshot_sha256 = ?,
-                embedding_model = ?,
-                embedding_dimensions = ?,
-                last_error = null,
-                updated_at = ?
-            where book_id = ?
-            """,
-            (
-                snapshot,
-                config.embedding_model,
-                config.embedding_dimensions,
-                now,
-                book_id,
-            ),
+
+        vectors = provider.embed_documents(tuple(row["search_text"] for row in rows))
+        current_snapshot = embedding_source_snapshot_sha256(connection, book_id)
+        if current_snapshot != snapshot:
+            mark_embedding_snapshot_changed(
+                connection,
+                book_id=book_id,
+                job_id=job_id,
+                now=utc_timestamp(),
+            )
+            return 0
+
+        with connection:
+            connection.execute(
+                """
+                delete from source_object_embeddings
+                where book_id = ?
+                  and embedding_provider = ?
+                  and embedding_model = ?
+                  and embedding_dimensions = ?
+                """,
+                (
+                    book_id,
+                    provider.provider_name,
+                    provider.model_name,
+                    provider.dimensions,
+                ),
+            )
+            for row, vector in zip(rows, vectors, strict=True):
+                embedding_id = source_object_embedding_id(
+                    row["id"],
+                    provider.provider_name,
+                    provider.model_name,
+                    provider.dimensions,
+                    row["text_snapshot_sha256"],
+                )
+                connection.execute(
+                    """
+                    insert into source_object_embeddings (
+                      id,
+                      source_object_id,
+                      book_id,
+                      embedding_provider,
+                      embedding_model,
+                      embedding_dimensions,
+                      text_snapshot_sha256,
+                      vector_blob,
+                      created_at,
+                      updated_at
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        embedding_id,
+                        row["id"],
+                        row["book_id"],
+                        provider.provider_name,
+                        provider.model_name,
+                        provider.dimensions,
+                        row["text_snapshot_sha256"],
+                        vector_blob(vector),
+                        now,
+                        now,
+                    ),
+                )
+            cursor = connection.execute(
+                """
+                update book_retrieval_status
+                set vector_status = 'indexed',
+                    vector_snapshot_sha256 = ?,
+                    embedding_provider = ?,
+                    embedding_model = ?,
+                    embedding_dimensions = ?,
+                    last_error = null,
+                    updated_at = ?
+                where book_id = ?
+                  and vector_status = 'indexing'
+                  and vector_snapshot_sha256 = ?
+                """,
+                (
+                    snapshot,
+                    provider.provider_name,
+                    provider.model_name,
+                    provider.dimensions,
+                    now,
+                    book_id,
+                    snapshot,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Embedding rebuild status changed before commit")
+            connection.execute(
+                """
+                update ingest_jobs
+                set status = 'succeeded',
+                    last_error = null,
+                    updated_at = ?,
+                    completed_at = ?
+                where idempotency_key = ?
+                """,
+                (now, now, job_id),
+            )
+    except Exception as exc:
+        mark_embedding_job_failed(
+            connection,
+            book_id=book_id,
+            job_id=job_id,
+            error=f"{type(exc).__name__}: {exc}",
+            now=utc_timestamp(),
         )
-        connection.execute(
-            """
-            update ingest_jobs
-            set status = 'succeeded',
-                last_error = null,
-                updated_at = ?,
-                completed_at = ?
-            where idempotency_key = ?
-            """,
-            (now, now, job_id),
-        )
+        raise
     return len(rows)
 
 
 def source_object_embedding_id(
     source_object_id: str,
+    embedding_provider: str,
     embedding_model: str,
     embedding_dimensions: int,
     text_snapshot_sha256: str,
 ) -> str:
     digest = hashlib.sha256(
-        f"{source_object_id}\0{embedding_model}\0{embedding_dimensions}\0"
+        f"{source_object_id}\0{embedding_provider}\0{embedding_model}\0"
+        f"{embedding_dimensions}\0"
         f"{text_snapshot_sha256}".encode("utf-8")
     ).hexdigest()[:16]
     return f"embedding:{source_object_id}:{digest}"
@@ -576,6 +661,69 @@ def mark_embedding_failed(
             where book_id = ?
             """,
             (error, now, book_id),
+        )
+
+
+def mark_embedding_job_failed(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    job_id: str,
+    error: str,
+    now: str,
+) -> None:
+    with connection:
+        connection.execute(
+            """
+            update book_retrieval_status
+            set vector_status = 'failed',
+                last_error = ?,
+                updated_at = ?
+            where book_id = ?
+            """,
+            (error, now, book_id),
+        )
+        connection.execute(
+            """
+            update ingest_jobs
+            set status = 'failed',
+                last_error = ?,
+                updated_at = ?,
+                completed_at = ?
+            where idempotency_key = ?
+            """,
+            (error, now, now, job_id),
+        )
+
+
+def mark_embedding_snapshot_changed(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    job_id: str,
+    now: str,
+) -> None:
+    with connection:
+        connection.execute(
+            """
+            update book_retrieval_status
+            set vector_status = 'needs_refresh',
+                last_error = ?,
+                updated_at = ?
+            where book_id = ?
+            """,
+            (SOURCE_OBJECTS_CHANGED_ERROR, now, book_id),
+        )
+        connection.execute(
+            """
+            update ingest_jobs
+            set status = 'failed',
+                last_error = ?,
+                updated_at = ?,
+                completed_at = ?
+            where idempotency_key = ?
+            """,
+            (SOURCE_OBJECTS_CHANGED_ERROR, now, now, job_id),
         )
 
 

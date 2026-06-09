@@ -13,9 +13,10 @@ source-object extraction foundation, Phase 7 PR3 Familiar source-map/object
 retrieval, Phase 7 PR4 retrieval-module split, and Phase 7 PR5 durable
 source-map/profile ownership, Phase 7 PR6 source-object search backfill, and
 Phase 7 PR7 retrieval rank fusion/reranker protocol, Phase 7 PR8 local
-vector retrieval channel, Phase 7 PR9 structured source-object evidence, and
-Phase 7 PR10 printed page-label calibration/backfill, and Phase 7 PR11
-Familiar prompt history/history-aware retrieval planning.
+vector retrieval channel, Phase 7 PR9 structured source-object evidence, Phase
+7 PR10 printed page-label calibration/backfill, Phase 7 PR11 Familiar prompt
+history/history-aware retrieval planning, and the local semantic embeddings
+phase.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -178,8 +179,17 @@ same-channel dedupe before fusion-rank assignment, weak lexical-only
 rejection, exact table/object-type query preservation, deterministic reranker
 protocol exports, and persisted rank reasons that include channel
 contribution, fusion score, and reranker judgment. Vector-channel tests cover
-disabled-by-default behavior, checked-book filtering, current-snapshot gating,
-and exact lexical/object hits staying ahead of vector-only candidates.
+disabled-by-default behavior, provider-aware schema and migrations, provider
+factory behavior, Sentence Transformers lazy loading and fake-module encode
+options, dependency/runtime/dimension failures, query-time provider failure
+fallback to non-vector retrieval, checked-book filtering, current-snapshot
+gating, malformed row scope protection, malformed vector blob currentness and
+query-time scoring fallback, safe source-object drift handling during
+inference, failed rebuild job closeout after provider failure, no write
+transaction during embedding inference, fake semantic recall without exact term
+overlap, provider rank reasons, Library/API vector readiness fields with model
+names redacted from API responses, and exact lexical/object hits staying ahead
+of vector-only candidates.
 Structured-evidence tests cover `glossary_entry` and `glossary_definition`
 schema/migration support, table/table-row extraction and parent links,
 stat/profile extraction and links, index/glossary/cross-reference extraction,
@@ -187,7 +197,9 @@ extractor-version invalidation, duplicate same-page table-row ID prevention,
 WFRP-style pipe/percent stat profiles, range-chart table extraction with OCR
 title normalization, derived source-object links and count updates, table-row
 citations resolving to parent table page ranges, stat-block retrieval resolving
-to complete profiles, structural query terms refusing unsafe fuzzy expansion,
+to complete profiles, compound/plural structural queries retrieving singular
+stat evidence through generalized sparse alternatives, structural query terms
+refusing unsafe fuzzy expansion,
 typed chart/table evidence outranking prose mentions, heading/running-header
 only entity matches being rejected, index routing to deterministic target
 sections or page-only target pages, glossary evidence retaining definition
@@ -218,11 +230,11 @@ rendering/retry and cancellation behavior, Familiar shell behavior, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar plus panel overflow.
 
-The latest full backend verification command on 2026-06-06 reported 469 tests
+The latest full backend verification command on 2026-06-08 reported 493 tests
 passing with 100% coverage across `wfrp_companion` and the tracked tool
-entrypoints. The latest frontend verification reported 131 Vitest tests
+entrypoints. The latest frontend verification reported 132 Vitest tests
 passing with coverage above the configured 90% thresholds, a successful
-production build, and two Playwright browser e2e tests passing.
+production build.
 
 ## Manual QA
 

@@ -13,6 +13,8 @@ dependencies:
   - opencv
   - imagehash
   - openai
+  - pytorch
+  - sentence-transformers
   - pytest
   - pytest-cov
   - ruff

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,15 @@ from wfrp_companion.source_objects.source_map_builder import (
     SCHEMA_VERSION,
     source_object_snapshot_sha256,
 )
+from wfrp_companion.source_objects.embeddings import (
+    embedding_source_snapshot_sha256,
+    vector_blob,
+)
+from wfrp_companion.source_objects import embeddings as embedding_module
+from wfrp_companion.source_objects.embedding_providers import (
+    EmbeddingProviderDependencyError,
+)
+from wfrp_companion.source_objects.store import rebuild_source_object_search
 
 
 def make_config(tmp_path: Path) -> AppConfig:
@@ -304,6 +314,587 @@ def test_retrieval_uses_current_enabled_books_not_stale_thread_snapshot(
     assert context.source_book_ids == ("barony",)
     assert [hit.book_id for hit in context.hits] == ["barony"]
     assert all(entry.book_id == "barony" for entry in context.source_map)
+
+
+def test_vector_candidates_query_with_resolved_provider_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        make_config(tmp_path),
+        embedding_provider="local-hash-alias",
+        embedding_model="config-model-alias",
+        embedding_dimensions=8,
+    )
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Critical hit rules are here.",
+        )
+        connection.execute(
+            "update books set search_status = 'indexed' where id = 'core-rules'"
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Chapter I: Combat",),
+            page_start=1,
+            page_end=1,
+            text="Critical hit rules are here.",
+        )
+        source_object = connection.execute(
+            """
+            select id, text_snapshot_sha256
+            from source_objects
+            where id = 'core-rules:critical-hits'
+            """
+        ).fetchone()
+        snapshot = embedding_source_snapshot_sha256(connection, "core-rules")
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              vector_status,
+              vector_snapshot_sha256,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'indexed',
+              ?,
+              'local-hash',
+              'local-hash-test',
+              4,
+              '2026-06-08T00:00:00Z'
+            )
+            """,
+            (snapshot,),
+        )
+        connection.execute(
+            """
+            insert into source_object_embeddings (
+              id,
+              source_object_id,
+              book_id,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              text_snapshot_sha256,
+              vector_blob,
+              created_at,
+              updated_at
+            )
+            values (
+              'embedding:critical-hits',
+              ?,
+              'core-rules',
+              'local-hash',
+              'local-hash-test',
+              4,
+              ?,
+              ?,
+              '2026-06-08T00:00:00Z',
+              '2026-06-08T00:00:00Z'
+            )
+            """,
+            (
+                source_object["id"],
+                source_object["text_snapshot_sha256"],
+                vector_blob((1.0, 0.0, 0.0, 0.0)),
+            ),
+        )
+
+        calls: list[str] = []
+
+        class FakeProvider:
+            provider_name = "local-hash"
+            model_name = "local-hash-test"
+            dimensions = 4
+
+            def embed_documents(self, texts):  # noqa: ANN001
+                raise AssertionError("query search must not embed documents")
+
+            def embed_query(self, text: str) -> tuple[float, ...]:
+                calls.append(text)
+                return (1.0, 0.0, 0.0, 0.0)
+
+        monkeypatch.setattr(
+            retrieval_candidates,
+            "resolve_embedding_provider",
+            lambda config: FakeProvider(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            embedding_module,
+            "resolve_embedding_provider",
+            lambda config: FakeProvider(),
+            raising=False,
+        )
+
+        candidates = retrieval_candidates.search_vector_candidates(
+            connection,
+            "critical hits",
+            book_ids=("core-rules",),
+            limit=5,
+            config=config,
+        )
+
+        assert candidates
+        assert candidates[0].source_object_id == "core-rules:critical-hits"
+        assert "vector_provider:local-hash" in candidates[0].rank_reasons
+        assert "vector_model:local-hash-test" in candidates[0].rank_reasons
+
+        def fail_vector_from_blob(_blob: bytes) -> tuple[float, ...]:
+            raise ValueError("bad vector blob")
+
+        monkeypatch.setattr(
+            retrieval_candidates,
+            "vector_from_blob",
+            fail_vector_from_blob,
+        )
+
+        assert (
+            retrieval_candidates.search_vector_candidates(
+                connection,
+                "critical hits",
+                book_ids=("core-rules",),
+                limit=5,
+                config=config,
+            )
+            == ()
+        )
+
+    assert calls == ["critical hits", "critical hits"]
+
+
+def test_vector_candidates_ignore_unsupported_embedding_provider(
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        make_config(tmp_path),
+        embedding_provider="custom",
+        embedding_model="custom-model",
+        embedding_dimensions=4,
+    )
+    with initialize_database(config.db_path) as connection:
+        assert (
+            retrieval_candidates.search_vector_candidates(
+                connection,
+                "critical hits",
+                book_ids=("core-rules",),
+                limit=5,
+                config=config,
+            )
+            == ()
+        )
+
+
+def test_vector_candidates_ignore_embedding_provider_runtime_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        make_config(tmp_path),
+        embedding_provider="sentence-transformers",
+        embedding_model="BAAI/bge-m3",
+        embedding_dimensions=4,
+    )
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Critical hit rules are here.",
+        )
+        connection.execute(
+            "update books set search_status = 'indexed' where id = 'core-rules'"
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Chapter I: Combat",),
+            page_start=1,
+            page_end=1,
+            text="Critical hit rules are here.",
+        )
+        source_object = connection.execute(
+            """
+            select id, text_snapshot_sha256
+            from source_objects
+            where id = 'core-rules:critical-hits'
+            """
+        ).fetchone()
+        snapshot = embedding_source_snapshot_sha256(connection, "core-rules")
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              vector_status,
+              vector_snapshot_sha256,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              updated_at
+            )
+            values (
+              'core-rules',
+              'indexed',
+              ?,
+              'sentence-transformers',
+              'BAAI/bge-m3',
+              4,
+              '2026-06-08T00:00:00Z'
+            )
+            """,
+            (snapshot,),
+        )
+        connection.execute(
+            """
+            insert into source_object_embeddings (
+              id,
+              source_object_id,
+              book_id,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              text_snapshot_sha256,
+              vector_blob,
+              created_at,
+              updated_at
+            )
+            values (
+              'embedding:critical-hits',
+              ?,
+              'core-rules',
+              'sentence-transformers',
+              'BAAI/bge-m3',
+              4,
+              ?,
+              ?,
+              '2026-06-08T00:00:00Z',
+              '2026-06-08T00:00:00Z'
+            )
+            """,
+            (
+                source_object["id"],
+                source_object["text_snapshot_sha256"],
+                vector_blob((1.0, 0.0, 0.0, 0.0)),
+            ),
+        )
+
+        class FailingProvider:
+            provider_name = "sentence-transformers"
+            model_name = "BAAI/bge-m3"
+            dimensions = 4
+
+            def embed_documents(self, texts):  # noqa: ANN001
+                raise AssertionError("query search must not embed documents")
+
+            def embed_query(self, text: str) -> tuple[float, ...]:
+                raise EmbeddingProviderDependencyError("missing dependency")
+
+        monkeypatch.setattr(
+            retrieval_candidates,
+            "resolve_embedding_provider",
+            lambda config: FailingProvider(),
+            raising=False,
+        )
+
+        assert (
+            retrieval_candidates.search_vector_candidates(
+                connection,
+                "critical hits",
+                book_ids=("core-rules",),
+                limit=5,
+                config=config,
+            )
+            == ()
+        )
+
+
+def test_fake_semantic_provider_recalls_related_source_object_without_exact_terms(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        make_config(tmp_path),
+        embedding_provider="fake-semantic",
+        embedding_model="fake-semantic-model",
+        embedding_dimensions=3,
+    )
+
+    class FakeSemanticProvider:
+        provider_name = "fake-semantic"
+        model_name = "fake-semantic-model"
+        dimensions = 3
+
+        def embed_documents(self, texts):  # noqa: ANN001
+            raise AssertionError("test inserts synthetic vectors directly")
+
+        def embed_query(self, text: str) -> tuple[float, ...]:
+            assert text == "after devastating blow battle"
+            return (1.0, 0.0, 0.0)
+
+    provider = FakeSemanticProvider()
+    monkeypatch.setattr(
+        embedding_module,
+        "resolve_embedding_provider",
+        lambda config: provider,
+    )
+    monkeypatch.setattr(
+        retrieval_candidates,
+        "resolve_embedding_provider",
+        lambda config: provider,
+    )
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="core-rules",
+            title="Core Rules",
+            category="Core Book & GM Essentials",
+            page_number=1,
+            text="Critical Hits determine injury results.",
+        )
+        connection.execute(
+            "update books set search_status = 'indexed' where id = 'core-rules'"
+        )
+        insert_source_object(
+            connection,
+            object_id="core-rules:critical-hits",
+            book_id="core-rules",
+            page_id="core-rules:1",
+            object_type="rule_section",
+            title="Critical Hits",
+            heading_path=("Combat",),
+            page_start=1,
+            page_end=1,
+            text="Critical Hits determine injury results.",
+        )
+        source_object = connection.execute(
+            """
+            select id, text_snapshot_sha256
+            from source_objects
+            where id = 'core-rules:critical-hits'
+            """
+        ).fetchone()
+        snapshot = embedding_source_snapshot_sha256(connection, "core-rules")
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              vector_status,
+              vector_snapshot_sha256,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              updated_at
+            )
+            values ('core-rules', 'indexed', ?, 'fake-semantic',
+                    'fake-semantic-model', 3, '2026-06-08T00:00:00Z')
+            """,
+            (snapshot,),
+        )
+        connection.execute(
+            """
+            insert into source_object_embeddings (
+              id,
+              source_object_id,
+              book_id,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              text_snapshot_sha256,
+              vector_blob,
+              created_at,
+              updated_at
+            )
+            values ('embedding:semantic-critical', ?, 'core-rules',
+                    'fake-semantic', 'fake-semantic-model', 3, ?, ?,
+                    '2026-06-08T00:00:00Z', '2026-06-08T00:00:00Z')
+            """,
+            (
+                source_object["id"],
+                source_object["text_snapshot_sha256"],
+                vector_blob((1.0, 0.0, 0.0)),
+            ),
+        )
+
+    candidates = retrieval.collect_evidence_candidates(
+        config,
+        source_book_ids=("core-rules",),
+        query_plan=retrieval.plan_query(
+            "What happens after a devastating blow in battle?",
+            (),
+        ),
+        per_candidate_limit=5,
+    )
+
+    assert any(
+        candidate.channel == "vector"
+        and candidate.source_object_id == "core-rules:critical-hits"
+        for candidate in candidates
+    )
+
+
+def test_exact_source_object_still_outranks_related_vector_only_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        make_config(tmp_path),
+        embedding_provider="fake-semantic-rank",
+        embedding_model="fake-semantic-rank-model",
+        embedding_dimensions=3,
+    )
+
+    class FakeSemanticProvider:
+        provider_name = "fake-semantic-rank"
+        model_name = "fake-semantic-rank-model"
+        dimensions = 3
+
+        def embed_documents(self, texts):  # noqa: ANN001
+            raise AssertionError("test inserts synthetic vectors directly")
+
+        def embed_query(self, text: str) -> tuple[float, ...]:
+            assert text == "critical hits"
+            return (1.0, 0.0, 0.0)
+
+    provider = FakeSemanticProvider()
+    monkeypatch.setattr(
+        embedding_module,
+        "resolve_embedding_provider",
+        lambda config: provider,
+    )
+    monkeypatch.setattr(
+        retrieval_candidates,
+        "resolve_embedding_provider",
+        lambda config: provider,
+    )
+    with initialize_database(config.db_path) as connection:
+        for page_number, object_id, title, text, vector in (
+            (
+                1,
+                "core-rules:critical-hits",
+                "Critical Hits",
+                "Critical Hits table entries.",
+                (0.0, 1.0, 0.0),
+            ),
+            (
+                2,
+                "core-rules:related-wounds",
+                "Battle Wounds",
+                "A related injury section after a mighty strike.",
+                (1.0, 0.0, 0.0),
+            ),
+        ):
+            insert_searchable_page(
+                connection,
+                book_id="core-rules",
+                title="Core Rules",
+                category="Core Book & GM Essentials",
+                page_number=page_number,
+                text=text,
+                page_count=2,
+            )
+            insert_source_object(
+                connection,
+                object_id=object_id,
+                book_id="core-rules",
+                page_id=f"core-rules:{page_number}",
+                object_type="table" if page_number == 1 else "rule_section",
+                title=title,
+                heading_path=("Combat",),
+                page_start=page_number,
+                page_end=page_number,
+                text=text,
+            )
+            source_object = connection.execute(
+                """
+                select id, text_snapshot_sha256
+                from source_objects
+                where id = ?
+                """,
+                (object_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                insert into source_object_embeddings (
+                  id,
+                  source_object_id,
+                  book_id,
+                  embedding_provider,
+                  embedding_model,
+                  embedding_dimensions,
+                  text_snapshot_sha256,
+                  vector_blob,
+                  created_at,
+                  updated_at
+                )
+                values (?, ?, 'core-rules', 'fake-semantic-rank',
+                        'fake-semantic-rank-model', 3, ?, ?,
+                        '2026-06-08T00:00:00Z', '2026-06-08T00:00:00Z')
+                """,
+                (
+                    f"embedding:{object_id}",
+                    source_object["id"],
+                    source_object["text_snapshot_sha256"],
+                    vector_blob(vector),
+                ),
+            )
+        connection.execute(
+            "update books set search_status = 'indexed' where id = 'core-rules'"
+        )
+        snapshot = embedding_source_snapshot_sha256(connection, "core-rules")
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              vector_status,
+              vector_snapshot_sha256,
+              embedding_provider,
+              embedding_model,
+              embedding_dimensions,
+              updated_at
+            )
+            values ('core-rules', 'indexed', ?, 'fake-semantic-rank',
+                    'fake-semantic-rank-model', 3, '2026-06-08T00:00:00Z')
+            """,
+            (snapshot,),
+        )
+
+    query_plan = retrieval.plan_query("critical hits", ())
+    candidates = retrieval.collect_evidence_candidates(
+        config,
+        source_book_ids=("core-rules",),
+        query_plan=query_plan,
+        per_candidate_limit=5,
+    )
+    assert any(
+        candidate.channel == "vector"
+        and candidate.source_object_id == "core-rules:related-wounds"
+        for candidate in candidates
+    )
+    ranked = retrieval.rerank_candidates(candidates, query_plan)
+
+    assert ranked[0][0].source_object_id == "core-rules:critical-hits"
+    assert ranked[0][0].channel != "vector"
 
 
 def test_source_map_reads_current_durable_maps_for_checked_books(
@@ -2445,6 +3036,58 @@ def test_structural_query_terms_do_not_fuzzy_match_source_map_aliases() -> None:
     }
     assert "black" not in plan.expanded_terms
     assert retrieval.token_matches_source("block", {"black"}) is False
+
+
+def test_query_planner_generates_compound_and_plural_search_alternatives() -> None:
+    plan = retrieval.plan_query("give me the statblocks for harpies", ())
+
+    assert "stat block harpy" in plan.candidates
+    assert "stat block" in plan.candidates
+    assert "harpy" in plan.candidates
+
+
+def test_compound_plural_structural_query_retrieves_singular_stat_evidence(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        insert_searchable_page(
+            connection,
+            book_id="bestiary",
+            title="Bestiary",
+            category="Rules",
+            page_number=12,
+            text="Harpy Statistics Main Profile WS BS S T Ag Int WP Fel.",
+        )
+        connection.execute("update books set search_status = 'indexed'")
+        insert_source_object(
+            connection,
+            object_id="bestiary:harpy-statistics",
+            book_id="bestiary",
+            page_id="bestiary:12",
+            object_type="stat_block",
+            title="Harpy Statistics",
+            heading_path=("Creatures",),
+            page_start=12,
+            page_end=12,
+            text="Harpy Statistics stat block Main Profile WS BS S T Ag Int WP Fel.",
+        )
+    rebuild_source_object_search(config, force=True)
+
+    evidence_pool = retrieval.collect_evidence_candidates(
+        config,
+        source_book_ids=("bestiary",),
+        query_plan=retrieval.plan_query("give me the statblocks for harpies", ()),
+        per_candidate_limit=5,
+    )
+    ranked = retrieval.rerank_candidates(
+        evidence_pool,
+        retrieval.plan_query("give me the statblocks for harpies", ()),
+    )
+
+    assert [candidate.source_object_id for candidate, _score, _reasons in ranked] == [
+        "bestiary:harpy-statistics"
+    ]
 
 
 def test_keep_best_candidate_replaces_weaker_page_candidate() -> None:

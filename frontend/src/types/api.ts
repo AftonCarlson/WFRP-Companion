@@ -17,6 +17,9 @@ export type BookSummaryResponse = {
   search_ready: boolean;
   fully_ready: boolean;
   needs_attention: boolean;
+  vector_status: string;
+  embedding_provider: string | null;
+  embedding_dimensions: number | null;
 };
 
 export type BooksResponse = {
