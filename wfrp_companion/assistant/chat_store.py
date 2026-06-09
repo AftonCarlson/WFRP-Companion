@@ -1217,7 +1217,7 @@ def list_public_research_events(
         ).fetchall()
         judgment_rows = connection.execute(
             """
-            select status
+            select status, reason_code
             from familiar_evidence_judgments
             where research_run_id = ?
             """,
@@ -1262,17 +1262,25 @@ def list_public_research_events(
     if judgment_rows:
         accepted = sum(1 for row in judgment_rows if row["status"] == "accepted")
         partial = sum(1 for row in judgment_rows if row["status"] == "partial")
+        rejected = sum(1 for row in judgment_rows if row["status"] == "rejected")
+        reason_counts: dict[str, int] = {}
+        for row in judgment_rows:
+            reason_code = row["reason_code"]
+            if reason_code:
+                reason_counts[reason_code] = reason_counts.get(reason_code, 0) + 1
         events.append(
             {
                 "type": "evidence_validation",
                 "label": (
                     f"Evidence {research_run['evidence_status']}; "
-                    f"{accepted} accepted, {partial} partial"
+                    f"{accepted} accepted, {partial} partial, {rejected} rejected"
                 ),
                 "metadata": {
                     "evidence_status": research_run["evidence_status"],
                     "accepted_hit_count": accepted,
                     "partial_hit_count": partial,
+                    "rejected_hit_count": rejected,
+                    "reason_counts": dict(sorted(reason_counts.items())),
                 },
             }
         )

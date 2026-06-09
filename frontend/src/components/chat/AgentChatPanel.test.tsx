@@ -568,6 +568,52 @@ describe("AgentChatPanel", () => {
     expect(screen.getByText("No evidence.")).toBeInTheDocument();
   });
 
+  it("renders validation reason counts without calling partial evidence sufficient", async () => {
+    const user = userEvent.setup();
+    const client = chatClient({
+      async streamChatMessage(threadId, options) {
+        options.onEvent({
+          type: "accepted",
+          user_message: {
+            id: "m1",
+            thread_id: threadId,
+            role: "user",
+            content: "trace counts",
+            created_at: "now",
+          },
+          model_run: modelRun("retrieving"),
+        });
+        options.onEvent({
+          type: "evidence_validation",
+          metadata: {
+            evidence_status: "partial",
+            accepted_hit_count: 0,
+            partial_hit_count: 1,
+            rejected_hit_count: 2,
+            reason_counts: {
+              subject_mismatch: 1,
+              missing_statline_fields: 1,
+            },
+          },
+        });
+        options.onEvent({ type: "failed", error_message: "Still missing evidence." });
+      },
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={false} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "trace counts");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    const summary = (await screen.findAllByText("Research failed"))[0];
+    await user.click(summary);
+    expect(
+      screen.getByText(
+        "Evidence partial; 0 accepted, 1 partial, 2 rejected (missing_statline_fields 1, subject_mismatch 1)",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Evidence sufficient; 0 accepted/i)).not.toBeInTheDocument();
+  });
+
   it("ignores stream updates for unknown model run ids", async () => {
     const user = userEvent.setup();
     const client = chatClient({

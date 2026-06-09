@@ -501,7 +501,11 @@ function researchTraceLabel(event: ChatStreamEvent): string | null {
     return toolCallTraceLabel(metadata);
   }
   if (event.type === "retrieval") {
-    return `Retrieved ${event.citations?.length ?? 0} candidate citation(s)`;
+    const candidateCount = numberValue(metadata.candidate_hit_count);
+    const acceptedCount = event.citations?.length ?? 0;
+    return candidateCount === null
+      ? `Retrieved ${acceptedCount} accepted citation(s)`
+      : `Retrieved ${candidateCount} candidate(s); ${acceptedCount} accepted citation(s)`;
   }
   if (event.type === "tool_result") {
     const hitCount = numberValue(metadata.hit_count);
@@ -516,9 +520,18 @@ function researchTraceLabel(event: ChatStreamEvent): string | null {
   if (event.type === "evidence_validation") {
     const status = stringValue(metadata.evidence_status) ?? "unknown";
     const accepted = numberValue(metadata.accepted_hit_count);
+    const partial = numberValue(metadata.partial_hit_count);
+    const rejected = numberValue(metadata.rejected_hit_count);
+    const reasonCounts = reasonCountsLabel(recordValue(metadata.reason_counts));
     return accepted === null
       ? `Evidence ${status}`
-      : `Evidence ${status}; ${accepted} accepted`;
+      : `Evidence ${status}; ${[
+          `${accepted} accepted`,
+          partial === null ? null : `${partial} partial`,
+          rejected === null ? null : `${rejected} rejected`,
+        ]
+          .filter(Boolean)
+          .join(", ")}${reasonCounts ? ` (${reasonCounts})` : ""}`;
   }
   if (event.type === "finalizing") {
     return "Answering from evidence";
@@ -545,6 +558,18 @@ function toolCallTraceLabel(metadata: Record<string, unknown>): string {
     return "Inspecting source object";
   }
   return toolName ? `Running ${toolName}` : "Running research tool";
+}
+
+function reasonCountsLabel(reasonCounts: Record<string, unknown> | null): string {
+  if (!reasonCounts) {
+    return "";
+  }
+  return Object.entries(reasonCounts)
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(0, 4)
+    .map(([reason, count]) => `${shortLabel(reason)} ${count}`)
+    .join(", ");
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {

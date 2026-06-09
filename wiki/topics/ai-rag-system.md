@@ -47,6 +47,26 @@ Current Familiar implementation:
 - Evidence validation runs after every tool call. Only accepted evidence can
   feed the final answer prompt and final citation run; partial or rejected
   evidence remains in the research trace for debugging.
+- **Evidence validation is the authoritative gate, even when retrieval ranking
+  already preferred a candidate.** Plan requirements are normalized into
+  `EvidenceConstraint` objects that check checked-book scope, excluded terms,
+  subject identity, book/page hints, object-type hints, statline field
+  sufficiency, and required supporting terms before a hit can become accepted
+  evidence.
+- Structural requirements fail closed when the provider supplies only generic
+  subject words such as `profile`, `stat block`, `table`, or `page`.
+  Subjectless `page_evidence` is allowed only when it has both a concrete book
+  hint and a concrete page hint. A book-only or page-only hint is not enough to
+  accept unrelated page text.
+- Statline requirements require enough WFRP-style profile fields to be present
+  in the validated evidence zone; an object type or a few isolated stat tokens
+  is not sufficient. Multi-word structural subjects must match as a phrase in
+  source-object identity text, with page-fallback evidence allowed to prove the
+  phrase from body text.
+- Requirement hint matching is tolerant of common provider wording while still
+  being strict semantically: object-type hints normalize spaces/underscores,
+  book hints ignore words such as `book`/`pdf`, and page hints ignore words
+  such as `printed`/`page` while still requiring the actual anchor tokens.
 - **A Familiar run is not sufficient until every required plan requirement has
   met its own `min_accepted_hits`.** Accepted evidence is tracked per
   requirement, so one successful retrieval cannot prematurely satisfy a
@@ -96,6 +116,10 @@ Current Familiar implementation:
   API/UI; resolved queries, plan summaries, tool purposes, raw provider tool
   arguments, local paths, PDF filenames, and copied source text are not exposed
   through progress metadata.
+- Retrieval and tool-result stream payloads expose accepted citations only.
+  Public traces may show accepted/partial/rejected counts and reason counts,
+  but rejected snippets and raw rejected citation payloads are kept out of the
+  UI-facing evidence list and out of final answer prompts.
 
 Historical phase notes below describe how the current system was assembled.
 

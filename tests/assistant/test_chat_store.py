@@ -1243,7 +1243,16 @@ def test_familiar_research_plan_and_requirement_linkage_round_trip(
         "exclude_terms": [],
     }
     assert judgment.constraint_status == "failed"
-    assert public_events[-1]["label"] == "Evidence partial; 0 accepted, 0 partial"
+    assert public_events[-1]["label"] == (
+        "Evidence partial; 0 accepted, 0 partial, 1 rejected"
+    )
+    assert public_events[-1]["metadata"] == {
+        "evidence_status": "partial",
+        "accepted_hit_count": 0,
+        "partial_hit_count": 0,
+        "rejected_hit_count": 1,
+        "reason_counts": {"missing_statline_markers": 1},
+    }
     assert count_rows(config, "familiar_research_plans") == 1
 
 

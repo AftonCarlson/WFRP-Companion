@@ -1674,6 +1674,71 @@ def test_familiar_finish_research_action_runs_no_additional_retrieval(
     assert [row["tool_name"] for row in tool_rows] == ["search_library"]
 
 
+def test_recovery_and_final_prompts_summarize_rejections_without_rejected_text(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    provider_instance = NoToolThenFinalProvider()
+
+    def fake_wrong_search_library(**kwargs):
+        rejected_hit = hit(rank=1, subject="gor")
+        retrieval_run_id = chat_store.record_retrieval_run(
+            config,
+            thread_id=kwargs["thread_id"],
+            message_id=kwargs["message_id"],
+            source_set_id="rules-core",
+            query=kwargs["query"],
+            hits=(rejected_hit,),
+            source_book_ids=("bestiary",),
+            diagnostics=diagnostics(),
+            tool_call_id=kwargs["tool_call_id"],
+            attempt_number=kwargs["attempt_number"],
+            intent=kwargs["intent"],
+            resolved_query=kwargs["query"],
+            tool_name="search_library",
+        )
+        return research_tools.SearchLibraryResult(
+            retrieval_run_id=retrieval_run_id,
+            query=kwargs["query"],
+            source_set_id="rules-core",
+            source_book_ids=("bestiary",),
+            hits=(rejected_hit,),
+            diagnostics=diagnostics(),
+        )
+
+    monkeypatch.setattr(research_tools, "search_library", fake_wrong_search_library)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="harpy statline",
+            idempotency_key="send-agent-rejected-ledger",
+            provider_factory=lambda _: provider_instance,
+        )
+    )
+
+    assert events[-1].assistant_message is not None
+    assert events[-1].assistant_message.content == "No citable evidence."
+    leaked_events = [
+        event
+        for event in events
+        if event.type in {"retrieval", "tool_result", "failed", "completed"}
+        and event.citations
+    ]
+    assert leaked_events == []
+    recovery_prompt = provider_instance.messages_by_call[1][-1].content
+    final_prompt = provider_instance.messages_by_call[2][-1].content
+    assert "Synthetic Gor stat_block" not in recovery_prompt
+    assert '"rejected_reason_counts": {"subject_mismatch": 1}' in recovery_prompt
+    assert "Synthetic Gor stat_block" not in final_prompt
+    assert "No accepted evidence was found." in final_prompt
+    assert "- harpy_stats (statline_evidence): unsatisfied" in final_prompt
+
+
 def test_familiar_continues_until_all_required_plan_requirements_are_satisfied(
     monkeypatch,
     tmp_path: Path,
@@ -2536,6 +2601,109 @@ def test_execute_tool_dispatches_lookup_source_object_and_rejects_unknown_tool(
             arguments={},
             conversation=conversation,
         )
+
+
+def test_execute_tool_passes_requirement_constraint_to_search_library(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    thread = chat_service.chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="orc stats",
+        idempotency_key="send-agent-constraint",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    resolved = context_resolution.resolve_research_request(
+        "orc stats",
+        active_context=None,
+    )
+    conversation = conversation_context.ConversationContext(
+        prompt_messages=(),
+        retrieval_query="orc stats",
+        history_message_ids=(),
+        history_turn_count=0,
+        history_strategy="none",
+    )
+    tool_call = research.FamiliarToolCall(
+        id="tool-call-constraint",
+        research_run_id="research-constraint",
+        research_plan_id=None,
+        requirement_id="orc_stats",
+        purpose=None,
+        step_number=1,
+        call_index=0,
+        provider_call_id=None,
+        tool_name="search_library",
+        arguments={"query": "orc stats", "intent": "statline_lookup"},
+        argument_hash="hash",
+        status="running",
+        retrieval_run_id=None,
+        output_summary={},
+        error_code=None,
+        error_message=None,
+        created_at="2026-06-09T00:00:00Z",
+        updated_at="2026-06-09T00:00:00Z",
+        completed_at=None,
+    )
+    requirement = agent_planning.EvidenceRequirement(
+        id="orc_stats",
+        requirement_type="statline_evidence",
+        subject=agent_planning.SubjectConstraint(
+            canonical="Orc",
+            surface="orc",
+            book_title_hints=("Old World Bestiary",),
+            page_hints=("104",),
+        ),
+        required_terms=("WS", "BS", "S", "T"),
+        object_type_hints=("stat_block",),
+        min_accepted_hits=1,
+        required=True,
+    )
+    expected = research_tools.SearchLibraryResult(
+        retrieval_run_id="retrieval-constraint",
+        query="orc stats",
+        source_set_id="rules-core",
+        source_book_ids=("bestiary",),
+        hits=(),
+        diagnostics=diagnostics(),
+    )
+
+    def fake_search_library(**kwargs):
+        constraint = kwargs["requirement_constraint"]
+        assert constraint.requirement_id == "orc_stats"
+        assert constraint.subject_terms == ("orc",)
+        assert constraint.object_type_hints == ("stat_block",)
+        assert constraint.book_title_hints == ("Old World Bestiary",)
+        assert constraint.page_hints == ("104",)
+        return expected
+
+    monkeypatch.setattr(research_tools, "search_library", fake_search_library)
+    result = chat_store.SendChatResult(
+        thread=thread,
+        user_message=queued.user_message,
+        assistant_message=None,
+        model_run=queued.model_run,
+        citations=(),
+    )
+
+    dispatched = familiar_agent.execute_tool(
+        config,
+        result=result,
+        resolved=resolved,
+        tool_call=tool_call,
+        step_number=1,
+        tool_name="search_library",
+        arguments={"query": "orc stats", "intent": "statline_lookup"},
+        conversation=conversation,
+        requirement=requirement,
+    )
+
+    assert dispatched == expected
 
 
 def test_execute_tool_and_validate_uses_compatibility_validation(

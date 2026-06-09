@@ -249,6 +249,14 @@ accepted-only final retrieval runs, partial/rejected evidence traces,
 evidence-status transitions, research run and tool-call persistence, retrieval
 diagnostics metadata, stream event mapping, and final prompt construction from
 accepted evidence only.
+Evidence-gate regressions also cover generic structural subjects failing
+closed, subjectless page evidence requiring both book and page anchors,
+included/excluded subject terms, multi-word structural subject phrase matching,
+object-type/book/page hint normalization, statline field sufficiency,
+checked-scope link hydration, accepted-only UI/tool payloads, and synthetic
+whole-library failure modes such as career/profile false positives, wrong
+named entities, table/prose mentions without stat fields, heading-only matches,
+vector-only wrong-entity candidates, and scattered multi-word subjects.
 
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
@@ -257,7 +265,8 @@ toggles, section-level Library bulk toggles, absence of noisy per-book
 readiness labels, search result full text expansion/error handling, Grimoire
 tab, page, zoom, and view-mode behavior, two-page spread math, guarded PDF.js
 rendering/retry and cancellation behavior, Familiar shell behavior, Familiar
-reader-context request payloads, expandable research trace rendering, safe
+reader-context request payloads, expandable research trace rendering including
+accepted/partial/rejected evidence counts and reason counts, safe
 Familiar markdown rendering, explicit PDF-page citation/search opens, and
 browser e2e flows for Library/Search/Grimoire/Familiar page-aware chat plus
 panel overflow.

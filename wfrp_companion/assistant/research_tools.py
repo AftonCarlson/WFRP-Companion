@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from wfrp_companion.assistant import chat_store
+from wfrp_companion.assistant import evidence_constraints
 from wfrp_companion.assistant import retrieval
 from wfrp_companion.assistant.evidence import context_window
 from wfrp_companion.assistant.evidence import parse_heading_path
@@ -44,8 +45,12 @@ def search_library(
     history_message_ids: Sequence[str] = (),
     history_turn_count: int = 0,
     history_strategy: str = "none",
+    requirement_constraint: evidence_constraints.EvidenceConstraint | None = None,
 ) -> SearchLibraryResult:
     source_scope = thread_source_scope(config, thread_id)
+    retrieve_kwargs: dict[str, object] = {}
+    if requirement_constraint is not None:
+        retrieve_kwargs["requirement_constraint"] = requirement_constraint
     context = retrieval.retrieve_context_for_source_scope(
         config,
         source_scope,
@@ -53,6 +58,7 @@ def search_library(
         hit_limit=hit_limit,
         total_char_limit=total_char_limit,
         window_chars=window_chars,
+        **retrieve_kwargs,
     )
     diagnostics = context.diagnostics
     if diagnostics is None:

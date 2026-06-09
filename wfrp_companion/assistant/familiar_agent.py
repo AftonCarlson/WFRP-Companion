@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from wfrp_companion.assistant import agent_planning
 from wfrp_companion.assistant import chat_store
 from wfrp_companion.assistant import context_resolution
+from wfrp_companion.assistant import evidence_constraints
 from wfrp_companion.assistant import evidence_validation
 from wfrp_companion.assistant import prompts
 from wfrp_companion.assistant import provider
@@ -534,6 +535,7 @@ def execute_tool_and_validate(
             tool_name=tool_name,
             arguments=arguments,
             conversation=conversation,
+            requirement=requirement,
         )
         if requirement is None:
             validation = evidence_validation.validate_hits(
@@ -541,12 +543,14 @@ def execute_tool_and_validate(
                 subject=resolved.subject,
                 intent=resolved.intent,
                 source_book_ids=tool_result.source_book_ids,
+                config=config,
             )
         else:
             validation = evidence_validation.validate_hits_for_requirement(
                 tool_result.hits,
                 requirement=requirement,
                 source_book_ids=tool_result.source_book_ids,
+                config=config,
             )
         evidence_validation.record_evidence_judgments(
             config,
@@ -610,16 +614,25 @@ def execute_tool_and_validate(
     )
     progress.extend(
         (
-            FamiliarProgressEvent(type="retrieval", hits=tool_result.hits),
+            FamiliarProgressEvent(
+                type="retrieval",
+                hits=validation.accepted_hits,
+                metadata={
+                    "retrieval_run_id": tool_result.retrieval_run_id,
+                    "candidate_hit_count": len(tool_result.hits),
+                    "accepted_hit_count": len(validation.accepted_hits),
+                },
+            ),
             FamiliarProgressEvent(
                 type="tool_result",
-                hits=tool_result.hits,
+                hits=validation.accepted_hits,
                 metadata={
                     "research_run_id": research_run.id,
                     "tool_call_id": succeeded.id,
                     "tool_name": succeeded.tool_name,
                     "retrieval_run_id": tool_result.retrieval_run_id,
                     "hit_count": len(tool_result.hits),
+                    "accepted_hit_count": len(validation.accepted_hits),
                     "diagnostics": retrieval_diagnostics_metadata(
                         tool_result.diagnostics
                     ),
@@ -646,9 +659,15 @@ def execute_tool(
     tool_name: str,
     arguments: dict[str, object],
     conversation: ConversationContext,
+    requirement: agent_planning.EvidenceRequirement | None = None,
 ) -> research_tools.SearchLibraryResult:
     if tool_name == "search_library":
         query = string_argument(arguments, "query") or resolved.resolved_query
+        requirement_constraint = (
+            evidence_constraints.constraint_from_requirement(requirement)
+            if requirement is not None
+            else None
+        )
         return research_tools.search_library(
             config=config,
             thread_id=result.thread.id,
@@ -663,6 +682,7 @@ def execute_tool(
             history_message_ids=conversation.history_message_ids,
             history_turn_count=conversation.history_turn_count,
             history_strategy=conversation.history_strategy,
+            requirement_constraint=requirement_constraint,
         )
     if tool_name == "open_page":
         return research_tools.open_page(
@@ -1363,10 +1383,27 @@ def tool_output_payload(
     *,
     validation: evidence_validation.EvidenceValidationResult,
 ) -> dict[str, object]:
+    accepted_hit_payloads = [hit_payload(hit) for hit in validation.accepted_hits]
     return {
         **tool_output_summary(tool_result, validation=validation),
-        "hits": [hit_payload(hit) for hit in tool_result.hits],
+        "hits": accepted_hit_payloads,
+        "accepted_hits": accepted_hit_payloads,
+        "partial_reason_counts": judgment_reason_counts(validation, status="partial"),
+        "rejected_reason_counts": judgment_reason_counts(validation, status="rejected"),
     }
+
+
+def judgment_reason_counts(
+    validation: evidence_validation.EvidenceValidationResult,
+    *,
+    status: str,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for judgment in validation.judgments:
+        if judgment.status != status:
+            continue
+        counts[judgment.reason_code] = counts.get(judgment.reason_code, 0) + 1
+    return counts
 
 
 def hit_payload(hit: RetrievedHit) -> dict[str, object]:

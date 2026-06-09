@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from wfrp_companion.assistant import chat_store
+from wfrp_companion.assistant import evidence_constraints
 from wfrp_companion.assistant import candidates as candidate_module
 from wfrp_companion.assistant.evidence import RetrievalContext
 from wfrp_companion.assistant import research_tools
@@ -427,6 +428,82 @@ def test_search_library_falls_back_to_empty_diagnostics_when_context_has_none(
     assert result.diagnostics.channel_skip_reasons == {
         "retrieval": "disabled_by_limits"
     }
+
+
+def test_search_library_passes_requirement_constraint_to_retrieval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="orc stats",
+        idempotency_key="send-constraint",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    constraint = evidence_constraints.EvidenceConstraint(
+        requirement_id="orc_stats",
+        requirement_type="statline_evidence",
+        canonical_subject="Orc",
+        subject_terms=("orc",),
+        subject_aliases=(),
+        excluded_terms=(),
+        required_terms=(),
+        structural_terms=("statline",),
+        object_type_hints=("stat_block",),
+        book_title_hints=("Old World Bestiary",),
+        page_hints=("104",),
+        min_accepted_hits=1,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_retrieve_context_for_source_scope(
+        config: AppConfig,
+        source_scope: SourceScope,
+        query: str,
+        *,
+        hit_limit: int,
+        total_char_limit: int,
+        window_chars: int,
+        requirement_constraint: evidence_constraints.EvidenceConstraint | None = None,
+    ) -> RetrievalContext:
+        captured["constraint"] = requirement_constraint
+        return RetrievalContext(
+            query=query,
+            candidates=("orc stats",),
+            hits=(),
+            source_set_id=source_scope.source_set_id,
+            source_book_ids=source_scope.book_ids,
+            source_map=(),
+            diagnostics=research_tools.retrieval.empty_diagnostics(config),
+        )
+
+    monkeypatch.setattr(
+        research_tools.retrieval,
+        "retrieve_context_for_source_scope",
+        fake_retrieve_context_for_source_scope,
+    )
+
+    result = research_tools.search_library(
+        config,
+        thread_id=thread.id,
+        message_id=queued.user_message.id,
+        tool_call_id="tool-call-constraint",
+        attempt_number=1,
+        query="orc stats",
+        intent="statline_lookup",
+        hit_limit=4,
+        total_char_limit=500,
+        window_chars=120,
+        requirement_constraint=constraint,
+    )
+
+    assert captured["constraint"] is constraint
+    assert result.query == "orc stats"
 
 
 def test_page_tool_supports_title_hint_pdf_page_and_helper_miss_paths(
