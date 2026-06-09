@@ -391,6 +391,29 @@ hybrid retrieval path:
   `give me the statblock for gors` retrieves Old World Bestiary page 84 / Gor
   Statistics as the first evidence item under the checked 13-book source set.
 
+Follow-up stat-line retrieval repair on 2026-06-08 tightened the same path:
+
+- Query planning now treats `stat line` and `statline` as structural stat
+  requests. It generates sparse candidates such as `harpy statistics`,
+  `harpy stat block`, and `harpy profile`, while reranker match terms count
+  `statistics`/`block` rather than treating `line` or generic `profile` as
+  proof of stat evidence.
+- Structural named-entity validation now uses source-object-local entity text.
+  Page snippets and incidental body mentions from neighboring source objects do
+  not prove that a titled object is the requested creature/NPC/table. This
+  prevents a Harpy page snippet from validating a neighboring Hippogriff
+  profile, and prevents unrelated sections that mention Harpies from outranking
+  Harpy Statistics evidence.
+- Very short fallback `page_chunk` source objects expand to a bounded window
+  around their `char_start`/`char_end` page span. This lets a heading-only
+  fallback such as `Harpy Statistics` carry nearby local page context without
+  copying an entire page into the prompt.
+- Live QA after the repair confirmed that `harpies stat line` retrieves Old
+  World Bestiary page 100 / Harpy Statistics as the only selected evidence
+  item. The retrieved local text still reflects OCR quality; if a stat table
+  header or cell is absent from extracted text, Familiar should cite the page
+  and say the retrieved text is incomplete rather than inventing missing values.
+
 ## Answer Contract
 
 [coverage: high]

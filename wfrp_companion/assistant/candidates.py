@@ -28,6 +28,9 @@ from wfrp_companion.source_objects.embedding_providers import (
     resolve_embedding_provider,
 )
 
+SHORT_PAGE_CHUNK_MAX_CHARS = 240
+PAGE_CHUNK_CONTEXT_CHARS = 1200
+
 
 @dataclass(frozen=True)
 class LinkedEvidenceTarget:
@@ -535,7 +538,7 @@ def source_object_row_to_candidate(
         page_range_label=page_range_label,
         snippet=snippet or row["title"] or "",
         base_score=base_score,
-        context_text=row["text"],
+        context_text=source_object_context_text(connection, row),
         channel=channel,
         source_object_id=row["id"],
         object_type=row["object_type"],
@@ -545,6 +548,36 @@ def source_object_row_to_candidate(
         rank_reasons=(f"candidate:{channel}", f"source_object:{row['object_type']}"),
         text_snapshot_sha256=row["text_snapshot_sha256"],
     )
+
+
+def source_object_context_text(connection: sqlite3.Connection, row: sqlite3.Row) -> str:
+    text = row["text"]
+    if row["object_type"] != "page_chunk" or len(text) >= SHORT_PAGE_CHUNK_MAX_CHARS:
+        return text
+    if row["char_start"] is None or row["char_end"] is None:
+        return text
+    page_text = load_page_text_from_connection(connection, row["page_id"])
+    if not page_text:
+        return text
+    return context_around_span(
+        page_text,
+        start=int(row["char_start"]),
+        end=int(row["char_end"]),
+        max_chars=PAGE_CHUNK_CONTEXT_CHARS,
+    )
+
+
+def context_around_span(text: str, *, start: int, end: int, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    bounded_start = min(max(start, 0), len(text))
+    bounded_end = min(max(end, bounded_start), len(text))
+    window_start = max(0, bounded_start - max_chars // 3)
+    window_end = min(len(text), window_start + max_chars)
+    if bounded_end > window_end:
+        window_end = bounded_end
+        window_start = max(0, window_end - max_chars)
+    return text[window_start:window_end].strip()
 
 
 def linked_page_row_to_candidate(

@@ -73,6 +73,8 @@ STRUCTURAL_QUERY_TERMS = {
     "stat",
     "statblock",
     "statblocks",
+    "statline",
+    "statlines",
     "stats",
     "statistics",
     "table",
@@ -84,8 +86,18 @@ COMPOUND_QUERY_PHRASES = (
     ("main", "profile"),
     ("secondary", "profile"),
     ("stat", "block"),
+    ("stat", "line"),
 )
-MAX_QUERY_TERM_SEQUENCES = 16
+MAX_QUERY_TERM_SEQUENCES = 24
+STAT_LINE_LEAD_TERMS = {"stat", "stats"}
+STAT_LINE_FILLER_TERMS = {"line", "lines"}
+STAT_LINE_QUERY_TERMS = {"statline", "statlines"}
+STAT_LINE_REPLACEMENTS = (
+    ("statistics",),
+    ("stat", "block"),
+    ("profile",),
+)
+STAT_LINE_MATCH_TERMS = ("statistics", "block")
 
 
 class SourceMapEntryLike(Protocol):
@@ -128,31 +140,45 @@ def meaningful_tokens(query: str) -> list[str]:
 
 def query_match_terms(tokens: Sequence[str]) -> tuple[str, ...]:
     terms: list[str] = []
+    split_sequence = split_query_sequence(tokens)
+    stat_line_intent = has_stat_line_intent(split_sequence)
     for token in tokens:
-        if token not in terms:
-            terms.append(token)
-    for token in tokens:
-        for part in split_compound_query_token(token):
-            if part not in terms:
-                terms.append(part)
+        if not skip_stat_line_match_term(token, stat_line_intent):
+            add_match_term(terms, token)
+    for part in split_sequence:
+        if not skip_stat_line_match_term(part, stat_line_intent):
+            add_match_term(terms, part)
+    if stat_line_intent:
+        for part in STAT_LINE_MATCH_TERMS:
+            add_match_term(terms, part)
     return tuple(terms)
 
 def query_term_sequences(tokens: Sequence[str]) -> tuple[tuple[str, ...], ...]:
     original = tuple(tokens)
     sequences: list[tuple[str, ...]] = []
     add_term_sequence(sequences, original)
-    split_sequence = tuple(
+    split_sequence = split_query_sequence(original)
+    add_term_sequence(sequences, split_sequence)
+    alternative_sequences = stat_line_alternative_sequences(split_sequence)
+    for alternative_sequence in alternative_sequences:
+        add_term_sequence(sequences, alternative_sequence)
+    variant_base_sequences: list[tuple[str, ...]] = []
+    for base_sequence in (split_sequence, *alternative_sequences, original):
+        add_term_sequence(variant_base_sequences, base_sequence)
+    for base_sequence in tuple(variant_base_sequences):
+        variant_groups = tuple(search_term_variants(token) for token in base_sequence)
+        for variant_sequence in product(*variant_groups):
+            add_term_sequence(sequences, variant_sequence)
+            if len(sequences) >= MAX_QUERY_TERM_SEQUENCES:
+                return tuple(sequences)
+    return tuple(sequences)
+
+def split_query_sequence(tokens: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
         part
-        for token in original
+        for token in tokens
         for part in split_compound_query_token(token)
     )
-    add_term_sequence(sequences, split_sequence)
-    variant_groups = tuple(search_term_variants(token) for token in split_sequence)
-    for variant_sequence in product(*variant_groups):
-        add_term_sequence(sequences, variant_sequence)
-        if len(sequences) >= MAX_QUERY_TERM_SEQUENCES:
-            break
-    return tuple(sequences)
 
 def split_compound_query_token(token: str) -> tuple[str, ...]:
     normalized = token.replace("-", "")
@@ -160,8 +186,37 @@ def split_compound_query_token(token: str) -> tuple[str, ...]:
         phrase_text = "".join(phrase)
         plural_phrase_text = "".join((*phrase[:-1], f"{phrase[-1]}s"))
         if normalized in {phrase_text, plural_phrase_text}:
-            return phrase
+                return phrase
     return (token,)
+
+def has_stat_line_intent(sequence: Sequence[str]) -> bool:
+    return any(
+        left in STAT_LINE_LEAD_TERMS and right in STAT_LINE_FILLER_TERMS
+        for left, right in zip(sequence, sequence[1:], strict=False)
+    )
+
+def stat_line_alternative_sequences(
+    sequence: Sequence[str],
+) -> tuple[tuple[str, ...], ...]:
+    alternatives: list[tuple[str, ...]] = []
+    for index, (left, right) in enumerate(zip(sequence, sequence[1:], strict=False)):
+        if left not in STAT_LINE_LEAD_TERMS or right not in STAT_LINE_FILLER_TERMS:
+            continue
+        for replacement in STAT_LINE_REPLACEMENTS:
+            add_term_sequence(
+                alternatives,
+                (*sequence[:index], *replacement, *sequence[index + 2 :]),
+            )
+    return tuple(alternatives)
+
+def skip_stat_line_match_term(term: str, stat_line_intent: bool) -> bool:
+    return stat_line_intent and (
+        term in STAT_LINE_FILLER_TERMS or term in STAT_LINE_QUERY_TERMS
+    )
+
+def add_match_term(terms: list[str], term: str) -> None:
+    if term and term not in terms:
+        terms.append(term)
 
 def search_term_variants(term: str) -> tuple[str, ...]:
     variants = [term]
@@ -173,7 +228,7 @@ def search_term_variants(term: str) -> tuple[str, ...]:
 def singular_search_term(term: str) -> str | None:
     if term.endswith("ies") and len(term) > 4:
         return f"{term[:-3]}y"
-    if term.endswith(("ss", "us", "is", "os", "ous")):
+    if term.endswith(("ss", "us", "is", "os", "ous", "ics")):
         return None
     if term.endswith("s") and len(term) > 3:
         return term[:-1]

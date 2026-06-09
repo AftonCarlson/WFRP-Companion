@@ -198,8 +198,11 @@ WFRP-style pipe/percent stat profiles, range-chart table extraction with OCR
 title normalization, derived source-object links and count updates, table-row
 citations resolving to parent table page ranges, stat-block retrieval resolving
 to complete profiles, compound/plural structural queries retrieving singular
-stat evidence through generalized sparse alternatives, structural query terms
-refusing unsafe fuzzy expansion,
+stat evidence through generalized sparse alternatives, `stat line`/`statline`
+queries routing to statistics evidence instead of movement/profile prose,
+source-object-local entity validation that rejects neighboring-object snippets
+and wrong-titled body overlaps, short page-chunk context expansion around
+source spans, structural query terms refusing unsafe fuzzy expansion,
 typed chart/table evidence outranking prose mentions, heading/running-header
 only entity matches being rejected, index routing to deterministic target
 sections or page-only target pages, glossary evidence retaining definition
