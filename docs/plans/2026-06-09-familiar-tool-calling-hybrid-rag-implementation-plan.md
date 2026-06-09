@@ -877,15 +877,15 @@ Scope:
 
 Changes:
 
-- [ ] Add migration `wfrp_companion/db/migration_files/0007_familiar_agent_research.sql`.
-- [ ] Add `FAMILIAR_AGENT_RESEARCH_MIGRATION_ID`, append `MIGRATION_IDS`, and wire `apply_familiar_agent_research(...)` in `wfrp_companion/db/migrations.py`.
-- [ ] Update `wfrp_companion/db/schema.sql`.
-- [ ] Add dataclasses/Pydantic models for research runs, tool calls, diagnostics, evidence judgments, and reader context.
-- [ ] Add chat-store methods for:
-  - [ ] creating/updating research runs,
-  - [ ] recording tool calls,
-  - [ ] recording evidence judgments,
-  - [ ] reading/updating thread context.
+- [x] Add migration `wfrp_companion/db/migration_files/0007_familiar_agent_research.sql`.
+- [x] Add `FAMILIAR_AGENT_RESEARCH_MIGRATION_ID`, append `MIGRATION_IDS`, and wire `apply_familiar_agent_research(...)` in `wfrp_companion/db/migrations.py`.
+- [x] Update `wfrp_companion/db/schema.sql`.
+- [x] Add dataclasses/Pydantic models for research runs, tool calls, diagnostics, evidence judgments, and reader context.
+- [x] Add chat-store methods for:
+  - [x] creating/updating research runs,
+  - [x] recording tool calls,
+  - [x] recording evidence judgments,
+  - [x] reading/updating thread context.
 
 Intentionally not changed yet:
 
@@ -910,11 +910,11 @@ Scope:
 
 Changes:
 
-- [ ] Refactor retrieval to return explicit `RetrievalDiagnostics` without breaking existing `retrieve_context()`.
-- [ ] Add `search_library` backend tool wrapper.
-- [ ] Add `open_page` backend tool.
-- [ ] Add `lookup_source_object` backend tool.
-- [ ] Persist tool-linked retrieval runs.
+- [x] Refactor retrieval to return explicit `RetrievalDiagnostics` without breaking existing `retrieve_context()`.
+- [x] Add `search_library` backend tool wrapper.
+- [x] Add `open_page` backend tool.
+- [x] Add `lookup_source_object` backend tool.
+- [x] Persist tool-linked retrieval runs.
 
 Intentionally not changed yet:
 
@@ -936,10 +936,10 @@ Scope:
 
 Changes:
 
-- [ ] Add deterministic intent/follow-up parser.
-- [ ] Add page-reference parser.
-- [ ] Add active thread context update rules.
-- [ ] Add `wfrp_companion/assistant/evidence_validation.py`.
+- [x] Add deterministic intent/follow-up parser.
+- [x] Add page-reference parser.
+- [x] Add active thread context update rules.
+- [x] Add `wfrp_companion/assistant/evidence_validation.py`.
 
 Intentionally not changed yet:
 
@@ -963,11 +963,11 @@ Scope:
 
 Changes:
 
-- [ ] Add `tools/rebuild_retrieval_assets.py`.
-- [ ] Compose existing import/index/extract/map/label/embed functions.
-- [ ] Add aggregate retrieval-status API.
-- [ ] Update library UI to show indexed/vectorized/source-object/table status.
-- [ ] Document local embedding setup.
+- [x] Add `tools/rebuild_retrieval_assets.py`.
+- [x] Compose existing import/index/extract/map/label/embed functions.
+- [x] Add aggregate retrieval-status API.
+- [x] Update library UI to show indexed/vectorized/source-object/table status.
+- [x] Document local embedding setup.
 
 Intentionally not changed yet:
 
@@ -988,12 +988,12 @@ Scope:
 
 Changes:
 
-- [ ] Add provider abstractions for tool definitions, calls, outputs, and reasoning continuity.
-- [ ] Implement Responses API function calling in the existing provider layer.
-- [ ] Add fake provider support for deterministic tests.
-- [ ] Implement `FamiliarResearchAgent`.
-- [ ] Integrate agent loop into `stream_queued_result()`.
-- [ ] Add SSE events for research/tool/evidence progress.
+- [x] Add provider abstractions for tool definitions, calls, outputs, and reasoning continuity.
+- [x] Implement Responses API function calling in the existing provider layer.
+- [x] Add fake provider support for deterministic tests.
+- [x] Implement `FamiliarResearchAgent`.
+- [x] Integrate agent loop into `stream_queued_result()`.
+- [x] Add SSE events for research/tool/evidence progress.
 
 Intentionally not changed yet:
 
@@ -1018,12 +1018,12 @@ Scope:
 
 Changes:
 
-- [ ] Replace `SYSTEM_INSTRUCTIONS`.
-- [ ] Build separate prompt paths for:
-  - [ ] research planning/tool use,
-  - [ ] final answer with accepted evidence,
-  - [ ] insufficiency answer after exhausted attempts.
-- [ ] Filter citations to accepted evidence.
+- [x] Replace `SYSTEM_INSTRUCTIONS`.
+- [x] Build separate prompt paths for:
+  - [x] research planning/tool use,
+  - [x] final answer with accepted evidence,
+  - [x] insufficiency answer after exhausted attempts.
+- [x] Filter citations to accepted evidence.
 
 Intentionally not changed yet:
 
@@ -1045,19 +1045,19 @@ Scope:
 
 Changes:
 
-- [ ] Update chat UI trace.
-- [ ] Add e2e coverage for page-aware recovery and follow-up statline flow using synthetic fixtures.
-- [ ] Run full backend coverage command.
-- [ ] Run frontend tests/build/e2e.
-- [ ] Update wiki topics after implementation is real:
-  - [ ] `wiki/topics/ai-rag-system.md`
-  - [ ] `wiki/concepts/hybrid-search-for-rules.md`
-  - [ ] `wiki/topics/pdf-library-and-ingestion.md`
-  - [ ] `wiki/topics/testing-posture-and-conventions.md`
-  - [ ] `wiki/INDEX.md` if new pages are added.
-- [ ] Request independent code/agent review only after implementation is PR-ready.
-- [ ] Address review feedback.
-- [ ] Push the PR.
+- [x] Update chat UI trace.
+- [x] Add e2e coverage for page-aware recovery and follow-up statline flow using synthetic fixtures.
+- [x] Run full backend coverage command.
+- [x] Run frontend tests/build/e2e.
+- [x] Update wiki topics after implementation is real:
+  - [x] `wiki/topics/ai-rag-system.md`
+  - [x] `wiki/concepts/hybrid-search-for-rules.md`
+  - [x] `wiki/topics/pdf-library-and-ingestion.md`
+  - [x] `wiki/topics/testing-posture-and-conventions.md`
+  - [x] `wiki/INDEX.md` if new pages are added.
+- [x] Request independent code/agent review only after implementation is PR-ready.
+- [x] Address review feedback.
+- [x] Push the PR.
 
 ## 11. Testing Requirements
 
