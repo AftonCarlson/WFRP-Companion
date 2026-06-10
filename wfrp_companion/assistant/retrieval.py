@@ -59,6 +59,10 @@ from wfrp_companion.assistant.source_map import source_map_chapters as source_ma
 from wfrp_companion.assistant.source_map import source_map_entry_from_book_row as source_map_entry_from_book_row
 from wfrp_companion.assistant.source_map import source_vocabulary as source_vocabulary
 from wfrp_companion.config import AppConfig
+from wfrp_companion.db.connection import initialize_database
+from wfrp_companion.structured_evidence.resolver import (
+    resolve_validated_structured_candidates,
+)
 from wfrp_companion.assistant.research import RetrievalDiagnostics
 
 
@@ -70,6 +74,7 @@ def retrieve_context(
     hit_limit: int,
     total_char_limit: int,
     window_chars: int,
+    requirement_constraint: EvidenceConstraint | None = None,
 ) -> RetrievalContext:
     source_scope = current_thread_source_scope(config, thread_id)
     return retrieve_context_for_source_scope(
@@ -79,6 +84,7 @@ def retrieve_context(
         hit_limit=hit_limit,
         total_char_limit=total_char_limit,
         window_chars=window_chars,
+        requirement_constraint=requirement_constraint,
     )
 
 
@@ -120,6 +126,16 @@ def retrieve_context_for_source_scope(
         evidence_pool,
         requirement_constraint,
     )
+    with initialize_database(config.db_path) as connection:
+        structured_result = resolve_validated_structured_candidates(
+            connection,
+            query=query,
+            book_ids=source_scope.book_ids,
+            constraint=requirement_constraint,
+            limit=max(4, hit_limit),
+        )
+    if structured_result.candidates:
+        evidence_pool = (*structured_result.candidates, *evidence_pool)
     ranked_candidates = rerank_candidates(evidence_pool, query_plan)
     selected_hits: list[RetrievedHit] = []
     remaining_chars = total_char_limit
@@ -161,6 +177,18 @@ def retrieve_context_for_source_scope(
                 confidence=candidate.confidence,
                 rank_reasons=rank_reasons,
                 text_snapshot_sha256=candidate.text_snapshot_sha256,
+                validated_structured_object_id=(
+                    candidate.validated_structured_object_id
+                ),
+                validated_payload_schema_version=(
+                    candidate.validated_payload_schema_version
+                ),
+                validated_payload_hash=candidate.validated_payload_hash,
+                validated_validation_status=candidate.validated_validation_status,
+                validated_source_snapshot_sha256=(
+                    candidate.validated_source_snapshot_sha256
+                ),
+                structured_lookup_policy=candidate.structured_lookup_policy,
             )
         )
         remaining_chars -= len(context_text)
@@ -174,10 +202,24 @@ def retrieve_context_for_source_scope(
         source_map=source_map,
         diagnostics=replace(
             candidate_result.diagnostics,
+            channel_counts={
+                **candidate_result.diagnostics.channel_counts,
+                "validated_structured": len(structured_result.candidates),
+            },
             channel_skip_reasons={
                 **candidate_result.diagnostics.channel_skip_reasons,
                 **hint_skip_reasons,
+                **(
+                    {"validated_structured": structured_result.skip_reason}
+                    if structured_result.skip_reason is not None
+                    else {}
+                ),
             },
+            candidate_count_before_fusion=(
+                candidate_result.diagnostics.candidate_count_before_fusion
+                + len(structured_result.candidates)
+            ),
+            candidate_count_after_fusion=len(evidence_pool),
             reranked_count=len(ranked_candidates),
             selected_count=len(selected_hits),
         ),
@@ -313,6 +355,7 @@ def empty_diagnostics(config: AppConfig) -> RetrievalDiagnostics:
             "vector": 0,
             "page_lookup": 0,
             "table_stat_lookup": 0,
+            "validated_structured": 0,
         },
         channel_skip_reasons={"retrieval": "disabled_by_limits"},
         vector_status=vector_status,

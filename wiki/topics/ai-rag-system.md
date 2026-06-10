@@ -60,8 +60,17 @@ Current Familiar implementation:
 - `search_library` is the default tool. It uses hybrid retrieval over the
   thread's checked source-book snapshot: page FTS, source-object FTS,
   source-object fallback scan, current local vector candidates when embeddings
-  are enabled, structured table/stat/source-object signals, RRF fusion, and
+  are enabled, validated structured evidence when the requirement policy allows
+  it, raw structured table/stat/source-object signals, RRF fusion, and
   deterministic reranking.
+- Validated structured evidence is a separate trusted layer over raw
+  `source_objects`. Reader observations and structured candidates are
+  untrusted until approved or corrected into `validated_structured_objects`.
+  Familiar may use active validated tables/profile bundles only through the
+  intent-gated structured resolver: statline requirements require profile
+  bundles, explicit table/rules requirements may allow table support, scene
+  prep can use profiles as support, and lore/general questions default to
+  `not_primary`.
 - `open_page` is used when the request contains page evidence such as
   "it is on pg 99"; it resolves the checked book plus PDF/printed-page label
   directly instead of trying another broad text search.
@@ -71,6 +80,9 @@ Current Familiar implementation:
 - Evidence validation runs after every tool call. Only accepted evidence can
   feed the final answer prompt and final citation run; partial or rejected
   evidence remains in the research trace for debugging.
+- Validated structured hits still must come from the checked source-book scope
+  and have `validation_status='active'`. Unvalidated candidates and stale or
+  retired validated rows cannot satisfy evidence validation.
 - **Evidence validation is the authoritative gate, even when retrieval ranking
   already preferred a candidate.** Plan requirements are normalized into
   `EvidenceConstraint` objects that check checked-book scope, excluded terms,
@@ -111,14 +123,15 @@ Current Familiar implementation:
   resolve to the current thread subject before retrieval.
 - Retrieval diagnostics record which channels ran, vector status/failures,
   selected candidates, reranker outcomes, page lookup attempts, table/stat
-  lookups, skip reasons, and accepted/rejected evidence judgments. Vector
-  status distinguishes `ran`, `ran_no_candidates`, `disabled`,
-  `missing_embeddings`, `stale_embeddings`, and provider failures.
+  lookups, validated structured counts/skip reasons, and accepted/rejected
+  evidence judgments. Vector status distinguishes `ran`, `ran_no_candidates`,
+  `disabled`, `missing_embeddings`, `stale_embeddings`, and provider failures.
 - The UI can surface aggregate retrieval readiness through
   `/api/retrieval/status`: copied books, enabled books, page-text indexed
-  books, source-object indexed books, table/stat indexed books, current
-  vectorized books, vectorized enabled books, provider, dimensions, and
-  aggregate vector status.
+  books, source-object indexed books, legacy table/stat indexed books,
+  structured candidate count, structured needs-review count, active validated
+  structured count, current vectorized books, vectorized enabled books,
+  provider, dimensions, and aggregate vector status.
 - **Vector readiness is operational, not automatic.** A running app needs
   matching `WFRP_EMBEDDING_PROVIDER` / model / dimensions settings and current
   local embeddings. If those do not match, hybrid retrieval fails closed to

@@ -285,6 +285,9 @@ it("renders aggregate retrieval status when provided", () => {
         page_text_indexed: 26,
         source_objects_indexed: 26,
         table_or_stat_indexed: 18,
+        structured_candidates: 42,
+        structured_needs_review: 7,
+        validated_structured_active: 11,
         vectorized_current: 26,
         vectorized_enabled: 13,
         embedding_provider: "local-hash",
@@ -296,7 +299,7 @@ it("renders aggregate retrieval status when provided", () => {
   );
 
   expect(screen.getByLabelText("Semantic search status")).toHaveTextContent(
-    "Retrieval: 13 enabled, 26 page text indexed, 26 source-object indexed, 18 table/stat indexed, 13 vectorized enabled, vector ready",
+    "Retrieval: 13 enabled, 26 page text indexed, 26 source-object indexed, 18 table/stat indexed, 42 structured candidates, 7 needs review, 11 validated, 13 vectorized enabled, vector ready",
   );
 });
 

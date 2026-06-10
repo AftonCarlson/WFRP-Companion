@@ -14,6 +14,12 @@ import type {
   SourceSetBookResponse,
   SourceSetBooksResponse,
   SourceSetsResponse,
+  StructuredCandidateDetailResponse,
+  StructuredCandidateListResponse,
+  StructuredCorrectionRequest,
+  StructuredReviewRequest,
+  StructuredReviewResultResponse,
+  StructuredReviewSummaryResponse,
 } from "../types/api";
 
 export type RequestOptions = {
@@ -141,6 +147,88 @@ export const apiClient = {
     return requestJson<PageTextResponse>(
       `/api/books/${encodeURIComponent(bookId)}/pages/${pageNumber}/text`,
       { signal: options?.signal },
+    );
+  },
+
+  getStructuredReviewSummary(
+    options?: RequestOptions,
+  ): Promise<StructuredReviewSummaryResponse> {
+    return requestJson<StructuredReviewSummaryResponse>(
+      "/api/structured-evidence/review/summary",
+      { signal: options?.signal },
+    );
+  },
+
+  listStructuredCandidates(
+    options?: RequestOptions & { status?: string; limit?: number },
+  ): Promise<StructuredCandidateListResponse> {
+    const params = new URLSearchParams({
+      limit: String(options?.limit ?? 50),
+    });
+    if (options?.status) {
+      params.set("status", options.status);
+    }
+    return requestJson<StructuredCandidateListResponse>(
+      `/api/structured-evidence/candidates?${params}`,
+      { signal: options?.signal },
+    );
+  },
+
+  getStructuredCandidate(
+    candidateId: string,
+    options?: RequestOptions,
+  ): Promise<StructuredCandidateDetailResponse> {
+    return requestJson<StructuredCandidateDetailResponse>(
+      `/api/structured-evidence/candidates/${encodeURIComponent(candidateId)}`,
+      { signal: options?.signal },
+    );
+  },
+
+  approveStructuredCandidate(
+    candidateId: string,
+    request: StructuredReviewRequest = {},
+  ): Promise<StructuredReviewResultResponse> {
+    return requestJson<StructuredReviewResultResponse>(
+      `/api/structured-evidence/candidates/${encodeURIComponent(candidateId)}/approve`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
+      },
+    );
+  },
+
+  correctStructuredCandidate(
+    candidateId: string,
+    request: StructuredCorrectionRequest,
+  ): Promise<StructuredReviewResultResponse> {
+    return requestJson<StructuredReviewResultResponse>(
+      `/api/structured-evidence/candidates/${encodeURIComponent(candidateId)}/correct`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
+      },
+    );
+  },
+
+  rejectStructuredCandidate(
+    candidateId: string,
+    request: StructuredReviewRequest = {},
+  ): Promise<StructuredReviewResultResponse> {
+    return requestJson<StructuredReviewResultResponse>(
+      `/api/structured-evidence/candidates/${encodeURIComponent(candidateId)}/reject`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
+      },
     );
   },
 

@@ -72,6 +72,18 @@ function client(): ApiClient {
     sendChatMessage: vi.fn(),
     retryModelRun: vi.fn(),
     streamChatMessage: vi.fn(),
+    getStructuredReviewSummary: vi.fn().mockResolvedValue({
+      candidates_total: 0,
+      candidates_needs_review: 0,
+      validated_active: 0,
+      validated_stale: 0,
+      validated_retired: 0,
+    }),
+    listStructuredCandidates: vi.fn().mockResolvedValue({ candidates: [] }),
+    getStructuredCandidate: vi.fn(),
+    approveStructuredCandidate: vi.fn(),
+    correctStructuredCandidate: vi.fn(),
+    rejectStructuredCandidate: vi.fn(),
   };
 }
 
@@ -161,6 +173,9 @@ it("requests tab changes from the tab buttons", async () => {
   await user.click(screen.getByRole("tab", { name: "Search" }));
 
   expect(onSetLeftTab).toHaveBeenCalledWith("search");
+  await user.click(screen.getByRole("tab", { name: "Review" }));
+
+  expect(onSetLeftTab).toHaveBeenCalledWith("review");
 });
 
 it("requests a return to the library tab from search", async () => {
@@ -186,4 +201,86 @@ it("requests a return to the library tab from search", async () => {
   await user.click(screen.getByRole("tab", { name: "Library" }));
 
   expect(onSetLeftTab).toHaveBeenCalledWith("library");
+});
+
+it("opens review candidates through the shared PDF page handler", async () => {
+  const user = userEvent.setup();
+  const onOpenPdfPage = vi.fn();
+  const fakeClient = client();
+  vi.mocked(fakeClient.listStructuredCandidates).mockResolvedValue({
+    candidates: [
+      {
+        id: "candidate-1",
+        book_id: "core-rules",
+        book_title: "Core Rules",
+        object_shape: "structured_table",
+        content_kind: "equipment_table",
+        entity_kind: "none",
+        canonical_name: null,
+        title: "Table 5-6",
+        table_number: "Table 5-6",
+        table_number_normalized: "5-6",
+        page_start: 112,
+        page_end: 112,
+        printed_page_start: "112",
+        printed_page_end: "112",
+        confidence: 0.8,
+        suspicious_flags: [],
+        status: "candidate",
+        updated_at: "now",
+      },
+    ],
+  });
+  vi.mocked(fakeClient.getStructuredCandidate).mockResolvedValue({
+    id: "candidate-1",
+    book_id: "core-rules",
+    book_title: "Core Rules",
+    object_shape: "structured_table",
+    content_kind: "equipment_table",
+    entity_kind: "none",
+    canonical_name: null,
+    title: "Table 5-6",
+    table_number: "Table 5-6",
+    table_number_normalized: "5-6",
+    page_start: 112,
+    page_end: 112,
+    printed_page_start: "112",
+    printed_page_end: "112",
+    confidence: 0.8,
+    suspicious_flags: [],
+    status: "candidate",
+    updated_at: "now",
+    primary_page_id: "core-rules:112",
+    primary_source_object_id: "table",
+    heading_path: [],
+    payload_json: { schema_version: 1 },
+    text_snapshot_sha256: "snapshot",
+    structured_extractor_version: "test",
+    observations: [],
+  });
+
+  renderApp(
+    <LibrarySearchPanel
+      activeSourceSetId="rules-core"
+      books={[book]}
+      client={fakeClient}
+      collapsedCategories={[]}
+      leftTab="review"
+      onOpenPdfPage={onOpenPdfPage}
+      onSetLeftTab={vi.fn()}
+      onSourceSetBookUpdated={vi.fn()}
+      onToggleCategory={vi.fn()}
+      retrievalStatus={null}
+      sourceSetBooks={[sourceSetBook]}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "Open page 112" }));
+
+  expect(onOpenPdfPage).toHaveBeenCalledWith({
+    bookId: "core-rules",
+    title: "Core Rules",
+    pageNumber: 112,
+    viewMode: "single",
+  });
 });

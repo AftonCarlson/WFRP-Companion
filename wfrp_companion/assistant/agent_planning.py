@@ -22,6 +22,13 @@ RequirementType = Literal[
     "page_evidence",
     "source_object_evidence",
 ]
+StructuredLookupPolicy = Literal[
+    "required",
+    "allowed",
+    "supporting_only",
+    "forbidden",
+    "not_primary",
+]
 PlanStatus = Literal["proposed", "accepted", "rejected", "superseded"]
 ToolName = Literal[
     "search_library",
@@ -43,6 +50,13 @@ REQUIREMENT_TYPES = {
     "statline_evidence",
     "page_evidence",
     "source_object_evidence",
+}
+STRUCTURED_LOOKUP_POLICIES = {
+    "required",
+    "allowed",
+    "supporting_only",
+    "forbidden",
+    "not_primary",
 }
 TOOL_NAMES = {
     "search_library",
@@ -91,6 +105,11 @@ class EvidenceRequirement:
     required_terms: tuple[str, ...] = ()
     excluded_terms: tuple[str, ...] = ()
     object_type_hints: tuple[str, ...] = ()
+    structured_lookup_policy: StructuredLookupPolicy = "not_primary"
+    structured_object_shape_hints: tuple[str, ...] = ()
+    structured_content_kind_hints: tuple[str, ...] = ()
+    structured_entity_kind_hints: tuple[str, ...] = ()
+    table_number_hints: tuple[str, ...] = ()
     min_accepted_hits: int = 1
     required: bool = True
 
@@ -102,6 +121,15 @@ class EvidenceRequirement:
             "required_terms": list(self.required_terms),
             "excluded_terms": list(self.excluded_terms),
             "object_type_hints": list(self.object_type_hints),
+            "structured_lookup_policy": self.structured_lookup_policy,
+            "structured_object_shape_hints": list(
+                self.structured_object_shape_hints
+            ),
+            "structured_content_kind_hints": list(
+                self.structured_content_kind_hints
+            ),
+            "structured_entity_kind_hints": list(self.structured_entity_kind_hints),
+            "table_number_hints": list(self.table_number_hints),
             "min_accepted_hits": self.min_accepted_hits,
             "required": self.required,
         }
@@ -222,6 +250,13 @@ def parse_requirement(payload: Mapping[str, object]) -> EvidenceRequirement:
     requirement_type = required_string(payload, "requirement_type")
     if requirement_type not in REQUIREMENT_TYPES:
         raise PlanValidationError(f"unknown requirement_type: {requirement_type}")
+    structured_lookup_policy = str(
+        payload.get("structured_lookup_policy", "not_primary")
+    )
+    if structured_lookup_policy not in STRUCTURED_LOOKUP_POLICIES:
+        raise PlanValidationError(
+            f"unknown structured_lookup_policy: {structured_lookup_policy}"
+        )
     min_accepted_hits = required_int(payload, "min_accepted_hits")
     if min_accepted_hits < 1 or min_accepted_hits > 6:
         raise PlanValidationError("min_accepted_hits must be between 1 and 6")
@@ -237,6 +272,27 @@ def parse_requirement(payload: Mapping[str, object]) -> EvidenceRequirement:
         object_type_hints=terms_tuple(
             payload.get("object_type_hints"),
             "object_type_hints",
+            max_items=8,
+        ),
+        structured_lookup_policy=structured_lookup_policy,  # type: ignore[arg-type]
+        structured_object_shape_hints=terms_tuple(
+            payload.get("structured_object_shape_hints"),
+            "structured_object_shape_hints",
+            max_items=4,
+        ),
+        structured_content_kind_hints=terms_tuple(
+            payload.get("structured_content_kind_hints"),
+            "structured_content_kind_hints",
+            max_items=8,
+        ),
+        structured_entity_kind_hints=terms_tuple(
+            payload.get("structured_entity_kind_hints"),
+            "structured_entity_kind_hints",
+            max_items=8,
+        ),
+        table_number_hints=terms_tuple(
+            payload.get("table_number_hints"),
+            "table_number_hints",
             max_items=8,
         ),
         min_accepted_hits=min_accepted_hits,

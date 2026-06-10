@@ -720,6 +720,36 @@ def record_retrieval_run(
                     "page_start": getattr(hit, "page_start", None),
                     "page_end": getattr(hit, "page_end", None),
                     "page_range_label": getattr(hit, "page_range_label", None),
+                    "validated_structured_object_id": getattr(
+                        hit,
+                        "validated_structured_object_id",
+                        None,
+                    ),
+                    "validated_payload_schema_version": getattr(
+                        hit,
+                        "validated_payload_schema_version",
+                        None,
+                    ),
+                    "validated_payload_hash": getattr(
+                        hit,
+                        "validated_payload_hash",
+                        None,
+                    ),
+                    "validated_validation_status": getattr(
+                        hit,
+                        "validated_validation_status",
+                        None,
+                    ),
+                    "validated_source_snapshot_sha256": getattr(
+                        hit,
+                        "validated_source_snapshot_sha256",
+                        None,
+                    ),
+                    "structured_lookup_policy": getattr(
+                        hit,
+                        "structured_lookup_policy",
+                        None,
+                    ),
                 }
                 connection.execute(
                     """

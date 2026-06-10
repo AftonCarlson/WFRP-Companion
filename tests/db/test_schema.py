@@ -49,6 +49,12 @@ REQUIRED_TABLES = {
     "familiar_research_plans",
     "familiar_tool_calls",
     "familiar_evidence_judgments",
+    "structured_reader_observations",
+    "structured_evidence_candidates",
+    "validated_structured_objects",
+    "validated_structured_object_sources",
+    "validated_structured_object_aliases",
+    "structured_evidence_reviews",
 }
 
 
@@ -67,6 +73,20 @@ def column_names(connection: sqlite3.Connection, table_name: str) -> tuple[str, 
 def index_columns(connection: sqlite3.Connection, index_name: str) -> tuple[str, ...]:
     rows = connection.execute(f"pragma index_info({index_name})").fetchall()
     return tuple(row["name"] for row in rows)
+
+
+def table_sql(connection: sqlite3.Connection, table_name: str) -> str:
+    row = connection.execute(
+        """
+        select sql
+        from sqlite_master
+        where type = 'table'
+          and name = ?
+        """,
+        (table_name,),
+    ).fetchone()
+    assert row is not None
+    return str(row["sql"])
 
 
 def insert_folder(connection: sqlite3.Connection) -> None:
@@ -389,6 +409,313 @@ def test_embedding_schema_tracks_provider_identity(tmp_path: Path) -> None:
                         '2026-06-08T00:00:00Z')
                 """,
                 (sqlite3.Binary(b"\0\0\0\0"),),
+            )
+
+
+def test_structured_evidence_schema_tracks_reviewable_validated_objects(
+    tmp_path: Path,
+) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        assert {
+            "structured_evidence_status",
+            "structured_evidence_snapshot_sha256",
+            "structured_evidence_started_at",
+            "structured_evidence_last_review_at",
+        }.issubset(column_names(connection, "book_retrieval_status"))
+        assert "extract_structured_evidence" in table_sql(connection, "ingest_jobs")
+        assert "rebuild_structured_evidence_search" in table_sql(
+            connection,
+            "ingest_jobs",
+        )
+
+        candidate_columns = set(
+            column_names(connection, "structured_evidence_candidates")
+        )
+        assert {
+            "id",
+            "book_id",
+            "primary_page_id",
+            "object_shape",
+            "content_kind",
+            "entity_kind",
+            "payload_json",
+            "suspicious_flags_json",
+            "text_snapshot_sha256",
+            "structured_extractor_version",
+        }.issubset(candidate_columns)
+        assert index_columns(
+            connection,
+            "ix_structured_candidates_book_status",
+        ) == ("book_id", "status", "updated_at")
+        assert index_columns(
+            connection,
+            "ix_validated_structured_objects_table_number",
+        ) == ("book_id", "table_number_normalized", "validation_status")
+        assert index_columns(
+            connection,
+            "ix_validated_alias_lookup",
+        ) == ("book_id", "alias_normalized", "confidence")
+
+
+def test_structured_evidence_schema_enforces_active_identity_and_sources(
+    tmp_path: Path,
+) -> None:
+    with initialize_database(tmp_path / "wfrp.sqlite") as connection:
+        insert_folder(connection)
+        insert_book(connection, book_id="core-rules")
+        insert_page(connection)
+        connection.execute(
+            """
+            insert into source_objects (
+              id,
+              book_id,
+              page_id,
+              object_type,
+              title,
+              heading_path_json,
+              page_start,
+              page_end,
+              text,
+              search_text,
+              confidence,
+              extraction_method,
+              text_snapshot_sha256,
+              created_at,
+              updated_at
+            )
+            values (
+              'table-object',
+              'core-rules',
+              'core-rules:1',
+              'table',
+              'Test Table',
+              '[]',
+              1,
+              1,
+              'private table text',
+              'test table',
+              0.9,
+              'test',
+              'snapshot-a',
+              '2026-06-10T00:00:00Z',
+              '2026-06-10T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into structured_evidence_candidates (
+              id,
+              book_id,
+              primary_page_id,
+              primary_source_object_id,
+              object_shape,
+              content_kind,
+              entity_kind,
+              canonical_name,
+              title,
+              table_number,
+              table_number_normalized,
+              page_start,
+              page_end,
+              payload_json,
+              search_text,
+              confidence,
+              status,
+              text_snapshot_sha256,
+              structured_extractor_version,
+              created_at,
+              updated_at
+            )
+            values (
+              'candidate-table',
+              'core-rules',
+              'core-rules:1',
+              'table-object',
+              'structured_table',
+              'equipment_table',
+              'none',
+              null,
+              'Test Table',
+              'Table 1-1',
+              '1-1',
+              1,
+              1,
+              '{"schema_version": 1}',
+              'test table',
+              0.9,
+              'approved',
+              'snapshot-a',
+              'structured-test-v1',
+              '2026-06-10T00:00:00Z',
+              '2026-06-10T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into validated_structured_objects (
+              id,
+              candidate_id,
+              book_id,
+              primary_page_id,
+              primary_source_object_id,
+              object_shape,
+              content_kind,
+              entity_kind,
+              title,
+              table_number,
+              table_number_normalized,
+              page_start,
+              page_end,
+              payload_schema_version,
+              payload_json,
+              source_snapshot_sha256,
+              validation_status,
+              review_state,
+              created_at,
+              updated_at
+            )
+            values (
+              'validated-table',
+              'candidate-table',
+              'core-rules',
+              'core-rules:1',
+              'table-object',
+              'structured_table',
+              'equipment_table',
+              'none',
+              'Test Table',
+              'Table 1-1',
+              '1-1',
+              1,
+              1,
+              1,
+              '{"schema_version": 1}',
+              'snapshot-a',
+              'active',
+              'human_approved',
+              '2026-06-10T00:00:00Z',
+              '2026-06-10T00:00:00Z'
+            )
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into validated_structured_objects (
+                  id,
+                  book_id,
+                  primary_page_id,
+                  object_shape,
+                  content_kind,
+                  entity_kind,
+                  title,
+                  table_number,
+                  table_number_normalized,
+                  page_start,
+                  page_end,
+                  payload_schema_version,
+                  payload_json,
+                  source_snapshot_sha256,
+                  validation_status,
+                  review_state,
+                  created_at,
+                  updated_at
+                )
+                values (
+                  'validated-duplicate-table',
+                  'core-rules',
+                  'core-rules:1',
+                  'structured_table',
+                  'equipment_table',
+                  'none',
+                  'Duplicate',
+                  'Table 1-1',
+                  '1-1',
+                  1,
+                  1,
+                  1,
+                  '{"schema_version": 1}',
+                  'snapshot-a',
+                  'active',
+                  'human_approved',
+                  '2026-06-10T00:00:00Z',
+                  '2026-06-10T00:00:00Z'
+                )
+                """
+            )
+        connection.execute(
+            """
+            insert into validated_structured_object_sources (
+              id,
+              validated_object_id,
+              anchor_kind,
+              source_object_id,
+              source_role,
+              source_snapshot_sha256,
+              confidence,
+              created_at
+            )
+            values (
+              'source-link',
+              'validated-table',
+              'source_object',
+              'table-object',
+              'primary',
+              'snapshot-a',
+              1.0,
+              '2026-06-10T00:00:00Z'
+            )
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into validated_structured_object_sources (
+                  id,
+                  validated_object_id,
+                  anchor_kind,
+                  source_object_id,
+                  source_role,
+                  source_snapshot_sha256,
+                  confidence,
+                  created_at
+                )
+                values (
+                  'source-link-duplicate',
+                  'validated-table',
+                  'source_object',
+                  'table-object',
+                  'primary',
+                  'snapshot-a',
+                  1.0,
+                  '2026-06-10T00:00:00Z'
+                )
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into validated_structured_object_sources (
+                  id,
+                  validated_object_id,
+                  anchor_kind,
+                  source_role,
+                  source_snapshot_sha256,
+                  confidence,
+                  created_at
+                )
+                values (
+                  'invalid-source-link',
+                  'validated-table',
+                  'source_object',
+                  'primary',
+                  'snapshot-a',
+                  1.0,
+                  '2026-06-10T00:00:00Z'
+                )
+                """
             )
 
 

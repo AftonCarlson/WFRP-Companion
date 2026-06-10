@@ -145,6 +145,35 @@ def hit(
     )
 
 
+def structured_hit(
+    *,
+    object_type: str = "validated_structured_table",
+    validation_status: str = "active",
+    structured_lookup_policy: str = "allowed",
+) -> RetrievedHit:
+    return RetrievedHit(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core",
+        page_id="core-rules:112",
+        page_number=112,
+        pdf_page_number=112,
+        page_label="112",
+        snippet="Advanced Armour",
+        score=-10,
+        rank=1,
+        context_text="Advanced Armour table 5-6 armour points by location",
+        object_type=object_type,
+        object_title="Advanced Armour",
+        validated_structured_object_id="validated-table",
+        validated_payload_schema_version=1,
+        validated_payload_hash="payload-hash",
+        validated_validation_status=validation_status,
+        validated_source_snapshot_sha256="structured-snapshot",
+        structured_lookup_policy=structured_lookup_policy,
+    )
+
+
 def subject_constraint(
     *,
     canonical: str | None,
@@ -778,6 +807,80 @@ def test_blank_object_type_hints_are_ignored() -> None:
     assert result.judgments[0].reason_code == "statline_evidence"
 
 
+def test_validated_structured_hits_must_be_active_and_match_shape() -> None:
+    evidence_requirement = agent_planning.EvidenceRequirement(
+        id="armor_table",
+        requirement_type="topical_evidence",
+        subject=subject_constraint(
+            canonical="armour points by location",
+            include_terms=("armour", "location"),
+        ),
+        structured_lookup_policy="allowed",
+        structured_object_shape_hints=("structured_table",),
+        min_accepted_hits=1,
+        required=True,
+    )
+
+    result = evidence_validation.validate_hits_for_requirement(
+        (
+            structured_hit(validation_status="stale"),
+            structured_hit(object_type="validated_profile_bundle"),
+        ),
+        requirement=evidence_requirement,
+        source_book_ids=("core-rules",),
+    )
+
+    assert result.status == "insufficient"
+    assert [judgment.reason_code for judgment in result.judgments] == [
+        "validated_structured_not_active",
+        "structured_shape_mismatch",
+    ]
+
+
+def test_structured_shape_helpers_normalize_common_aliases() -> None:
+    no_hint_constraint = evidence_constraints.EvidenceConstraint(
+        requirement_id="req",
+        requirement_type="topical_evidence",
+        canonical_subject=None,
+        subject_terms=(),
+        subject_aliases=(),
+        excluded_terms=(),
+        required_terms=(),
+        structural_terms=(),
+        object_type_hints=(),
+    )
+    table_hint_constraint = evidence_constraints.EvidenceConstraint(
+        requirement_id="req",
+        requirement_type="topical_evidence",
+        canonical_subject=None,
+        subject_terms=(),
+        subject_aliases=(),
+        excluded_terms=(),
+        required_terms=(),
+        structural_terms=(),
+        object_type_hints=(),
+        structured_object_shape_hints=("table",),
+    )
+
+    assert evidence_validation.structured_hit_matches_shape_hints(
+        hit(context_text="Ordinary rule text."),
+        no_hint_constraint,
+    )
+    assert not evidence_validation.structured_hit_matches_shape_hints(
+        hit(context_text="Ordinary rule text."),
+        table_hint_constraint,
+    )
+    assert evidence_validation.structured_shape_for_hit(
+        structured_hit(object_type="validated_profile_bundle")
+    ) == "profile_bundle"
+    assert evidence_validation.normalized_structured_shape_hint("table") == (
+        "structured_table"
+    )
+    assert evidence_validation.normalized_structured_shape_hint("profile") == (
+        "profile_bundle"
+    )
+
+
 def test_unrelated_rank_reason_has_no_linked_object_type() -> None:
     assert (
         evidence_validation.normalized_linked_object_type_reason("fusion:rrf=0.02")
@@ -1197,6 +1300,11 @@ def test_record_validation_persists_judgments_and_updates_thread_context(
         "required_terms": [],
         "structural_terms": ["stat", "block"],
         "object_type_hints": ["stat_block"],
+        "structured_lookup_policy": "not_primary",
+        "structured_object_shape_hints": [],
+        "structured_content_kind_hints": [],
+        "structured_entity_kind_hints": [],
+        "table_number_hints": [],
         "book_title_hints": [],
         "page_hints": [],
         "min_accepted_hits": 1,

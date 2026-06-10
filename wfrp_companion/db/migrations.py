@@ -19,6 +19,7 @@ EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID = "0006_embedding_provider_identity"
 FAMILIAR_AGENT_RESEARCH_MIGRATION_ID = "0007_familiar_agent_research"
 FAMILIAR_RESEARCH_PLANS_MIGRATION_ID = "0008_familiar_research_plans"
 FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID = "0009_familiar_reliability_contract"
+STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID = "0010_structured_evidence_validation"
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
@@ -29,6 +30,7 @@ MIGRATION_IDS: tuple[str, ...] = (
     FAMILIAR_AGENT_RESEARCH_MIGRATION_ID,
     FAMILIAR_RESEARCH_PLANS_MIGRATION_ID,
     FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID,
+    STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID,
 )
 
 
@@ -146,6 +148,8 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         migration_function = apply_familiar_research_plans
     elif migration_id == FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID:
         migration_function = apply_familiar_reliability_contract
+    elif migration_id == STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID:
+        migration_function = apply_structured_evidence_validation
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -292,11 +296,50 @@ def apply_familiar_reliability_contract(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def apply_structured_evidence_validation(connection: sqlite3.Connection) -> None:
+    add_structured_evidence_status_columns_if_needed(connection)
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+    create_structured_evidence_review_triggers(connection)
+    rebuild_ingest_jobs_if_needed(
+        connection,
+        required_job_type="extract_structured_evidence",
+    )
+    backfill_book_retrieval_status(connection)
+
+
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
     for statement in sql.split(";"):
         statement = statement.strip()
         if statement:
             connection.execute(statement)
+
+
+def create_structured_evidence_review_triggers(
+    connection: sqlite3.Connection,
+) -> None:
+    connection.execute(
+        """
+        create trigger if not exists structured_evidence_reviews_no_update
+        after update on structured_evidence_reviews
+        begin
+          select raise(abort, 'structured_evidence_reviews is append-only');
+        end
+        """
+    )
+    connection.execute(
+        """
+        create trigger if not exists structured_evidence_reviews_no_delete
+        after delete on structured_evidence_reviews
+        begin
+          select raise(abort, 'structured_evidence_reviews is append-only');
+        end
+        """
+    )
 
 
 def preflight_phase_7_source_objects(connection: sqlite3.Connection) -> None:
@@ -342,6 +385,12 @@ def collect_table_counts(connection: sqlite3.Connection) -> tuple[tuple[str, int
         "familiar_research_plans",
         "familiar_tool_calls",
         "familiar_evidence_judgments",
+        "structured_reader_observations",
+        "structured_evidence_candidates",
+        "validated_structured_objects",
+        "validated_structured_object_sources",
+        "validated_structured_object_aliases",
+        "structured_evidence_reviews",
         "ingest_jobs",
     )
     return tuple(
@@ -440,6 +489,40 @@ def backfill_book_retrieval_status(connection: sqlite3.Connection) -> None:
         """,
         (now,),
     )
+
+
+def add_structured_evidence_status_columns_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    columns = set(column_names(connection, "book_retrieval_status"))
+    if "structured_evidence_status" not in columns:
+        connection.execute(
+            """
+            alter table book_retrieval_status
+            add column structured_evidence_status text not null default 'not_started'
+            """
+        )
+    if "structured_evidence_snapshot_sha256" not in columns:
+        connection.execute(
+            """
+            alter table book_retrieval_status
+            add column structured_evidence_snapshot_sha256 text
+            """
+        )
+    if "structured_evidence_started_at" not in columns:
+        connection.execute(
+            """
+            alter table book_retrieval_status
+            add column structured_evidence_started_at text
+            """
+        )
+    if "structured_evidence_last_review_at" not in columns:
+        connection.execute(
+            """
+            alter table book_retrieval_status
+            add column structured_evidence_last_review_at text
+            """
+        )
 
 
 def backfill_retrieval_run_source_books(connection: sqlite3.Connection) -> None:
@@ -1225,7 +1308,9 @@ create table ingest_jobs (
     'rebuild_source_object_fts',
     'rebuild_source_maps',
     'rebuild_embeddings',
-    'backfill_page_labels'
+    'backfill_page_labels',
+    'extract_structured_evidence',
+    'rebuild_structured_evidence_search'
   )),
   check(status in ('queued', 'running', 'succeeded', 'failed'))
 )

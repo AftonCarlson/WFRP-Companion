@@ -41,6 +41,9 @@ class RetrievalStatusResponse(BaseModel):
     page_text_indexed: int
     source_objects_indexed: int
     table_or_stat_indexed: int
+    structured_candidates: int
+    structured_needs_review: int
+    validated_structured_active: int
     vectorized_current: int
     vectorized_enabled: int
     embedding_provider: str
@@ -130,6 +133,82 @@ class ExactSearchResponse(BaseModel):
     query: str
     scope: SearchScopeResponse
     hits: list[SearchHitResponse]
+
+
+class StructuredReviewSummaryResponse(BaseModel):
+    candidates_total: int
+    candidates_needs_review: int
+    validated_active: int
+    validated_stale: int
+    validated_retired: int
+
+
+class StructuredCandidateSummaryResponse(BaseModel):
+    id: str
+    book_id: str
+    book_title: str
+    object_shape: str
+    content_kind: str
+    entity_kind: str
+    canonical_name: str | None
+    title: str | None
+    table_number: str | None
+    table_number_normalized: str | None
+    page_start: int
+    page_end: int
+    printed_page_start: str | None
+    printed_page_end: str | None
+    confidence: float
+    suspicious_flags: list[str]
+    status: str
+    updated_at: str
+
+
+class StructuredCandidateListResponse(BaseModel):
+    candidates: list[StructuredCandidateSummaryResponse]
+
+
+class StructuredObservationDetailResponse(BaseModel):
+    id: str
+    reader_name: str
+    reader_version: str
+    observation_type: str
+    object_shape: str | None
+    content_kind: str | None
+    entity_kind: str | None
+    title: str | None
+    table_number: str | None
+    canonical_name: str | None
+    page_number: int
+    confidence: float
+    text_hash: str | None
+
+
+class StructuredCandidateDetailResponse(StructuredCandidateSummaryResponse):
+    primary_page_id: str
+    primary_source_object_id: str | None
+    heading_path: list[str]
+    payload_json: dict[str, object]
+    text_snapshot_sha256: str
+    structured_extractor_version: str
+    observations: list[StructuredObservationDetailResponse]
+
+
+class StructuredReviewRequest(BaseModel):
+    reviewer: str | None = None
+    notes: str | None = None
+
+
+class StructuredCorrectionRequest(StructuredReviewRequest):
+    payload_json: dict[str, object]
+
+
+class StructuredReviewResultResponse(BaseModel):
+    action: str
+    candidate_id: str
+    validated_object_id: str | None
+    review_id: str
+    source_snapshot_sha256: str | None
 
 
 class CreateChatThreadRequest(BaseModel):

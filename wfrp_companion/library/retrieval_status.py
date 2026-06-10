@@ -28,6 +28,9 @@ class RetrievalStatus:
     page_text_indexed: int
     source_objects_indexed: int
     table_or_stat_indexed: int
+    structured_candidates: int
+    structured_needs_review: int
+    validated_structured_active: int
     vectorized_current: int
     vectorized_enabled: int
     embedding_provider: str
@@ -41,6 +44,7 @@ def get_retrieval_status(config: AppConfig) -> RetrievalStatus:
         enabled_book_ids = active_enabled_book_ids(connection)
         source_object_book_ids = indexed_source_object_book_ids(connection)
         structured_book_ids = structured_evidence_book_ids(connection)
+        structured_counts = structured_evidence_counts(connection)
         vectorized_book_ids = current_vectorized_book_ids(
             connection,
             config=config,
@@ -58,6 +62,9 @@ def get_retrieval_status(config: AppConfig) -> RetrievalStatus:
             page_text_indexed=page_text_indexed_count(connection),
             source_objects_indexed=len(source_object_book_ids),
             table_or_stat_indexed=len(structured_book_ids),
+            structured_candidates=structured_counts["candidates"],
+            structured_needs_review=structured_counts["needs_review"],
+            validated_structured_active=structured_counts["validated_active"],
             vectorized_current=len(vectorized_book_ids),
             vectorized_enabled=len(vectorized_book_ids.intersection(enabled_book_ids)),
             embedding_provider=config.embedding_provider,
@@ -136,6 +143,31 @@ def structured_evidence_book_ids(connection: sqlite3.Connection) -> set[str]:
         tuple(sorted(STRUCTURED_EVIDENCE_TYPES)),
     ).fetchall()
     return {row["book_id"] for row in rows}
+
+
+def structured_evidence_counts(connection: sqlite3.Connection) -> dict[str, int]:
+    candidate = connection.execute(
+        "select count(*) from structured_evidence_candidates"
+    ).fetchone()[0]
+    needs_review = connection.execute(
+        """
+        select count(*)
+        from structured_evidence_candidates
+        where status = 'needs_review'
+        """
+    ).fetchone()[0]
+    validated_active = connection.execute(
+        """
+        select count(*)
+        from validated_structured_objects
+        where validation_status = 'active'
+        """
+    ).fetchone()[0]
+    return {
+        "candidates": int(candidate),
+        "needs_review": int(needs_review),
+        "validated_active": int(validated_active),
+    }
 
 
 def current_vectorized_book_ids(

@@ -170,6 +170,19 @@ external service blocker, not as repo work.
   complete parent or target objects only when the target book is in the checked
   `source_book_ids` snapshot. Glossary entries remain canonical glossary
   evidence and can include linked target context.
+- Treat structured evidence extraction as candidate generation, not trusted
+  truth. `structured_reader_observations` and `structured_evidence_candidates`
+  are untrusted until a review action writes an active
+  `validated_structured_objects` row.
+- Familiar may use validated structured objects only through the requirement
+  policy contract. Statline requests can require active profile bundles;
+  explicit table/rules requests can allow active structured tables; scene prep
+  can use profiles as support; lore/general lookup should remain
+  `not_primary`.
+- Validated structured hits must carry the validated object id, payload schema
+  version, payload hash, validation status, source snapshot, and structured
+  lookup policy into retrieval hit metadata. Stale, retired, or unvalidated
+  structured rows must not satisfy evidence validation.
 
 ## PDF/Search Rules
 
@@ -284,6 +297,9 @@ database behavior should preserve these constraints:
 - Keep retrieval-asset lifecycle state explicit in `book_retrieval_status`;
   do not infer source-map/vector/table/page-label readiness from projection row
   presence alone.
+- Keep structured-evidence review history append-only. Correcting or approving
+  candidates should create review events and active validated objects rather
+  than mutating historical review rows.
 - Keep `book_retrieval_status.embedding_provider` and
   `source_object_embeddings.embedding_provider` authoritative for vector cache
   ownership. Rebuilds must delete/replace only rows for the same

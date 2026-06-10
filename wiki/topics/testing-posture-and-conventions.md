@@ -18,6 +18,9 @@ vector retrieval channel, Phase 7 PR9 structured source-object evidence, Phase
 history/history-aware retrieval planning, the local semantic embeddings phase,
 the Familiar tool-calling hybrid RAG research-agent phase, the Familiar
 evidence-gate hardening phase, and the Familiar reliability-contract phase.
+Structured evidence validation tests now cover the reviewed table/profile
+layer, the manual review API/UI, intent-gated resolver integration, and
+retrieval-status counts.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -75,7 +78,7 @@ Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.rebuild_retrieval_assets --cov=tools.backfill_page_labels --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.rebuild_retrieval_assets --cov=tools.backfill_page_labels --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov=tools.extract_structured_evidence --cov-report=term-missing --cov-fail-under=100
 ```
 
 Current frontend verification commands:
@@ -120,6 +123,7 @@ Current focused test files:
 - `tests/assistant/test_research_tools.py`
 - `tests/assistant/test_retrieval.py`
 - `tests/assistant/test_retrieval_module_contracts.py`
+- `tests/assistant/test_structured_evidence_integration.py`
 - `tests/assistant/test_turn_contract.py`
 - `tests/db/test_schema.py`
 - `tests/db/test_migrations.py`
@@ -155,6 +159,12 @@ Current focused test files:
 - `tests/source_objects/test_object_search_backfill.py`
 - `tests/source_objects/test_source_map_builder.py`
 - `tests/source_objects/test_store.py`
+- `tests/structured_evidence/test_candidates.py`
+- `tests/structured_evidence/test_structured_evidence_models.py`
+- `tests/structured_evidence/test_readers.py`
+- `tests/structured_evidence/test_structured_evidence_store.py`
+- `tests/structured_evidence/test_suspicion.py`
+- `tests/tools/test_extract_structured_evidence.py`
 - `frontend/src/**/*.test.ts`
 - `frontend/src/**/*.test.tsx`
 - `frontend/e2e/workspace.spec.ts`

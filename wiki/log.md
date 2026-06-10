@@ -1,5 +1,34 @@
 # Wiki Compile Log
 
+## 2026-06-10 Structured Evidence Validation Phase
+
+- Added the structured evidence validation plan at
+  `docs/plans/2026-06-10-structured-evidence-validation-plan.md`.
+- Added the reviewed structured-evidence schema: reader observations,
+  untrusted candidates, active/stale/retired validated structured objects,
+  source/alias tables, and append-only review events.
+- Added deterministic reader/candidate/suspicion extraction plus
+  `tools/extract_structured_evidence.py`; `tools/rebuild_retrieval_assets.py`
+  now runs structured extraction after source-object search repair and before
+  source maps/page labels/embeddings.
+- Added manual review API routes and a Library review tab for approve, correct,
+  reject, payload editing, suspicious flags, observations, and page-opening
+  links.
+- Added Familiar's intent-gated structured resolver. Statline requirements
+  require active validated profile bundles; explicit table/rules requirements
+  may allow active validated tables; scene prep may use profile support; lore
+  and general lookup stay `not_primary`. Stale, retired, and unvalidated
+  structured rows cannot satisfy evidence validation.
+- `/api/retrieval/status` and the Library status text now report structured
+  candidate counts, needs-review counts, and active validated structured
+  object counts beside the legacy table/stat and vector readiness counts.
+- Final verification: backend full coverage gate passed at 783 tests and
+  100.00% coverage; ruff passed across `wfrp_companion`, `tests`, and `tools`;
+  frontend Vitest passed 145 tests; frontend production build passed with the
+  existing large-chunk warning; CodeRabbit review rerun raised 0 issues. The
+  sub-agent review path was blocked by the platform thread limit, so CodeRabbit
+  served as the independent AI review for this phase.
+
 ## 2026-06-10 Familiar Reliability Contract Phase
 
 - Replaced provider-owned Familiar orchestration with an app-owned reliability

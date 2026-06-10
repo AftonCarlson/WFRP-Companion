@@ -74,6 +74,13 @@ describe("apiClient", () => {
     await apiClient.listSourceSets({ signal });
     await apiClient.listSourceSetBooks("rules/core", { signal });
     await apiClient.getPageText("core rules", 134, { signal });
+    await apiClient.getStructuredReviewSummary({ signal });
+    await apiClient.listStructuredCandidates({
+      limit: 12,
+      signal,
+      status: "needs_review",
+    });
+    await apiClient.getStructuredCandidate("candidate/table 5-6", { signal });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -103,6 +110,21 @@ describe("apiClient", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       6,
       "/api/books/core%20rules/pages/134/text",
+      expect.objectContaining({ signal }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
+      "/api/structured-evidence/review/summary",
+      expect.objectContaining({ signal }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      8,
+      "/api/structured-evidence/candidates?limit=12&status=needs_review",
+      expect.objectContaining({ signal }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      9,
+      "/api/structured-evidence/candidates/candidate%2Ftable%205-6",
       expect.objectContaining({ signal }),
     );
   });
@@ -149,6 +171,56 @@ describe("apiClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/search/exact?query=critical+hit&limit=7",
       expect.any(Object),
+    );
+  });
+
+  it("posts structured evidence review actions", async () => {
+    const responseBody = {
+      action: "approve",
+      candidate_id: "candidate/table 5-6",
+      validated_object_id: "validated-1",
+      review_id: "review-1",
+      source_snapshot_sha256: "snapshot",
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(Response.json(responseBody)));
+
+    await apiClient.approveStructuredCandidate("candidate/table 5-6", {
+      reviewer: "gm",
+    });
+    await apiClient.correctStructuredCandidate("candidate/table 5-6", {
+      payload_json: { schema_version: 1 },
+      notes: "fixed",
+    });
+    await apiClient.rejectStructuredCandidate("candidate/table 5-6");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/structured-evidence/candidates/candidate%2Ftable%205-6/approve",
+      expect.objectContaining({
+        body: JSON.stringify({ reviewer: "gm" }),
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/structured-evidence/candidates/candidate%2Ftable%205-6/correct",
+      expect.objectContaining({
+        body: JSON.stringify({
+          payload_json: { schema_version: 1 },
+          notes: "fixed",
+        }),
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/structured-evidence/candidates/candidate%2Ftable%205-6/reject",
+      expect.objectContaining({
+        body: JSON.stringify({}),
+        method: "POST",
+      }),
     );
   });
 

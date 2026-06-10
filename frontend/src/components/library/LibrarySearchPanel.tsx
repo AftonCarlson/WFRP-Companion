@@ -9,6 +9,7 @@ import type {
 import type { LeftTab, PdfViewMode } from "../../state/workspaceState";
 import { LibraryTab } from "./LibraryTab";
 import { SearchTab } from "./SearchTab";
+import { StructuredEvidenceReviewPanel } from "./StructuredEvidenceReviewPanel";
 import "./LibrarySearchPanel.css";
 
 export type LibrarySearchPanelProps = {
@@ -85,6 +86,17 @@ export function LibrarySearchPanel({
         >
           Search
         </button>
+        <button
+          aria-controls="review-tab-panel"
+          aria-selected={leftTab === "review"}
+          id="review-tab"
+          onClick={() => onSetLeftTab("review")}
+          role="tab"
+          tabIndex={leftTab === "review" ? 0 : -1}
+          type="button"
+        >
+          Review
+        </button>
       </div>
       {leftTab === "library" ? (
         <div
@@ -104,9 +116,16 @@ export function LibrarySearchPanel({
             sourceSetBooks={sourceSetBooks}
           />
         </div>
-      ) : (
+      ) : leftTab === "search" ? (
         <div aria-labelledby="search-tab" id="search-tab-panel" role="tabpanel">
           <SearchTab client={client} onOpenPdfPage={handleOpenHit} />
+        </div>
+      ) : (
+        <div aria-labelledby="review-tab" id="review-tab-panel" role="tabpanel">
+          <StructuredEvidenceReviewPanel
+            client={client}
+            onOpenPdfPage={onOpenPdfPage}
+          />
         </div>
       )}
     </div>

@@ -207,6 +207,20 @@ source-object FTS, source-object fallback scan, structured table/stat evidence,
 source-object links, local vector candidates when embeddings are enabled and
 current, rank fusion, reranking, and evidence validation.
 
+Structured evidence validation adds a reviewed layer beside raw source objects:
+
+- `structured_reader_observations` stores immutable per-reader observations.
+- `structured_evidence_candidates` stores untrusted possible tables/profile
+  bundles plus suspicious flags and review status.
+- `validated_structured_objects`, `validated_structured_object_sources`, and
+  `validated_structured_object_aliases` store active/stale/retired trusted
+  table/profile payloads, citations, aliases, and source snapshots.
+- `structured_evidence_reviews` is append-only review history for approve,
+  correct, reject, stale, retire, and restore actions.
+- `tools/extract_structured_evidence.py` and
+  `tools/rebuild_retrieval_assets.py` report counts only and must not print
+  private table/profile text.
+
 Phase 7 PR10 adds printed page-label calibration/backfill:
 
 - `wfrp_companion/library/page_labels.py` builds page-label calibration
@@ -234,8 +248,8 @@ The local retrieval assets are rebuildable from private imported library data:
 
 - `tools/rebuild_retrieval_assets.py` runs the retrieval maintenance pipeline:
   global page FTS, source-object extraction, source-object FTS projection,
-  durable source maps, page-label backfill, and embeddings when the embedding
-  provider is enabled.
+  structured evidence extraction, durable source maps, page-label backfill, and
+  embeddings when the embedding provider is enabled.
 - `tools/rebuild_embeddings.py` stores local vectors in
   `source_object_embeddings` for current source objects under the configured
   provider/model/dimensions identity.
@@ -246,9 +260,10 @@ The local retrieval assets are rebuildable from private imported library data:
   for that retrieval run. Exact page/object retrieval still runs.
 - `/api/retrieval/status` reports count-only readiness: total copied books,
   enabled books, page-text indexed books, source-object indexed books,
-  table/stat indexed books, current vectorized books, current vectorized
-  enabled books, embedding provider, embedding dimensions, and aggregate vector
-  status.
+  legacy table/stat indexed books, structured candidates, structured
+  candidates needing review, active validated structured objects, current
+  vectorized books, current vectorized enabled books, embedding provider,
+  embedding dimensions, and aggregate vector status.
 - API and CLI surfaces must not print raw extracted book text, local embedding
   model paths, or private PDF paths. The UI should show useful aggregate search
   and vector readiness without exposing private internals.

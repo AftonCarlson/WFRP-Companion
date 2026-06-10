@@ -32,11 +32,91 @@ export type RetrievalStatusResponse = {
   page_text_indexed: number;
   source_objects_indexed: number;
   table_or_stat_indexed: number;
+  structured_candidates: number;
+  structured_needs_review: number;
+  validated_structured_active: number;
   vectorized_current: number;
   vectorized_enabled: number;
   embedding_provider: string;
   embedding_dimensions: number | null;
   vector_status: string;
+};
+
+export type StructuredReviewSummaryResponse = {
+  candidates_total: number;
+  candidates_needs_review: number;
+  validated_active: number;
+  validated_stale: number;
+  validated_retired: number;
+};
+
+export type StructuredCandidateSummaryResponse = {
+  id: string;
+  book_id: string;
+  book_title: string;
+  object_shape: string;
+  content_kind: string;
+  entity_kind: string;
+  canonical_name: string | null;
+  title: string | null;
+  table_number: string | null;
+  table_number_normalized: string | null;
+  page_start: number;
+  page_end: number;
+  printed_page_start: string | null;
+  printed_page_end: string | null;
+  confidence: number;
+  suspicious_flags: string[];
+  status: string;
+  updated_at: string;
+};
+
+export type StructuredCandidateListResponse = {
+  candidates: StructuredCandidateSummaryResponse[];
+};
+
+export type StructuredObservationDetailResponse = {
+  id: string;
+  reader_name: string;
+  reader_version: string;
+  observation_type: string;
+  object_shape: string | null;
+  content_kind: string | null;
+  entity_kind: string | null;
+  title: string | null;
+  table_number: string | null;
+  canonical_name: string | null;
+  page_number: number;
+  confidence: number;
+  text_hash: string | null;
+};
+
+export type StructuredCandidateDetailResponse =
+  StructuredCandidateSummaryResponse & {
+    primary_page_id: string;
+    primary_source_object_id: string | null;
+    heading_path: string[];
+    payload_json: Record<string, unknown>;
+    text_snapshot_sha256: string;
+    structured_extractor_version: string;
+    observations: StructuredObservationDetailResponse[];
+  };
+
+export type StructuredReviewRequest = {
+  reviewer?: string | null;
+  notes?: string | null;
+};
+
+export type StructuredCorrectionRequest = StructuredReviewRequest & {
+  payload_json: Record<string, unknown>;
+};
+
+export type StructuredReviewResultResponse = {
+  action: string;
+  candidate_id: string;
+  validated_object_id: string | null;
+  review_id: string;
+  source_snapshot_sha256: string | null;
 };
 
 export type SourceSetResponse = {

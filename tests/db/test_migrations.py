@@ -298,6 +298,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
+        "0010_structured_evidence_validation",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -387,6 +388,13 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0010_structured_evidence_validation",),
+            ).fetchone()
+            is not None
+        )
         assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
         assert migrations.table_exists(connection, "familiar_research_runs")
@@ -395,6 +403,18 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         assert migrations.table_exists(connection, "familiar_tool_calls")
         assert migrations.table_exists(connection, "familiar_evidence_judgments")
         assert migrations.table_exists(connection, "chat_thread_context")
+        assert migrations.table_exists(connection, "structured_reader_observations")
+        assert migrations.table_exists(connection, "structured_evidence_candidates")
+        assert migrations.table_exists(connection, "validated_structured_objects")
+        assert migrations.table_exists(connection, "structured_evidence_reviews")
+        assert "structured_evidence_status" in migrations.column_names(
+            connection,
+            "book_retrieval_status",
+        )
+        assert "extract_structured_evidence" in migrations.table_sql(
+            connection,
+            "ingest_jobs",
+        )
         assert (
             connection.execute(
                 "select count(*) from book_retrieval_status"
@@ -1195,6 +1215,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
+        "0010_structured_evidence_validation",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -1207,6 +1228,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
+        "0010_structured_evidence_validation",
     )
 
 
@@ -1228,6 +1250,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
+        "0010_structured_evidence_validation",
     )
     with open_connection(db_path) as connection:
         assert (

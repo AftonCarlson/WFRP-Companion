@@ -10,10 +10,17 @@ from wfrp_companion.assistant import evidence_policy
 from wfrp_companion.assistant import requirement_contract
 from wfrp_companion.assistant import turn_contract
 from wfrp_companion.assistant.query_planner import meaningful_tokens
+from wfrp_companion.structured_evidence.models import normalize_table_number
 
 
 RULES_OBJECT_TYPES = ("rule_section", "table")
 STATLINE_OBJECT_TYPES = ("stat_block", "monster_profile", "npc_profile")
+STRUCTURED_PROFILE_ENTITY_HINTS = ("monster", "npc", "creature")
+STRUCTURED_RULE_TABLE_KIND_HINTS = (
+    "rules_table",
+    "combat_table",
+    "equipment_table",
+)
 STATLINE_REQUEST_FILLER = {
     "both",
     "compare",
@@ -43,6 +50,9 @@ def plan_requirements(
                 subject_terms=subject_terms,
                 optional_terms=("profile", "statline"),
                 object_type_hints=STATLINE_OBJECT_TYPES,
+                structured_lookup_policy="required",
+                structured_object_shape_hints=("profile_bundle",),
+                structured_entity_kind_hints=STRUCTURED_PROFILE_ENTITY_HINTS,
             )
             for subject_terms in subject_groups
         )
@@ -62,6 +72,7 @@ def plan_requirements(
                 optional_terms=(),
                 object_type_hints=("page_fallback",),
                 page_hints=tuple(hint for hint in (page_hint,) if hint),
+                structured_lookup_policy="forbidden",
             ),
         )
     if is_hit_location_and_armor_query(content):
@@ -74,6 +85,9 @@ def plan_requirements(
                 optional_terms=("combat", "attack", "table", "body"),
                 object_type_hints=RULES_OBJECT_TYPES,
                 book_hints=("core rules",),
+                structured_lookup_policy="allowed",
+                structured_object_shape_hints=("structured_table",),
+                structured_content_kind_hints=STRUCTURED_RULE_TABLE_KIND_HINTS,
             ),
             requirement_contract.RequirementSpec(
                 id="armor_location_rule",
@@ -83,6 +97,9 @@ def plan_requirements(
                 optional_terms=("armour", "points", "body", "combat"),
                 object_type_hints=RULES_OBJECT_TYPES,
                 book_hints=("core rules",),
+                structured_lookup_policy="allowed",
+                structured_object_shape_hints=("structured_table",),
+                structured_content_kind_hints=STRUCTURED_RULE_TABLE_KIND_HINTS,
             ),
         )
     subject_source = resolved.subject or decision.subject or researchable_subject_text(content)
@@ -100,6 +117,13 @@ def plan_requirements(
         if decision.turn_kind in {"lore_lookup", "scene_prep"}
         else "rules_topic"
     )
+    table_number_hints = table_number_hints_from_content(content)
+    structured_kwargs = structured_lookup_kwargs(
+        content,
+        kind=kind,
+        table_number_hints=table_number_hints,
+        turn_kind=decision.turn_kind,
+    )
     return (
         requirement_contract.RequirementSpec(
             id=requirement_id(kind, subject_terms),
@@ -108,6 +132,7 @@ def plan_requirements(
             subject_terms=subject_terms,
             optional_terms=optional_terms_from_content(content, subject_terms),
             object_type_hints=(),
+            **structured_kwargs,
         ),
     )
 
@@ -222,6 +247,7 @@ def normalize_planned_action(
         arguments["subject"] = requirement.subject.canonical
         arguments["include_terms"] = list(requirement.subject.include_terms)
     arguments["object_type_hints"] = list(requirement.object_type_hints)
+    arguments.update(structured_action_arguments_from_requirement(requirement))
     return replace(action, arguments=arguments)
 
 
@@ -260,6 +286,7 @@ def planned_action_for_spec(
             "object_type_hints": list(spec.object_type_hints),
             "book_title_hints": list(spec.book_hints),
             "page_hints": list(spec.page_hints),
+            **structured_action_arguments_from_spec(spec),
         },
     )
 
@@ -352,6 +379,68 @@ def is_hit_location_and_armor_query(content: str) -> bool:
         "location" in tokens
     )
     return has_hit_location and has_armor_location
+
+
+def table_number_hints_from_content(content: str) -> tuple[str, ...]:
+    hints: list[str] = []
+    for match in re.finditer(r"\b(?:table\s*)?\d+\s*[-\u2010-\u2014]\s*\d+\b", content):
+        hint = normalize_table_number(match.group(0))
+        if hint and hint not in hints:
+            hints.append(hint)
+    return tuple(hints)
+
+
+def structured_lookup_kwargs(
+    content: str,
+    *,
+    kind: requirement_contract.RequirementKind,
+    table_number_hints: tuple[str, ...],
+    turn_kind: turn_contract.TurnKind,
+) -> dict[str, object]:
+    if kind == "supporting_context" and turn_kind == "scene_prep":
+        return {
+            "structured_lookup_policy": "supporting_only",
+            "structured_object_shape_hints": ("profile_bundle",),
+            "structured_entity_kind_hints": STRUCTURED_PROFILE_ENTITY_HINTS,
+        }
+    if table_number_hints:
+        return {
+            "structured_lookup_policy": "allowed",
+            "structured_object_shape_hints": ("structured_table",),
+            "structured_content_kind_hints": STRUCTURED_RULE_TABLE_KIND_HINTS,
+            "table_number_hints": table_number_hints,
+        }
+    return {}
+
+
+def structured_action_arguments_from_spec(
+    spec: requirement_contract.RequirementSpec,
+) -> dict[str, object]:
+    return {
+        "structured_lookup_policy": spec.structured_lookup_policy,
+        "structured_object_shape_hints": list(spec.structured_object_shape_hints),
+        "structured_content_kind_hints": list(spec.structured_content_kind_hints),
+        "structured_entity_kind_hints": list(spec.structured_entity_kind_hints),
+        "table_number_hints": list(spec.table_number_hints),
+    }
+
+
+def structured_action_arguments_from_requirement(
+    requirement: agent_planning.EvidenceRequirement,
+) -> dict[str, object]:
+    return {
+        "structured_lookup_policy": requirement.structured_lookup_policy,
+        "structured_object_shape_hints": list(
+            requirement.structured_object_shape_hints
+        ),
+        "structured_content_kind_hints": list(
+            requirement.structured_content_kind_hints
+        ),
+        "structured_entity_kind_hints": list(
+            requirement.structured_entity_kind_hints
+        ),
+        "table_number_hints": list(requirement.table_number_hints),
+    }
 
 
 def requirement_id(prefix: str, subject_terms: tuple[str, ...]) -> str:

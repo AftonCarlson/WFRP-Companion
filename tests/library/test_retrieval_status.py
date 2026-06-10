@@ -256,11 +256,82 @@ def mark_vector_status(
             )
 
 
+def seed_structured_evidence_counts(
+    config: AppConfig,
+    *,
+    book_id: str,
+) -> None:
+    with initialize_database(config.db_path) as connection:
+        for candidate_id, status in (
+            (f"{book_id}:structured-candidate", "candidate"),
+            (f"{book_id}:structured-review", "needs_review"),
+        ):
+            connection.execute(
+                """
+                insert into structured_evidence_candidates (
+                  id,
+                  book_id,
+                  primary_page_id,
+                  object_shape,
+                  content_kind,
+                  entity_kind,
+                  page_start,
+                  page_end,
+                  payload_json,
+                  search_text,
+                  confidence,
+                  status,
+                  text_snapshot_sha256,
+                  structured_extractor_version,
+                  created_at,
+                  updated_at
+                )
+                values (?, ?, ?, 'structured_table', 'rules_table', 'rule',
+                        1, 1, '{}', 'table', 0.9, ?, ?, 'test',
+                        '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')
+                """,
+                (
+                    candidate_id,
+                    book_id,
+                    f"{book_id}:1",
+                    status,
+                    f"snapshot-{candidate_id}",
+                ),
+            )
+        connection.execute(
+            """
+            insert into validated_structured_objects (
+              id,
+              book_id,
+              primary_page_id,
+              object_shape,
+              content_kind,
+              entity_kind,
+              page_start,
+              page_end,
+              payload_schema_version,
+              payload_json,
+              source_snapshot_sha256,
+              validation_status,
+              review_state,
+              created_at,
+              updated_at
+            )
+            values (?, ?, ?, 'structured_table', 'rules_table', 'rule',
+                    1, 1, 1, '{}', 'validated-snapshot', 'active',
+                    'human_approved', '2026-06-10T00:00:00Z',
+                    '2026-06-10T00:00:00Z')
+            """,
+            (f"{book_id}:validated-structured", book_id, f"{book_id}:1"),
+        )
+
+
 def test_retrieval_status_counts_current_vectorized_enabled_books(
     tmp_path: Path,
 ) -> None:
     config = local_hash_config(tmp_path)
     seed_book(config, book_id="bestiary")
+    seed_structured_evidence_counts(config, book_id="bestiary")
     source_sets.ensure_builtin_source_sets(config)
     mark_vector_status(config, book_id="bestiary", status="indexed")
 
@@ -271,6 +342,9 @@ def test_retrieval_status_counts_current_vectorized_enabled_books(
     assert status.page_text_indexed == 1
     assert status.source_objects_indexed == 1
     assert status.table_or_stat_indexed == 1
+    assert status.structured_candidates == 2
+    assert status.structured_needs_review == 1
+    assert status.validated_structured_active == 1
     assert status.vectorized_current == 1
     assert status.vectorized_enabled == 1
     assert status.embedding_provider == "local-hash"
@@ -287,6 +361,9 @@ def test_retrieval_status_reports_disabled_embeddings(tmp_path: Path) -> None:
 
     assert status.vectorized_current == 0
     assert status.vectorized_enabled == 0
+    assert status.structured_candidates == 0
+    assert status.structured_needs_review == 0
+    assert status.validated_structured_active == 0
     assert status.embedding_provider == "disabled"
     assert status.embedding_dimensions is None
     assert status.vector_status == "disabled"

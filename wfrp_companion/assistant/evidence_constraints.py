@@ -100,9 +100,14 @@ class EvidenceConstraint:
     required_terms: tuple[str, ...]
     structural_terms: tuple[str, ...]
     object_type_hints: tuple[str, ...]
-    book_title_hints: tuple[str, ...]
-    page_hints: tuple[str, ...]
-    min_accepted_hits: int
+    structured_lookup_policy: str = "not_primary"
+    structured_object_shape_hints: tuple[str, ...] = ()
+    structured_content_kind_hints: tuple[str, ...] = ()
+    structured_entity_kind_hints: tuple[str, ...] = ()
+    table_number_hints: tuple[str, ...] = ()
+    book_title_hints: tuple[str, ...] = ()
+    page_hints: tuple[str, ...] = ()
+    min_accepted_hits: int = 1
 
     @property
     def has_generic_subject_only(self) -> bool:
@@ -126,6 +131,15 @@ class EvidenceConstraint:
             "required_terms": list(self.required_terms),
             "structural_terms": list(self.structural_terms),
             "object_type_hints": list(self.object_type_hints),
+            "structured_lookup_policy": self.structured_lookup_policy,
+            "structured_object_shape_hints": list(
+                self.structured_object_shape_hints
+            ),
+            "structured_content_kind_hints": list(
+                self.structured_content_kind_hints
+            ),
+            "structured_entity_kind_hints": list(self.structured_entity_kind_hints),
+            "table_number_hints": list(self.table_number_hints),
             "book_title_hints": list(self.book_title_hints),
             "page_hints": list(self.page_hints),
             "min_accepted_hits": self.min_accepted_hits,
@@ -187,6 +201,17 @@ def constraint_from_requirement(
         required_terms=tuple(dict.fromkeys(required_terms)),
         structural_terms=structural_terms,
         object_type_hints=tuple(dict.fromkeys(requirement.object_type_hints)),
+        structured_lookup_policy=requirement.structured_lookup_policy,
+        structured_object_shape_hints=tuple(
+            dict.fromkeys(requirement.structured_object_shape_hints)
+        ),
+        structured_content_kind_hints=tuple(
+            dict.fromkeys(requirement.structured_content_kind_hints)
+        ),
+        structured_entity_kind_hints=tuple(
+            dict.fromkeys(requirement.structured_entity_kind_hints)
+        ),
+        table_number_hints=tuple(dict.fromkeys(requirement.table_number_hints)),
         book_title_hints=tuple(dict.fromkeys(requirement.subject.book_title_hints)),
         page_hints=tuple(dict.fromkeys(requirement.subject.page_hints)),
         min_accepted_hits=requirement.min_accepted_hits,

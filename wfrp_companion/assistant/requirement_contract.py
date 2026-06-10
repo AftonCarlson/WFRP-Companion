@@ -25,6 +25,11 @@ class RequirementSpec:
     object_type_hints: tuple[str, ...]
     book_hints: tuple[str, ...] = ()
     page_hints: tuple[str, ...] = ()
+    structured_lookup_policy: agent_planning.StructuredLookupPolicy = "not_primary"
+    structured_object_shape_hints: tuple[str, ...] = ()
+    structured_content_kind_hints: tuple[str, ...] = ()
+    structured_entity_kind_hints: tuple[str, ...] = ()
+    table_number_hints: tuple[str, ...] = ()
     required: bool = True
     min_accepted_hits: int = 1
 
@@ -46,6 +51,11 @@ def to_evidence_requirement(spec: RequirementSpec) -> agent_planning.EvidenceReq
         required_terms=(),
         excluded_terms=(),
         object_type_hints=spec.object_type_hints,
+        structured_lookup_policy=spec.structured_lookup_policy,
+        structured_object_shape_hints=spec.structured_object_shape_hints,
+        structured_content_kind_hints=spec.structured_content_kind_hints,
+        structured_entity_kind_hints=spec.structured_entity_kind_hints,
+        table_number_hints=spec.table_number_hints,
         min_accepted_hits=spec.min_accepted_hits,
         required=spec.required,
     )

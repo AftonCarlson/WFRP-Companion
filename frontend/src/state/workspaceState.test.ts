@@ -48,10 +48,12 @@ describe("workspaceState", () => {
 
   it("tracks left tab and category collapse state", () => {
     const searched = setLeftTab(defaultWorkspaceLayout, "search");
-    const collapsed = toggleLibraryCategory(searched, "Rules / Core");
+    const reviewed = setLeftTab(searched, "review");
+    const collapsed = toggleLibraryCategory(reviewed, "Rules / Core");
     const expanded = toggleLibraryCategory(collapsed, "Rules / Core");
 
     expect(searched.leftTab).toBe("search");
+    expect(reviewed.leftTab).toBe("review");
     expect(collapsed.collapsedLibraryCategories).toEqual(["Rules / Core"]);
     expect(expanded.collapsedLibraryCategories).toEqual([]);
   });
