@@ -215,3 +215,66 @@ it("validates edited JSON before submitting a correction", async () => {
   expect(await screen.findByText("Payload JSON is invalid.")).toBeInTheDocument();
   expect(fakeClient.correctStructuredCandidate).not.toHaveBeenCalled();
 });
+
+it("renders an empty review queue without loading candidate detail", async () => {
+  const fakeClient = client({
+    listStructuredCandidates: vi.fn().mockResolvedValue({ candidates: [] }),
+    getStructuredCandidate: vi.fn(),
+  });
+
+  renderApp(
+    <StructuredEvidenceReviewPanel
+      client={fakeClient}
+      onOpenPdfPage={vi.fn()}
+    />,
+  );
+
+  expect(await screen.findByText("No candidates.")).toBeInTheDocument();
+  expect(fakeClient.getStructuredCandidate).not.toHaveBeenCalled();
+});
+
+it("renders canonical-name and status fallbacks for quiet candidates", async () => {
+  const quietCandidate = {
+    ...candidate,
+    canonical_name: "Common Orc",
+    title: null,
+    suspicious_flags: [],
+    status: "candidate",
+  };
+  const fakeClient = client({
+    listStructuredCandidates: vi.fn().mockResolvedValue({
+      candidates: [quietCandidate],
+    }),
+    getStructuredCandidate: vi.fn().mockResolvedValue({
+      ...detail,
+      ...quietCandidate,
+      title: null,
+      canonical_name: "Common Orc",
+    }),
+  });
+
+  renderApp(
+    <StructuredEvidenceReviewPanel
+      client={fakeClient}
+      onOpenPdfPage={vi.fn()}
+    />,
+  );
+
+  expect(await screen.findByRole("heading", { name: "Common Orc" })).toBeInTheDocument();
+  expect(screen.getAllByText("candidate")).toHaveLength(2);
+});
+
+it("surfaces detail loading errors", async () => {
+  const fakeClient = client({
+    getStructuredCandidate: vi.fn().mockRejectedValue(new Error("detail failed")),
+  });
+
+  renderApp(
+    <StructuredEvidenceReviewPanel
+      client={fakeClient}
+      onOpenPdfPage={vi.fn()}
+    />,
+  );
+
+  expect(await screen.findByText("detail failed")).toBeInTheDocument();
+});

@@ -71,6 +71,24 @@ Current Familiar implementation:
   bundles, explicit table/rules requirements may allow table support, scene
   prep can use profiles as support, and lore/general questions default to
   `not_primary`.
+- Structured reader observations include source-object table/profile signals,
+  parsed page-text table references, and PyMuPDF `layout_metadata`. Layout
+  metadata records word/block availability for reviewer context but does not
+  create missing-table candidates by itself.
+- Structured extraction is rebuildable and preserves human review history.
+  Same-snapshot unreviewed candidates can be replaced idempotently on force
+  rebuild; approved, corrected, and rejected candidates are kept as review
+  history; reviewed candidate observations are preserved with
+  snapshot-sensitive observation ids; and active validated objects are marked
+  `stale` when the source snapshot changes.
+- Validated structured retrieval also checks currentness at read time. The
+  resolver recomputes the book's structured evidence snapshot and ignores any
+  active validated object whose `source_snapshot_sha256` no longer matches,
+  even before the next extraction job has marked the row stale.
+- Raw profile/stat evidence matching now handles simple singular/plural
+  variants at the evidence-policy layer. This helps requests such as a
+  singular creature name match a plural source-object heading without adding
+  entity-specific aliases.
 - `open_page` is used when the request contains page evidence such as
   "it is on pg 99"; it resolves the checked book plus PDF/printed-page label
   directly instead of trying another broad text search.
@@ -137,6 +155,14 @@ Current Familiar implementation:
   local embeddings. If those do not match, hybrid retrieval fails closed to
   lexical/source-object/page channels and the trace should expose why vectors
   were skipped.
+- The live local library refresh on 2026-06-10 applied structured migration
+  `0011_structured_layout_metadata_observations` and force-refreshed structured
+  evidence for all 26 books: 5,607 reader observations, 1,075 current inserted
+  candidates, 1,037 current candidates needing review, 3,736 superseded legacy
+  candidates, and 0 active validated objects. **Until the review queue is
+  approved/corrected, Familiar must not treat those candidates as trusted
+  structured truth.** The same run reported vector provider `disabled`, so
+  vector search is still operationally off in the current local app config.
 - Familiar chat turns surface compact public trace events from streaming and
   persisted chat history: `turn_decision`, research start, accepted app plan,
   tool call, retrieval/candidate counts, vector status when reported, evidence

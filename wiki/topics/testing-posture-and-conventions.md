@@ -17,10 +17,16 @@ vector retrieval channel, Phase 7 PR9 structured source-object evidence, Phase
 7 PR10 printed page-label calibration/backfill, Phase 7 PR11 Familiar prompt
 history/history-aware retrieval planning, the local semantic embeddings phase,
 the Familiar tool-calling hybrid RAG research-agent phase, the Familiar
-evidence-gate hardening phase, and the Familiar reliability-contract phase.
+evidence-gate hardening phase, the Familiar reliability-contract phase, and
+the structured evidence validation phase.
 Structured evidence validation tests now cover the reviewed table/profile
 layer, the manual review API/UI, intent-gated resolver integration, and
-retrieval-status counts.
+retrieval-status counts. Follow-up regressions cover PyMuPDF layout metadata
+not creating missing-table candidates, force rebuilds after unreviewed,
+approved, corrected, and rejected candidates preserving review history without
+unique-index collisions, reviewed observation snapshots surviving rebuilds,
+active validated objects being filtered from retrieval immediately on source
+snapshot drift, and singular/plural evidence identity matching.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -304,10 +310,10 @@ evidence counts and reason counts, safe Familiar markdown rendering, explicit
 PDF-page citation/search opens, and browser e2e flows for
 Library/Search/Grimoire/Familiar page-aware chat plus panel overflow.
 
-The latest full backend verification command on 2026-06-10 reported 721 tests
-passing with 100.00% coverage for `wfrp_companion`. The latest frontend
-verification reported 139 Vitest tests passing with coverage above the
-configured 90% thresholds and a successful production build.
+The latest full backend verification command on 2026-06-10 reported 799 tests
+passing with 100.00% coverage for `wfrp_companion` plus tracked tool modules.
+The latest frontend verification reported 148 Vitest tests passing with
+coverage above the configured 90% thresholds and a successful production build.
 
 ## Manual QA
 

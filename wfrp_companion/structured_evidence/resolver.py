@@ -17,6 +17,7 @@ from wfrp_companion.library.page_labels import load_calibrated_printed_page_labe
 from wfrp_companion.structured_evidence.models import normalize_structured_alias
 from wfrp_companion.structured_evidence.models import normalize_table_number
 from wfrp_companion.structured_evidence.payloads import payload_hash
+from wfrp_companion.structured_evidence.store import structured_evidence_snapshot_sha256
 
 
 ACTIVE_LOOKUP_POLICIES = frozenset({"required", "allowed", "supporting_only"})
@@ -79,8 +80,10 @@ def active_validated_rows(
     *,
     book_ids: tuple[str, ...],
 ) -> tuple[sqlite3.Row, ...]:
+    if not book_ids:
+        return ()
     placeholders = ",".join("?" for _ in book_ids)
-    return tuple(
+    rows = tuple(
         connection.execute(
             f"""
             select
@@ -107,6 +110,15 @@ def active_validated_rows(
             """,
             book_ids,
         ).fetchall()
+    )
+    current_snapshots = {
+        book_id: structured_evidence_snapshot_sha256(connection, book_id)
+        for book_id in book_ids
+    }
+    return tuple(
+        row
+        for row in rows
+        if row["source_snapshot_sha256"] == current_snapshots.get(row["book_id"])
     )
 
 

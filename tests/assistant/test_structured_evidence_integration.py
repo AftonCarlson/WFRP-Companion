@@ -13,6 +13,7 @@ from wfrp_companion.assistant import retrieval
 from wfrp_companion.assistant import turn_contract
 from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.library import source_sets
+from wfrp_companion.structured_evidence.store import structured_evidence_snapshot_sha256
 from tests.assistant.test_retrieval import (
     insert_searchable_page,
     make_config,
@@ -33,6 +34,7 @@ def insert_validated_table(config) -> None:  # noqa: ANN001
         connection.execute(
             "update books set search_status = 'indexed' where id = 'core-rules'"
         )
+        source_snapshot = structured_evidence_snapshot_sha256(connection, "core-rules")
         payload = {
             "schema_version": 1,
             "object_shape": "structured_table",
@@ -98,7 +100,7 @@ def insert_validated_table(config) -> None:  # noqa: ANN001
               '112',
               1,
               ?,
-              'structured-snapshot',
+              ?,
               'active',
               'human_approved',
               '2026-06-10T00:00:00Z',
@@ -106,7 +108,7 @@ def insert_validated_table(config) -> None:  # noqa: ANN001
               '2026-06-10T00:00:00Z'
             )
             """,
-            (json.dumps(payload),),
+            (json.dumps(payload), source_snapshot),
         )
         for alias in ("table 5-6", "armour points by location", "advanced armour"):
             connection.execute(
@@ -149,6 +151,7 @@ def insert_validated_profile(config) -> None:  # noqa: ANN001
         connection.execute(
             "update books set search_status = 'indexed' where id = 'bestiary'"
         )
+        source_snapshot = structured_evidence_snapshot_sha256(connection, "bestiary")
         payload = {
             "schema_version": 1,
             "object_shape": "profile_bundle",
@@ -217,7 +220,7 @@ def insert_validated_profile(config) -> None:  # noqa: ANN001
               '104',
               1,
               ?,
-              'profile-snapshot',
+              ?,
               'active',
               'human_approved',
               '2026-06-10T00:00:00Z',
@@ -225,7 +228,7 @@ def insert_validated_profile(config) -> None:  # noqa: ANN001
               '2026-06-10T00:00:00Z'
             )
             """,
-            (json.dumps(payload),),
+            (json.dumps(payload), source_snapshot),
         )
         for alias in ("orc", "orcs", "common orc"):
             connection.execute(
@@ -641,10 +644,11 @@ def test_retrieval_run_persists_validated_structured_hit_metadata(
                 (retrieval_run_id,),
             ).fetchone()["metadata_json"]
         )
+        expected_snapshot = structured_evidence_snapshot_sha256(connection, "core-rules")
 
     assert metadata["validated_structured_object_id"] == "validated-table"
     assert metadata["validated_payload_schema_version"] == 1
     assert metadata["validated_payload_hash"]
     assert metadata["validated_validation_status"] == "active"
-    assert metadata["validated_source_snapshot_sha256"] == "structured-snapshot"
+    assert metadata["validated_source_snapshot_sha256"] == expected_snapshot
     assert metadata["structured_lookup_policy"] == "allowed"

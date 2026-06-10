@@ -4,6 +4,8 @@ from collections.abc import Iterable
 
 from wfrp_companion.assistant import evidence_constraints
 from wfrp_companion.assistant.query_planner import meaningful_tokens
+from wfrp_companion.assistant.query_planner import plural_search_term
+from wfrp_companion.assistant.query_planner import singular_search_term
 
 
 PROVIDER_STRUCTURAL_FILLER_TERMS = frozenset(
@@ -79,6 +81,9 @@ def expanded_token_set(tokens: Iterable[str]) -> set[str]:
     expanded: set[str] = set()
     for token in tokens:
         expanded.add(token)
+        for variant in (singular_search_term(token), plural_search_term(token)):
+            if variant is not None:
+                expanded.add(variant)
         expanded.update(SPELLING_ALIASES.get(token, ()))
     return expanded
 

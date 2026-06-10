@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
+from wfrp_companion.source_objects.layout import LayoutPage
 from wfrp_companion.structured_evidence.models import (
     normalize_structured_alias,
     normalize_table_number,
@@ -216,11 +217,16 @@ def page_reference_observations_from_pages(
     known_table_numbers: frozenset[str],
 ) -> tuple[ReaderObservation, ...]:
     observations: list[ReaderObservation] = []
+    seen_references: set[tuple[str, str]] = set()
     for page in pages:
         for match in TABLE_REFERENCE_RE.finditer(page.text):
             table_number = normalize_table_number(match.group("number"))
             if table_number in known_table_numbers:
                 continue
+            reference_key = (page.page_id, table_number)
+            if reference_key in seen_references:
+                continue
+            seen_references.add(reference_key)
             reference_text = match.group(0)
             observations.append(
                 ReaderObservation(
@@ -230,6 +236,7 @@ def page_reference_observations_from_pages(
                         page.page_id,
                         "page_reference",
                         table_number,
+                        text_snapshot_sha256=page.text_snapshot_sha256,
                     ),
                     book_id=page.book_id,
                     page_id=page.page_id,
@@ -251,6 +258,56 @@ def page_reference_observations_from_pages(
                     text_hash=_hash_text(reference_text),
                 )
             )
+    return tuple(observations)
+
+
+def layout_observations_from_pages(
+    *,
+    book_id: str,
+    pages: tuple[PageTextSnapshot, ...],
+    layout_pages: tuple[LayoutPage, ...],
+) -> tuple[ReaderObservation, ...]:
+    page_by_number = {page.page_number: page for page in pages}
+    observations: list[ReaderObservation] = []
+    for layout_page in layout_pages:
+        page = page_by_number.get(layout_page.page_number)
+        if page is None:
+            continue
+        observations.append(
+            ReaderObservation(
+                id=_observation_id(
+                    "pymupdf_words",
+                    book_id,
+                    page.page_id,
+                    "layout_metadata",
+                    f"layout:{layout_page.page_number}",
+                    text_snapshot_sha256=page.text_snapshot_sha256,
+                ),
+                book_id=book_id,
+                page_id=page.page_id,
+                page_number=page.page_number,
+                reader_name="pymupdf_words",
+                reader_version=READER_VERSION,
+                observation_type="layout_metadata",
+                object_shape=None,
+                content_kind="unknown",
+                entity_kind="none",
+                title=None,
+                text_snapshot_sha256=page.text_snapshot_sha256,
+                confidence=0.6 if layout_page.has_word_geometry else 0.35,
+                payload_json={
+                    "has_word_geometry": layout_page.has_word_geometry,
+                    "word_count": layout_page.word_count,
+                    "block_count": layout_page.block_count,
+                },
+                text_hash=_hash_text(
+                    f"{layout_page.page_number}:"
+                    f"{layout_page.word_count}:"
+                    f"{layout_page.block_count}:"
+                    f"{layout_page.has_word_geometry}"
+                ),
+            )
+        )
     return tuple(observations)
 
 
@@ -374,6 +431,7 @@ def _source_object_observation(
             source_object.page_id,
             observation_type,
             source_object.id,
+            text_snapshot_sha256=source_object.text_snapshot_sha256,
         ),
         book_id=source_object.book_id,
         page_id=source_object.page_id,
@@ -421,11 +479,20 @@ def _observation_id(
     page_id: str,
     observation_type: str,
     identity: str,
+    *,
+    text_snapshot_sha256: str,
 ) -> str:
     digest = hashlib.sha256(
-        "|".join((reader_name, book_id, page_id, observation_type, identity)).encode(
-            "utf-8"
-        )
+        "|".join(
+            (
+                reader_name,
+                book_id,
+                page_id,
+                observation_type,
+                identity,
+                text_snapshot_sha256,
+            )
+        ).encode("utf-8")
     ).hexdigest()[:16]
     return f"structured-observation:{book_id}:{digest}"
 

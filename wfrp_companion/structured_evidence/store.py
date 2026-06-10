@@ -6,18 +6,23 @@ import sqlite3
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from wfrp_companion.config import AppConfig
 from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.db.migrations import apply_pending_migrations
+from wfrp_companion.source_objects.layout import LayoutPage
+from wfrp_companion.source_objects.layout import load_pdf_layout_pages
 from wfrp_companion.source_objects.store import source_object_search_snapshot_sha256
 from wfrp_companion.structured_evidence.candidates import (
     build_candidates_from_observations,
 )
 from wfrp_companion.structured_evidence.models import (
     StructuredEvidenceCandidate,
+    deterministic_candidate_id,
     normalize_structured_alias,
     normalize_table_number,
 )
@@ -27,6 +32,7 @@ from wfrp_companion.structured_evidence.readers import (
     load_page_text_snapshots,
     load_source_object_link_snapshots,
     load_source_object_snapshots,
+    layout_observations_from_pages,
     page_reference_observations_from_pages,
     reader_observations_from_source_objects,
 )
@@ -50,6 +56,12 @@ class EligibleStructuredBook:
 class StructuredEvidenceExtractionFailure:
     book_id: str
     reason: str
+
+
+@dataclass(frozen=True)
+class StructuredEvidenceWriteResult:
+    candidates_inserted: int
+    needs_review_inserted: bool
 
 
 @dataclass(frozen=True)
@@ -483,7 +495,7 @@ def extract_structured_evidence_library(
             try:
                 observations = build_reader_observations(connection, book.book_id)
                 candidates = build_candidates_from_observations(observations)
-                write_structured_evidence(
+                write_result = write_structured_evidence(
                     connection,
                     book_id=book.book_id,
                     snapshot_sha256=snapshot,
@@ -508,8 +520,8 @@ def extract_structured_evidence_library(
 
             extracted += 1
             observations_written += len(observations)
-            candidates_written += len(candidates)
-            if any(candidate.status == "needs_review" for candidate in candidates):
+            candidates_written += write_result.candidates_inserted
+            if write_result.needs_review_inserted:
                 needs_review += 1
 
     return StructuredEvidenceExtractionSummary(
@@ -529,15 +541,41 @@ def build_reader_observations(
     connection: sqlite3.Connection,
     book_id: str,
 ) -> tuple[ReaderObservation, ...]:
+    page_snapshots = load_page_text_snapshots(connection, book_id)
     source_observations = reader_observations_from_source_objects(
         load_source_object_snapshots(connection, book_id),
         links=load_source_object_link_snapshots(connection, book_id),
     )
     page_reference_observations = page_reference_observations_from_pages(
-        load_page_text_snapshots(connection, book_id),
+        page_snapshots,
         known_table_numbers=known_table_numbers_from_observations(source_observations),
     )
-    return (*source_observations, *page_reference_observations)
+    layout_observations = layout_observations_from_pages(
+        book_id=book_id,
+        pages=page_snapshots,
+        layout_pages=load_managed_pdf_layout_pages(connection, book_id),
+    )
+    return (*source_observations, *page_reference_observations, *layout_observations)
+
+
+def load_managed_pdf_layout_pages(
+    connection: sqlite3.Connection,
+    book_id: str,
+) -> tuple[LayoutPage, ...]:
+    row = connection.execute(
+        """
+        select managed_pdf_path, page_count
+        from books
+        where id = ?
+        """,
+        (book_id,),
+    ).fetchone()
+    if row is None or not row["managed_pdf_path"]:
+        return ()
+    return load_pdf_layout_pages(
+        Path(row["managed_pdf_path"]),
+        page_count=int(row["page_count"] or 0),
+    )
 
 
 def write_structured_evidence(
@@ -549,22 +587,44 @@ def write_structured_evidence(
     candidates: tuple[StructuredEvidenceCandidate, ...],
     job_id: str,
     now: str,
-) -> None:
-    status = "needs_review" if any(
-        candidate.status == "needs_review" for candidate in candidates
-    ) else "indexed"
+) -> StructuredEvidenceWriteResult:
     with connection:
-        connection.execute(
-            "delete from structured_evidence_candidates where book_id = ?",
-            (book_id,),
+        stale_active_validated_objects(
+            connection,
+            book_id=book_id,
+            current_snapshot_sha256=snapshot_sha256,
+            now=now,
         )
+        insertable_candidates = candidates_not_already_reviewed(
+            connection,
+            book_id=book_id,
+            candidates=candidates_for_snapshot(candidates, snapshot_sha256),
+        )
+        preserved_observation_ids = reviewed_candidate_observation_ids(
+            connection,
+            book_id=book_id,
+        )
+        status = "needs_review" if any(
+            candidate.status == "needs_review" for candidate in insertable_candidates
+        ) else "indexed"
         connection.execute(
-            "delete from structured_reader_observations where book_id = ?",
-            (book_id,),
+            """
+            update structured_evidence_candidates
+            set status = 'superseded',
+                updated_at = ?
+            where book_id = ?
+              and status in ('candidate', 'needs_review', 'auto_rejected')
+            """,
+            (now, book_id),
+        )
+        delete_replaceable_reader_observations(
+            connection,
+            book_id=book_id,
+            preserved_observation_ids=preserved_observation_ids,
         )
         for observation in observations:
             insert_reader_observation(connection, observation, now=now)
-        for candidate in candidates:
+        for candidate in insertable_candidates:
             insert_structured_candidate(connection, candidate, now=now)
         connection.execute(
             """
@@ -592,6 +652,186 @@ def write_structured_evidence(
             """,
             (now, now, job_id),
         )
+    return StructuredEvidenceWriteResult(
+        candidates_inserted=len(insertable_candidates),
+        needs_review_inserted=any(
+            candidate.status == "needs_review" for candidate in insertable_candidates
+        ),
+    )
+
+
+def candidates_not_already_reviewed(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    candidates: tuple[StructuredEvidenceCandidate, ...],
+) -> tuple[StructuredEvidenceCandidate, ...]:
+    reviewed_keys = reviewed_candidate_identity_keys(connection, book_id=book_id)
+    return tuple(
+        candidate
+        for candidate in candidates
+        if candidate_active_identity_key(candidate) not in reviewed_keys
+    )
+
+
+def reviewed_candidate_identity_keys(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+) -> frozenset[tuple[str, str, str, str, int, str, str]]:
+    rows = connection.execute(
+        """
+        select
+          book_id,
+          object_shape,
+          coalesce(table_number_normalized, '') as table_number_normalized,
+          coalesce(canonical_name, '') as canonical_name,
+          page_start,
+          text_snapshot_sha256,
+          structured_extractor_version
+        from structured_evidence_candidates
+        where book_id = ?
+          and status in ('approved', 'corrected', 'rejected')
+        """,
+        (book_id,),
+    ).fetchall()
+    return frozenset(
+        (
+            row["book_id"],
+            row["object_shape"],
+            row["table_number_normalized"],
+            row["canonical_name"],
+            int(row["page_start"]),
+            row["text_snapshot_sha256"],
+            row["structured_extractor_version"],
+        )
+        for row in rows
+    )
+
+
+def reviewed_candidate_observation_ids(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+) -> tuple[str, ...]:
+    rows = connection.execute(
+        """
+        select observation_ids_json
+        from structured_evidence_candidates
+        where book_id = ?
+          and status in ('approved', 'corrected', 'rejected')
+        """,
+        (book_id,),
+    ).fetchall()
+    observation_ids: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for observation_id in _json_list(row["observation_ids_json"]):
+            if not isinstance(observation_id, str) or not observation_id:
+                continue
+            if observation_id in seen:
+                continue
+            seen.add(observation_id)
+            observation_ids.append(observation_id)
+    return tuple(observation_ids)
+
+
+def delete_replaceable_reader_observations(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    preserved_observation_ids: tuple[str, ...],
+) -> None:
+    if not preserved_observation_ids:
+        connection.execute(
+            "delete from structured_reader_observations where book_id = ?",
+            (book_id,),
+        )
+        return
+    placeholders = ",".join("?" for _ in preserved_observation_ids)
+    connection.execute(
+        f"""
+        delete from structured_reader_observations
+        where book_id = ?
+          and id not in ({placeholders})
+        """,
+        (book_id, *preserved_observation_ids),
+    )
+
+
+def candidate_active_identity_key(
+    candidate: StructuredEvidenceCandidate,
+) -> tuple[str, str, str, str, int, str, str]:
+    return (
+        candidate.book_id,
+        str(candidate.object_shape),
+        candidate.table_number_normalized or "",
+        candidate.canonical_name or "",
+        candidate.page_start,
+        candidate.text_snapshot_sha256,
+        candidate.structured_extractor_version,
+    )
+
+
+def candidates_for_snapshot(
+    candidates: tuple[StructuredEvidenceCandidate, ...],
+    snapshot_sha256: str,
+) -> tuple[StructuredEvidenceCandidate, ...]:
+    return tuple(
+        candidate_for_snapshot(candidate, snapshot_sha256)
+        for candidate in candidates
+    )
+
+
+def candidate_for_snapshot(
+    candidate: StructuredEvidenceCandidate,
+    snapshot_sha256: str,
+) -> StructuredEvidenceCandidate:
+    payload = json.loads(stable_json(candidate.payload_json))
+    source = payload.get("source")
+    if isinstance(source, dict):
+        source["text_snapshot_sha256"] = snapshot_sha256
+    identity = (
+        candidate.table_number_normalized
+        or candidate.table_number
+        or candidate.canonical_name
+        or candidate.title
+        or candidate.id
+    )
+    return replace(
+        candidate,
+        id=deterministic_candidate_id(
+            book_id=candidate.book_id,
+            object_shape=str(candidate.object_shape),
+            identity=identity,
+            page_start=candidate.page_start,
+            page_end=candidate.page_end,
+            snapshot_sha256=snapshot_sha256,
+            extractor_version=candidate.structured_extractor_version,
+        ),
+        payload_json=payload,
+        text_snapshot_sha256=snapshot_sha256,
+    )
+
+
+def stale_active_validated_objects(
+    connection: sqlite3.Connection,
+    *,
+    book_id: str,
+    current_snapshot_sha256: str,
+    now: str,
+) -> None:
+    connection.execute(
+        """
+        update validated_structured_objects
+        set validation_status = 'stale',
+            updated_at = ?
+        where book_id = ?
+          and validation_status = 'active'
+          and source_snapshot_sha256 != ?
+        """,
+        (now, book_id, current_snapshot_sha256),
+    )
 
 
 def ensure_book_retrieval_status(
@@ -622,7 +862,7 @@ def insert_reader_observation(
 ) -> None:
     connection.execute(
         """
-        insert into structured_reader_observations (
+        insert or ignore into structured_reader_observations (
           id,
           book_id,
           page_id,
@@ -715,6 +955,37 @@ def insert_structured_candidate(
         values (
           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           ?, ?
+        )
+        on conflict(id) do update set
+          primary_page_id = excluded.primary_page_id,
+          primary_source_object_id = excluded.primary_source_object_id,
+          object_shape = excluded.object_shape,
+          content_kind = excluded.content_kind,
+          entity_kind = excluded.entity_kind,
+          canonical_name = excluded.canonical_name,
+          title = excluded.title,
+          table_number = excluded.table_number,
+          table_number_normalized = excluded.table_number_normalized,
+          page_start = excluded.page_start,
+          page_end = excluded.page_end,
+          printed_page_start = excluded.printed_page_start,
+          printed_page_end = excluded.printed_page_end,
+          heading_path_json = excluded.heading_path_json,
+          observation_ids_json = excluded.observation_ids_json,
+          source_object_ids_json = excluded.source_object_ids_json,
+          payload_json = excluded.payload_json,
+          search_text = excluded.search_text,
+          confidence = excluded.confidence,
+          suspicious_flags_json = excluded.suspicious_flags_json,
+          status = excluded.status,
+          text_snapshot_sha256 = excluded.text_snapshot_sha256,
+          structured_extractor_version = excluded.structured_extractor_version,
+          updated_at = excluded.updated_at
+        where structured_evidence_candidates.status in (
+          'candidate',
+          'needs_review',
+          'auto_rejected',
+          'superseded'
         )
         """,
         (

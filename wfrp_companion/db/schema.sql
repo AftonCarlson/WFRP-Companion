@@ -405,7 +405,7 @@ create table if not exists structured_reader_observations (
   confidence real not null,
   created_at text not null,
   check(reader_name in ('page_text_import', 'source_object_heuristic', 'pymupdf_text', 'pymupdf_words', 'tesseract_ocr', 'manual_seed')),
-  check(observation_type in ('table_caption', 'table_region', 'table_row', 'profile_header', 'profile_stat_block', 'profile_field_block', 'cross_reference', 'page_reference')),
+  check(observation_type in ('table_caption', 'table_region', 'table_row', 'profile_header', 'profile_stat_block', 'profile_field_block', 'cross_reference', 'page_reference', 'layout_metadata')),
   check(object_shape is null or object_shape in ('structured_table', 'table_row', 'profile_bundle', 'profile_field_block')),
   check(content_kind is null or content_kind in ('rules_table', 'combat_table', 'equipment_table', 'random_roll_table', 'encounter_table', 'career_table', 'spell_table', 'creature_profile', 'npc_profile', 'generic_stat_block', 'unknown')),
   check(entity_kind is null or entity_kind in ('monster', 'npc', 'creature', 'item', 'spell', 'career', 'rule', 'location', 'none', 'unknown')),

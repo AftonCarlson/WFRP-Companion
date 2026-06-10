@@ -10,6 +10,13 @@ def test_identity_satisfies_essential_terms_with_spelling_aliases() -> None:
     )
 
 
+def test_identity_satisfies_essential_terms_with_plural_variants() -> None:
+    assert evidence_policy.identity_satisfies_essential_terms(
+        "CHAOs WARRIORS",
+        ("chaos", "warrior"),
+    )
+
+
 def test_identity_requires_all_essential_terms() -> None:
     assert not evidence_policy.identity_satisfies_essential_terms(
         "The Black Knight",

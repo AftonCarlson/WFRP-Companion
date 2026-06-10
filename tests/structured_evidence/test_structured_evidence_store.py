@@ -13,6 +13,7 @@ from wfrp_companion.structured_evidence import candidates as candidate_builder
 from wfrp_companion.structured_evidence import store
 from wfrp_companion.structured_evidence.payloads import payload_hash
 from wfrp_companion.structured_evidence.readers import ReaderObservation
+from wfrp_companion.source_objects.layout import LayoutPage
 from wfrp_companion.structured_evidence.store import (
     StructuredEvidenceConflictError,
     StructuredEvidenceInvalidPayloadError,
@@ -136,6 +137,49 @@ def test_candidate_detail_exposes_local_review_data_without_paths(
     assert "/managed/" not in serialized
     assert "export" not in serialized
     assert "telemetry" not in serialized
+
+
+def test_structured_extraction_persists_pymupdf_layout_observations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = make_config(tmp_path)
+    insert_indexed_book(config)
+    insert_table_source_objects(config)
+
+    monkeypatch.setattr(
+        store,
+        "load_pdf_layout_pages",
+        lambda *_args, **_kwargs: (
+            LayoutPage(
+                page_number=1,
+                has_word_geometry=True,
+                word_count=12,
+                block_count=3,
+            ),
+        ),
+    )
+
+    summary = store.extract_structured_evidence_library(config)
+
+    assert summary.extracted == 1
+    with open_connection(config.db_path) as connection:
+        layout_observation = connection.execute(
+            """
+            select reader_name, observation_type, payload_json
+            from structured_reader_observations
+            where reader_name = 'pymupdf_words'
+            """
+        ).fetchone()
+    assert layout_observation is not None
+    assert layout_observation["observation_type"] == "layout_metadata"
+    assert json.loads(layout_observation["payload_json"]) == {
+        "block_count": 3,
+        "has_word_geometry": True,
+        "word_count": 12,
+    }
+    with open_connection(config.db_path) as connection:
+        assert store.load_managed_pdf_layout_pages(connection, "missing") == ()
 
 
 def test_approve_candidate_writes_validated_object_sources_aliases_and_review(
@@ -323,6 +367,238 @@ def test_stale_snapshot_blocks_approval_until_rebuild(tmp_path: Path) -> None:
 
     with pytest.raises(StructuredEvidenceStaleError):
         store.approve_structured_candidate(config, candidate_id)
+
+
+def test_rebuild_marks_active_validated_objects_stale_on_source_snapshot_drift(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    candidate_id = build_candidate(config)
+    approved = store.approve_structured_candidate(config, candidate_id)
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update source_objects
+            set search_text = 'changed table text'
+            where id = 'table'
+            """
+        )
+
+    summary = store.extract_structured_evidence_library(config, force=True)
+
+    assert summary.extracted == 1
+    with open_connection(config.db_path) as connection:
+        validated = connection.execute(
+            """
+            select validation_status
+            from validated_structured_objects
+            where id = ?
+            """,
+            (approved.validated_object_id,),
+        ).fetchone()
+    assert validated["validation_status"] == "stale"
+
+
+def test_rebuild_preserves_reviewed_candidate_observation_snapshot(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    candidate_id = build_candidate(config)
+    before_review = store.get_structured_candidate_detail(config, candidate_id)
+    reviewed_observation_hashes = {
+        observation.id: observation.text_hash
+        for observation in before_review.observations
+    }
+    store.approve_structured_candidate(config, candidate_id)
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update source_objects
+            set text = 'Changed table text after review.',
+                search_text = 'Changed table text after review.',
+                text_snapshot_sha256 = 'changed-source-object-snapshot'
+            where id = 'table'
+            """
+        )
+        connection.execute(
+            """
+            update page_text
+            set text_sha256 = 'changed-page-text-snapshot'
+            where page_id = 'rules:1'
+            """
+        )
+
+    summary = store.extract_structured_evidence_library(config, force=True)
+    after_rebuild = store.get_structured_candidate_detail(config, candidate_id)
+
+    assert summary.extracted == 1
+    assert summary.failed == 0
+    assert after_rebuild.status == "approved"
+    assert {
+        observation.id: observation.text_hash
+        for observation in after_rebuild.observations
+    } == reviewed_observation_hashes
+
+
+def test_reviewed_candidate_observation_ids_filter_duplicates_and_invalid_values(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    candidate_id = build_candidate(config)
+    store.approve_structured_candidate(config, candidate_id)
+
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update structured_evidence_candidates
+            set observation_ids_json = ?
+            where id = ?
+            """,
+            (json.dumps(["observation-a", "", "observation-a", 42]), candidate_id),
+        )
+        observation_ids = store.reviewed_candidate_observation_ids(
+            connection,
+            book_id="rules",
+        )
+
+    assert observation_ids == ("observation-a",)
+
+
+def test_force_rebuild_after_approval_preserves_validated_object_without_collision(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    candidate_id = build_candidate(config)
+    approved = store.approve_structured_candidate(config, candidate_id)
+
+    summary = store.extract_structured_evidence_library(config, force=True)
+
+    assert summary.extracted == 1
+    assert summary.failed == 0
+    with open_connection(config.db_path) as connection:
+        validated = connection.execute(
+            """
+            select validation_status
+            from validated_structured_objects
+            where id = ?
+            """,
+            (approved.validated_object_id,),
+        ).fetchone()
+        candidate_counts = {
+            row["status"]: row["count"]
+            for row in connection.execute(
+                """
+                select status, count(*) as count
+                from structured_evidence_candidates
+                group by status
+                """
+            ).fetchall()
+        }
+        review_count = connection.execute(
+            "select count(*) from structured_evidence_reviews"
+        ).fetchone()[0]
+
+    assert validated["validation_status"] == "active"
+    assert candidate_counts == {"approved": 1}
+    assert review_count == 1
+
+
+def test_force_rebuild_replaces_unreviewed_candidate_without_primary_key_collision(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    candidate_id = build_candidate(config)
+
+    summary = store.extract_structured_evidence_library(config, force=True)
+
+    assert summary.extracted == 1
+    assert summary.failed == 0
+    with open_connection(config.db_path) as connection:
+        rows = connection.execute(
+            """
+            select id, status
+            from structured_evidence_candidates
+            """
+        ).fetchall()
+
+    assert [(row["id"], row["status"]) for row in rows] == [
+        (candidate_id, "candidate")
+    ]
+
+
+def test_force_rebuild_after_correction_preserves_validated_object_without_collision(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    candidate_id = build_candidate(config)
+    detail = store.get_structured_candidate_detail(config, candidate_id)
+    corrected_payload = dict(detail.payload_json)
+    corrected_payload["identity"] = {
+        **corrected_payload["identity"],
+        "aliases": ["table 5-6", "armour points by location"],
+    }
+    corrected = store.correct_structured_candidate(config, candidate_id, corrected_payload)
+
+    summary = store.extract_structured_evidence_library(config, force=True)
+
+    assert summary.extracted == 1
+    assert summary.failed == 0
+    with open_connection(config.db_path) as connection:
+        validated = connection.execute(
+            """
+            select validation_status
+            from validated_structured_objects
+            where id = ?
+            """,
+            (corrected.validated_object_id,),
+        ).fetchone()
+        candidate_counts = {
+            row["status"]: row["count"]
+            for row in connection.execute(
+                """
+                select status, count(*) as count
+                from structured_evidence_candidates
+                group by status
+                """
+            ).fetchall()
+        }
+
+    assert validated["validation_status"] == "active"
+    assert candidate_counts == {"corrected": 1}
+
+
+def test_force_rebuild_after_rejection_preserves_review_without_collision(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    candidate_id = build_candidate(config)
+    store.reject_structured_candidate(config, candidate_id)
+
+    summary = store.extract_structured_evidence_library(config, force=True)
+
+    assert summary.extracted == 1
+    assert summary.failed == 0
+    with open_connection(config.db_path) as connection:
+        candidate_counts = {
+            row["status"]: row["count"]
+            for row in connection.execute(
+                """
+                select status, count(*) as count
+                from structured_evidence_candidates
+                group by status
+                """
+            ).fetchall()
+        }
+        validated_count = connection.execute(
+            "select count(*) from validated_structured_objects"
+        ).fetchone()[0]
+        review_count = connection.execute(
+            "select count(*) from structured_evidence_reviews"
+        ).fetchone()[0]
+
+    assert candidate_counts == {"rejected": 1}
+    assert validated_count == 0
+    assert review_count == 1
 
 
 def test_review_store_raises_not_found_and_conflict(tmp_path: Path) -> None:

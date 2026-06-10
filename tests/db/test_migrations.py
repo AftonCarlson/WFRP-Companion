@@ -299,6 +299,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
         "0010_structured_evidence_validation",
+        "0011_structured_layout_metadata_observations",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -395,6 +396,13 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0011_structured_layout_metadata_observations",),
+            ).fetchone()
+            is not None
+        )
         assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
         assert migrations.table_exists(connection, "familiar_research_runs")
@@ -404,6 +412,36 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         assert migrations.table_exists(connection, "familiar_evidence_judgments")
         assert migrations.table_exists(connection, "chat_thread_context")
         assert migrations.table_exists(connection, "structured_reader_observations")
+        connection.execute(
+            """
+            insert into structured_reader_observations (
+              id,
+              book_id,
+              page_id,
+              page_number,
+              reader_name,
+              reader_version,
+              observation_type,
+              payload_json,
+              text_snapshot_sha256,
+              confidence,
+              created_at
+            )
+            values (
+              'layout-observation',
+              'core-rules',
+              'core-rules:1',
+              1,
+              'pymupdf_words',
+              'test',
+              'layout_metadata',
+              '{}',
+              'snapshot',
+              0.5,
+              '2026-06-10T00:00:00Z'
+            )
+            """
+        )
         assert migrations.table_exists(connection, "structured_evidence_candidates")
         assert migrations.table_exists(connection, "validated_structured_objects")
         assert migrations.table_exists(connection, "structured_evidence_reviews")
@@ -1216,6 +1254,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
         "0010_structured_evidence_validation",
+        "0011_structured_layout_metadata_observations",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -1229,6 +1268,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
         "0010_structured_evidence_validation",
+        "0011_structured_layout_metadata_observations",
     )
 
 
@@ -1251,6 +1291,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
         "0010_structured_evidence_validation",
+        "0011_structured_layout_metadata_observations",
     )
     with open_connection(db_path) as connection:
         assert (

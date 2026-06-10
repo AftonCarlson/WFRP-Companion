@@ -50,7 +50,39 @@ def build_candidates_from_observations(
             if candidate.table_number_normalized
         ),
     )
-    return (*table_candidates, *profile_candidates, *missing_reference_candidates)
+    return deduplicate_active_identity_candidates(
+        (*table_candidates, *profile_candidates, *missing_reference_candidates)
+    )
+
+
+def deduplicate_active_identity_candidates(
+    candidates: tuple[StructuredEvidenceCandidate, ...],
+) -> tuple[StructuredEvidenceCandidate, ...]:
+    by_identity: dict[tuple[object, ...], StructuredEvidenceCandidate] = {}
+    for candidate in candidates:
+        key = active_identity_key(candidate)
+        current = by_identity.get(key)
+        if current is None or candidate_sort_key(candidate) > candidate_sort_key(
+            current
+        ):
+            by_identity[key] = candidate
+    return tuple(by_identity.values())
+
+
+def active_identity_key(candidate: StructuredEvidenceCandidate) -> tuple[object, ...]:
+    return (
+        candidate.book_id,
+        str(candidate.object_shape),
+        candidate.table_number_normalized or "",
+        candidate.canonical_name or "",
+        candidate.page_start,
+        candidate.text_snapshot_sha256,
+        candidate.structured_extractor_version,
+    )
+
+
+def candidate_sort_key(candidate: StructuredEvidenceCandidate) -> tuple[float, int]:
+    return (candidate.confidence, -len(candidate.suspicious_flags))
 
 
 def _table_candidates(
@@ -221,9 +253,11 @@ def _missing_reference_candidates(
     for observation in observations:
         if observation.observation_type != "page_reference":
             continue
+        if not observation.table_number:
+            continue
         if observation.table_number in known_table_numbers:
             continue
-        table_number = observation.table_number or "unknown"
+        table_number = observation.table_number
         payload = {
             "schema_version": 1,
             "object_shape": "structured_table",

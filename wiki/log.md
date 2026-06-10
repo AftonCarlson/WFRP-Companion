@@ -1,5 +1,26 @@
 # Wiki Compile Log
 
+## 2026-06-10 Subagent Lifecycle Diagnosis
+
+- Diagnosed the recurring `agent thread limit reached` failure as completed
+  Codex subagents remaining attached to the live WFRP thread. Bounded
+  `wait_agent` diagnostics showed all eight attached agents were already
+  completed, so the immediate blocker was stale lifecycle attachment rather
+  than active review work.
+- Compared against `/Users/aftoncarlson/workspace/enfuse/bidaya-adr`; that
+  repo does not have WFRP's AGENTS/CLAUDE/wiki subagent lifecycle rules. The
+  WFRP-specific blanket `close_agent` ban was introduced during the
+  2026-06-09 Familiar tool-calling hybrid RAG phase after an earlier cleanup
+  hang.
+- Replaced the blanket close ban with a narrower lifecycle rule: use subagents
+  only when genuinely useful, use bounded waits, close completed agents
+  sequentially, never close running or unknown-status agents, never close in
+  parallel, and use CodeRabbit or a Codex background thread when subagent
+  spawning is unavailable.
+- Updated `docs/plans/Implementation Plan Script.md` so future implementation
+  plans do not make subagent-driven execution mandatory by default and must
+  include review-path and cleanup expectations when subagents are required.
+
 ## 2026-06-10 Structured Evidence Validation Phase
 
 - Added the structured evidence validation plan at
@@ -22,12 +43,26 @@
 - `/api/retrieval/status` and the Library status text now report structured
   candidate counts, needs-review counts, and active validated structured
   object counts beside the legacy table/stat and vector readiness counts.
-- Final verification: backend full coverage gate passed at 783 tests and
-  100.00% coverage; ruff passed across `wfrp_companion`, `tests`, and `tools`;
-  frontend Vitest passed 145 tests; frontend production build passed with the
-  existing large-chunk warning; CodeRabbit review rerun raised 0 issues. The
-  sub-agent review path was blocked by the platform thread limit, so CodeRabbit
-  served as the independent AI review for this phase.
+- Follow-up hardening added PyMuPDF `layout_metadata` observations, prevented
+  layout-only pages from becoming fake missing-table candidates, preserved
+  reviewed approved/corrected/rejected candidate history and reviewed
+  observation snapshots across force rebuilds, idempotently replaced
+  same-snapshot unreviewed candidates, filters active validated objects out of
+  retrieval immediately when their source snapshot drifts, and added
+  singular/plural evidence identity matching.
+- Live local rollout applied `0011_structured_layout_metadata_observations`,
+  force-refreshed structured extraction for all 26 books, and completed the
+  aggregate retrieval rebuild with 0 failed steps. Current private DB counts:
+  5,607 reader observations, 38 current plain candidates, 1,037 current
+  candidates needing review, 3,736 superseded candidates, 0 active validated
+  structured objects, vector provider `disabled`.
+- Final verification: ruff passed across `wfrp_companion`, `tests`, and
+  `tools`; backend full coverage passed with 799 tests and 100.00% coverage;
+  frontend Vitest coverage passed with 148 tests; Playwright e2e passed with 2
+  tests; frontend production build passed with the existing large-chunk
+  warning. Independent subagent review first found stale validated-object and
+  reviewed-observation preservation issues; both were fixed with regressions.
+  The final independent review found no blocking, major, or minor issues.
 
 ## 2026-06-10 Familiar Reliability Contract Phase
 

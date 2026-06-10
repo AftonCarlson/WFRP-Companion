@@ -714,6 +714,38 @@ def test_statline_accepts_complete_profile_fields() -> None:
     assert result.judgments[0].status == "accepted"
 
 
+def test_statline_accepts_plural_profile_identity_for_singular_request() -> None:
+    profile_hit = hit(
+        object_type="npc_profile",
+        object_title="CHAOs WARRIORS",
+        context_text=(
+            "A Chaos Warrior utterly embraces chaos. "
+            "WS 51 BS 35 S 44 T 43 Ag 39 Int 38 WP 44 Fel 31 "
+            "A 1 W 13 SB 4 TB 4 M 4 Mag 0 IP 0 FP 0."
+        ),
+    )
+    evidence_requirement = requirement(
+        requirement_type="statline_evidence",
+        subject=subject_constraint(
+            canonical="chaos warrior",
+            include_terms=("chaos", "warrior", "profile", "statline"),
+        ),
+        object_type_hints=("stat_block", "monster_profile", "npc_profile"),
+    )
+
+    result = evidence_validation.validate_hits_for_requirement(
+        (profile_hit,),
+        requirement=evidence_requirement,
+        source_book_ids=("bestiary",),
+    )
+
+    assert result.status == "sufficient"
+    assert result.judgments[0].reason_code in {
+        "accepted_identity_subject_match",
+        "statline_evidence",
+    }
+
+
 def test_object_type_hints_are_validation_constraints() -> None:
     evidence_requirement = requirement(
         requirement_type="statline_evidence",

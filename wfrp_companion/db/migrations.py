@@ -20,6 +20,9 @@ FAMILIAR_AGENT_RESEARCH_MIGRATION_ID = "0007_familiar_agent_research"
 FAMILIAR_RESEARCH_PLANS_MIGRATION_ID = "0008_familiar_research_plans"
 FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID = "0009_familiar_reliability_contract"
 STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID = "0010_structured_evidence_validation"
+STRUCTURED_LAYOUT_METADATA_OBSERVATIONS_MIGRATION_ID = (
+    "0011_structured_layout_metadata_observations"
+)
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
@@ -31,6 +34,7 @@ MIGRATION_IDS: tuple[str, ...] = (
     FAMILIAR_RESEARCH_PLANS_MIGRATION_ID,
     FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID,
     STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID,
+    STRUCTURED_LAYOUT_METADATA_OBSERVATIONS_MIGRATION_ID,
 )
 
 
@@ -150,6 +154,8 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         migration_function = apply_familiar_reliability_contract
     elif migration_id == STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID:
         migration_function = apply_structured_evidence_validation
+    elif migration_id == STRUCTURED_LAYOUT_METADATA_OBSERVATIONS_MIGRATION_ID:
+        migration_function = apply_structured_layout_metadata_observations
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -310,6 +316,17 @@ def apply_structured_evidence_validation(connection: sqlite3.Connection) -> None
         required_job_type="extract_structured_evidence",
     )
     backfill_book_retrieval_status(connection)
+
+
+def apply_structured_layout_metadata_observations(
+    connection: sqlite3.Connection,
+) -> None:
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{STRUCTURED_LAYOUT_METADATA_OBSERVATIONS_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
 
 
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:

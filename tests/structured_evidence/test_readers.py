@@ -5,9 +5,11 @@ from wfrp_companion.structured_evidence.readers import (
     PageTextSnapshot,
     SourceObjectLinkSnapshot,
     SourceObjectSnapshot,
+    layout_observations_from_pages,
     page_reference_observations_from_pages,
     reader_observations_from_source_objects,
 )
+from wfrp_companion.source_objects.layout import LayoutPage
 
 
 def test_source_object_reader_observes_tables_rows_profiles_and_stats() -> None:
@@ -107,6 +109,26 @@ def test_page_text_reader_observes_table_references_without_source_objects() -> 
     assert observations[0].payload_json["reference_text"] == "Table 5-6"
 
 
+def test_page_text_reader_deduplicates_repeated_table_references() -> None:
+    pages = (
+        PageTextSnapshot(
+            page_id="core-rules:112",
+            book_id="core-rules",
+            page_number=112,
+            text="Table 5-6 appears here. Table 5-6 is repeated later.",
+            text_snapshot_sha256="page-snapshot",
+        ),
+    )
+
+    observations = page_reference_observations_from_pages(
+        pages,
+        known_table_numbers=frozenset(),
+    )
+
+    assert len(observations) == 1
+    assert observations[0].table_number == "5-6"
+
+
 def test_page_text_reader_skips_references_already_backed_by_tables() -> None:
     pages = (
         PageTextSnapshot(
@@ -124,6 +146,49 @@ def test_page_text_reader_skips_references_already_backed_by_tables() -> None:
     )
 
     assert observations == ()
+
+
+def test_layout_reader_records_pymupdf_word_geometry_observations() -> None:
+    pages = (
+        PageTextSnapshot(
+            page_id="core-rules:112",
+            book_id="core-rules",
+            page_number=112,
+            text="Advanced armour table text.",
+            text_snapshot_sha256="page-snapshot",
+        ),
+    )
+    layout_pages = (
+        LayoutPage(
+            page_number=112,
+            has_word_geometry=True,
+            word_count=42,
+            block_count=6,
+        ),
+        LayoutPage(
+            page_number=113,
+            has_word_geometry=True,
+            word_count=7,
+            block_count=1,
+        ),
+    )
+
+    observations = layout_observations_from_pages(
+        book_id="core-rules",
+        pages=pages,
+        layout_pages=layout_pages,
+    )
+
+    assert len(observations) == 1
+    assert observations[0].reader_name == "pymupdf_words"
+    assert observations[0].observation_type == "layout_metadata"
+    assert observations[0].object_shape is None
+    assert observations[0].payload_json == {
+        "has_word_geometry": True,
+        "word_count": 42,
+        "block_count": 6,
+    }
+    assert observations[0].text_snapshot_sha256 == "page-snapshot"
 
 
 def test_link_snapshots_are_hashable_for_reader_grouping() -> None:

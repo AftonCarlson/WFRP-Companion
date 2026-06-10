@@ -7,6 +7,7 @@ from tests.assistant.test_retrieval import insert_searchable_page, make_config
 from wfrp_companion.assistant.evidence_constraints import EvidenceConstraint
 from wfrp_companion.db.connection import initialize_database
 from wfrp_companion.structured_evidence import resolver
+from wfrp_companion.structured_evidence.store import structured_evidence_snapshot_sha256
 
 
 def constraint(**overrides: object) -> EvidenceConstraint:
@@ -82,7 +83,12 @@ def insert_validated_row(
     payload_json: str,
     table_number_normalized: str | None,
     printed_page_end: str = "112",
+    source_snapshot_sha256: str | None = None,
 ) -> None:
+    source_snapshot = source_snapshot_sha256 or structured_evidence_snapshot_sha256(
+        connection,
+        "core-rules",
+    )
     connection.execute(
         """
         insert into validated_structured_objects (
@@ -111,10 +117,16 @@ def insert_validated_row(
         values (?, 'core-rules', 'core-rules:112', 'structured_table',
                 'equipment_table', 'rule', 'Advanced Armour', 'Table 5-6',
                 ?, 112, 112, '112', ?, '["Chapter V"]', 1, ?,
-                'structured-snapshot', 'active', 'human_approved',
+                ?, 'active', 'human_approved',
                 '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')
         """,
-        (validated_id, table_number_normalized, printed_page_end, payload_json),
+        (
+            validated_id,
+            table_number_normalized,
+            printed_page_end,
+            payload_json,
+            source_snapshot,
+        ),
     )
 
 
@@ -178,6 +190,44 @@ def test_resolver_reports_policy_and_scope_skip_reasons(tmp_path: Path) -> None:
         ).skip_reason
         == "limit_zero"
     )
+    assert resolver.active_validated_rows(connection, book_ids=()) == ()
+
+
+def test_resolver_ignores_active_validated_row_after_source_snapshot_drift(
+    tmp_path: Path,
+) -> None:
+    config, _ = seed_validated_table(tmp_path)
+    with initialize_database(config.db_path) as connection:
+        before = resolver.resolve_validated_structured_candidates(
+            connection,
+            query="advanced armour",
+            book_ids=("core-rules",),
+            constraint=constraint(),
+            limit=1,
+        )
+        connection.execute(
+            """
+            update page_text
+            set text_sha256 = 'changed-page-text-snapshot'
+            where page_id = 'core-rules:112'
+            """
+        )
+        active_rows = resolver.active_validated_rows(
+            connection,
+            book_ids=("core-rules",),
+        )
+        after = resolver.resolve_validated_structured_candidates(
+            connection,
+            query="advanced armour",
+            book_ids=("core-rules",),
+            constraint=constraint(),
+            limit=1,
+        )
+
+    assert len(before.candidates) == 1
+    assert active_rows == ()
+    assert after.candidates == ()
+    assert after.skip_reason == "no_active_match"
 
 
 def test_resolver_filters_constraint_mismatches(tmp_path: Path) -> None:

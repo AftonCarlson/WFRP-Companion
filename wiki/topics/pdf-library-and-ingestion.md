@@ -210,6 +210,8 @@ current, rank fusion, reranking, and evidence validation.
 Structured evidence validation adds a reviewed layer beside raw source objects:
 
 - `structured_reader_observations` stores immutable per-reader observations.
+  PyMuPDF word/block page metadata is stored as `layout_metadata`; it is
+  reviewer context and must not be treated as a table reference.
 - `structured_evidence_candidates` stores untrusted possible tables/profile
   bundles plus suspicious flags and review status.
 - `validated_structured_objects`, `validated_structured_object_sources`, and
@@ -217,6 +219,14 @@ Structured evidence validation adds a reviewed layer beside raw source objects:
   table/profile payloads, citations, aliases, and source snapshots.
 - `structured_evidence_reviews` is append-only review history for approve,
   correct, reject, stale, retire, and restore actions.
+- Force rebuilds preserve human decisions: replaceable unreviewed candidates
+  are upserted, reviewed approved/corrected/rejected candidates are not
+  overwritten, reviewed candidate observations stay tied to their original
+  snapshot-qualified observation ids, and active validated objects are marked
+  stale on source-snapshot drift.
+- The structured resolver also enforces source-snapshot currentness at
+  retrieval time, so an active validated row is ignored immediately if the
+  underlying source/page snapshot has drifted before the next rebuild.
 - `tools/extract_structured_evidence.py` and
   `tools/rebuild_retrieval_assets.py` report counts only and must not print
   private table/profile text.
@@ -267,6 +277,13 @@ The local retrieval assets are rebuildable from private imported library data:
 - API and CLI surfaces must not print raw extracted book text, local embedding
   model paths, or private PDF paths. The UI should show useful aggregate search
   and vector readiness without exposing private internals.
+- The 2026-06-10 live local structured refresh applied
+  `0011_structured_layout_metadata_observations` and force-refreshed all 26
+  books. It wrote 5,607 observations and 1,075 current candidates with 1,037
+  needing review; 3,736 older layout-derived candidates were superseded.
+  There are currently 0 active validated structured objects, so the human
+  review queue is the required next step before structured payloads can be
+  trusted by Familiar.
 
 ## OCR
 

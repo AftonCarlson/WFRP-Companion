@@ -7,9 +7,11 @@ from wfrp_companion.structured_evidence.readers import (
     PageTextSnapshot,
     ReaderObservation,
     SourceObjectSnapshot,
+    layout_observations_from_pages,
     page_reference_observations_from_pages,
     reader_observations_from_source_objects,
 )
+from wfrp_companion.source_objects.layout import LayoutPage
 
 
 def test_candidates_build_structured_table_from_table_and_rows() -> None:
@@ -165,6 +167,57 @@ def test_candidates_mark_referenced_missing_table_as_needs_review() -> None:
     assert candidates[0].table_number_normalized == "5-6"
 
 
+def test_candidates_ignore_layout_metadata_without_table_reference() -> None:
+    observations = layout_observations_from_pages(
+        book_id="core-rules",
+        pages=(
+            PageTextSnapshot(
+                page_id="core-rules:112",
+                book_id="core-rules",
+                page_number=112,
+                text="Page text without an explicit table reference.",
+                text_snapshot_sha256="page-snapshot",
+            ),
+        ),
+        layout_pages=(
+            LayoutPage(
+                page_number=112,
+                has_word_geometry=True,
+                word_count=42,
+                block_count=6,
+            ),
+        ),
+    )
+
+    candidates = build_candidates_from_observations(observations)
+
+    assert candidates == ()
+
+
+def test_candidates_ignore_page_reference_without_table_number() -> None:
+    candidates = build_candidates_from_observations(
+        (
+            ReaderObservation(
+                id="bad-reference",
+                book_id="core-rules",
+                page_id="core-rules:112",
+                page_number=112,
+                reader_name="page_text_import",
+                reader_version="test",
+                observation_type="page_reference",
+                object_shape="structured_table",
+                content_kind="unknown",
+                entity_kind="none",
+                title="Referenced table without a parsed number",
+                text_snapshot_sha256="snapshot",
+                confidence=0.4,
+            ),
+        )
+    )
+
+    assert candidates == ()
+
+
 def test_candidates_skip_missing_reference_when_table_candidate_exists() -> None:
     observations = (
         ReaderObservation(
@@ -212,6 +265,59 @@ def test_candidates_skip_missing_reference_when_table_candidate_exists() -> None
     assert len(candidates) == 1
     assert candidates[0].title == "Table 5-6: Advanced Armour"
     assert candidates[0].suspicious_flags == ()
+
+
+def test_candidates_deduplicate_equivalent_active_identities() -> None:
+    observations = (
+        ReaderObservation(
+            id="table-observation-low",
+            book_id="core-rules",
+            page_id="core-rules:112",
+            page_number=112,
+            source_object_id="table-low",
+            reader_name="source_object_heuristic",
+            reader_version="test",
+            observation_type="table_region",
+            object_shape="structured_table",
+            content_kind="equipment_table",
+            entity_kind="none",
+            title="Table 5-6: Advanced Armour",
+            table_number="5-6",
+            payload_json={
+                "text": "Table 5-6: Advanced Armour\n| Location | AP |",
+                "heading_path": ["Armour"],
+            },
+            text_snapshot_sha256="snapshot",
+            confidence=0.7,
+        ),
+        ReaderObservation(
+            id="table-observation-high",
+            book_id="core-rules",
+            page_id="core-rules:112",
+            page_number=112,
+            source_object_id="table-high",
+            reader_name="source_object_heuristic",
+            reader_version="test",
+            observation_type="table_region",
+            object_shape="structured_table",
+            content_kind="equipment_table",
+            entity_kind="none",
+            title="Table 5-6: Advanced Armour",
+            table_number="5-6",
+            payload_json={
+                "text": "Table 5-6: Advanced Armour\n| Location | AP |",
+                "heading_path": ["Armour"],
+            },
+            text_snapshot_sha256="snapshot",
+            confidence=0.9,
+        ),
+    )
+
+    candidates = build_candidates_from_observations(observations)
+
+    assert len(candidates) == 1
+    assert candidates[0].primary_source_object_id == "table-high"
+    assert candidates[0].confidence == 0.9
 
 
 def test_table_candidate_falls_back_when_no_pipe_cells_or_rows() -> None:
