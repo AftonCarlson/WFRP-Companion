@@ -14,6 +14,7 @@ from wfrp_companion.library.page_labels import load_calibrated_printed_page_rang
 from wfrp_companion.library import source_sets
 from wfrp_companion.assistant import agent_planning
 from wfrp_companion.assistant import research
+from wfrp_companion.assistant import turn_contract
 
 
 PROVIDER_UNAVAILABLE_MESSAGE = (
@@ -96,6 +97,26 @@ class SendChatResult:
     assistant_message: ChatMessage | None
     model_run: ModelRun
     citations: tuple[ChatCitation, ...]
+
+
+@dataclass(frozen=True)
+class FamiliarTurnDecisionRecord:
+    id: str
+    model_run_id: str
+    thread_id: str
+    user_message_id: str
+    retry_of_decision_id: str | None
+    turn_kind: str
+    answer_mode: str
+    subject: str | None
+    confidence: str
+    reasons: tuple[str, ...]
+    reader_context_policy: str
+    answer_outcome: str | None
+    outcome: dict[str, object]
+    metadata: dict[str, object]
+    created_at: str
+    updated_at: str
 
 
 class ChatStoreError(Exception):
@@ -1184,6 +1205,125 @@ def list_familiar_evidence_judgments(
     return tuple(familiar_evidence_judgment_from_row(row) for row in rows)
 
 
+def record_familiar_turn_decision(
+    config: AppConfig,
+    *,
+    model_run_id: str,
+    decision: turn_contract.TurnDecision,
+) -> FamiliarTurnDecisionRecord:
+    now = utc_timestamp()
+    with initialize_database(config.db_path) as connection:
+        existing = familiar_turn_decision_by_model_run_id(connection, model_run_id)
+        if existing is not None:
+            return familiar_turn_decision_from_row(existing)
+        run = model_run_row(connection, model_run_id)
+        if run["user_message_id"] is None:
+            raise ModelRunNotRetryableError(
+                f"Model run has no user message: {model_run_id}"
+            )
+        retry_of_decision_id = None
+        turn_kind = decision.turn_kind
+        answer_mode = decision.answer_mode
+        subject = decision.subject
+        confidence = decision.confidence
+        reasons_json = research.normalized_json(list(decision.reasons))
+        reader_context_policy = decision.reader_context_policy
+        metadata: dict[str, object] = {}
+        if run["retry_of_model_run_id"] is not None:
+            original_decision = familiar_turn_decision_by_model_run_id(
+                connection,
+                run["retry_of_model_run_id"],
+            )
+            if original_decision is not None:
+                retry_of_decision_id = original_decision["id"]
+                turn_kind = original_decision["turn_kind"]
+                answer_mode = original_decision["answer_mode"]
+                subject = original_decision["subject"]
+                confidence = original_decision["confidence"]
+                reasons_json = original_decision["reasons_json"]
+                reader_context_policy = original_decision["reader_context_policy"]
+                metadata["copied_from_retry_of_decision_id"] = original_decision["id"]
+            metadata["retry_of_model_run_id"] = run["retry_of_model_run_id"]
+        decision_id = new_id("turn-decision")
+        with connection:
+            connection.execute(
+                """
+                insert into familiar_turn_decisions (
+                  id,
+                  model_run_id,
+                  thread_id,
+                  user_message_id,
+                  retry_of_decision_id,
+                  turn_kind,
+                  answer_mode,
+                  subject,
+                  confidence,
+                  reasons_json,
+                  reader_context_policy,
+                  outcome_json,
+                  metadata_json,
+                  created_at,
+                  updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)
+                """,
+                (
+                    decision_id,
+                    model_run_id,
+                    run["thread_id"],
+                    run["user_message_id"],
+                    retry_of_decision_id,
+                    turn_kind,
+                    answer_mode,
+                    subject,
+                    confidence,
+                    reasons_json,
+                    reader_context_policy,
+                    research.normalized_json(metadata),
+                    now,
+                    now,
+                ),
+            )
+        return familiar_turn_decision_from_row(
+            familiar_turn_decision_row(connection, decision_id)
+        )
+
+
+def update_familiar_turn_decision_outcome(
+    config: AppConfig,
+    *,
+    model_run_id: str,
+    answer_outcome: str,
+    outcome: dict[str, object] | None = None,
+) -> FamiliarTurnDecisionRecord:
+    now = utc_timestamp()
+    with initialize_database(config.db_path) as connection:
+        row = familiar_turn_decision_by_model_run_id(connection, model_run_id)
+        if row is None:
+            raise ModelRunNotFoundError(
+                f"Familiar turn decision not found for model run: {model_run_id}"
+            )
+        with connection:
+            connection.execute(
+                """
+                update familiar_turn_decisions
+                set answer_outcome = ?,
+                    outcome_json = ?,
+                    updated_at = ?
+                where model_run_id = ?
+                """,
+                (
+                    answer_outcome,
+                    research.normalized_json(outcome or {}),
+                    now,
+                    model_run_id,
+                ),
+            )
+        return familiar_turn_decision_from_row(
+            familiar_turn_decision_by_model_run_id(connection, model_run_id)
+        )
+
+
 def list_public_research_events(
     config: AppConfig,
     model_run_id: str,
@@ -1540,6 +1680,37 @@ def familiar_research_plan_row_or_none(
         where id = ?
         """,
         (plan_id,),
+    ).fetchone()
+
+
+def familiar_turn_decision_row(
+    connection: sqlite3.Connection,
+    decision_id: str,
+) -> sqlite3.Row:
+    row = connection.execute(
+        """
+        select *
+        from familiar_turn_decisions
+        where id = ?
+        """,
+        (decision_id,),
+    ).fetchone()
+    if row is None:
+        raise ModelRunNotFoundError(f"Familiar turn decision not found: {decision_id}")
+    return row
+
+
+def familiar_turn_decision_by_model_run_id(
+    connection: sqlite3.Connection,
+    model_run_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        select *
+        from familiar_turn_decisions
+        where model_run_id = ?
+        """,
+        (model_run_id,),
     ).fetchone()
 
 
@@ -2060,6 +2231,27 @@ def familiar_research_plan_from_row(row: sqlite3.Row) -> agent_planning.Research
         validation_errors=research.string_tuple_from_json(
             row["validation_errors_json"]
         ),
+    )
+
+
+def familiar_turn_decision_from_row(row: sqlite3.Row) -> FamiliarTurnDecisionRecord:
+    return FamiliarTurnDecisionRecord(
+        id=row["id"],
+        model_run_id=row["model_run_id"],
+        thread_id=row["thread_id"],
+        user_message_id=row["user_message_id"],
+        retry_of_decision_id=row["retry_of_decision_id"],
+        turn_kind=row["turn_kind"],
+        answer_mode=row["answer_mode"],
+        subject=row["subject"],
+        confidence=row["confidence"],
+        reasons=research.string_tuple_from_json(row["reasons_json"]),
+        reader_context_policy=row["reader_context_policy"],
+        answer_outcome=row["answer_outcome"],
+        outcome=research.object_from_json(row["outcome_json"]),
+        metadata=research.object_from_json(row["metadata_json"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 

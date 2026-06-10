@@ -297,6 +297,7 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0006_embedding_provider_identity",
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
+        "0009_familiar_reliability_contract",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -379,10 +380,18 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0009_familiar_reliability_contract",),
+            ).fetchone()
+            is not None
+        )
         assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
         assert migrations.table_exists(connection, "familiar_research_runs")
         assert migrations.table_exists(connection, "familiar_research_plans")
+        assert migrations.table_exists(connection, "familiar_turn_decisions")
         assert migrations.table_exists(connection, "familiar_tool_calls")
         assert migrations.table_exists(connection, "familiar_evidence_judgments")
         assert migrations.table_exists(connection, "chat_thread_context")
@@ -412,6 +421,113 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         assert run_source["source_set_id"] == "rules-core"
         assert run_source["book_id"] == "core-rules"
         assert run_source["book_title_snapshot"] == "Core Rules"
+
+
+def test_familiar_reliability_contract_migration_adds_decision_table(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-decisions.sqlite"
+    create_legacy_phase6_database(db_path)
+
+    apply_pending_migrations(db_path)
+
+    with open_connection(db_path) as connection:
+        columns = set(migrations.column_names(connection, "familiar_turn_decisions"))
+        assert {
+            "id",
+            "model_run_id",
+            "thread_id",
+            "user_message_id",
+            "retry_of_decision_id",
+            "turn_kind",
+            "answer_mode",
+            "subject",
+            "confidence",
+            "reasons_json",
+            "reader_context_policy",
+            "answer_outcome",
+            "outcome_json",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        }.issubset(columns)
+        foreign_keys = connection.execute(
+            "pragma foreign_key_list(familiar_turn_decisions)"
+        ).fetchall()
+        assert any(row["table"] == "model_runs" for row in foreign_keys)
+        assert any(row["table"] == "familiar_turn_decisions" for row in foreign_keys)
+
+        connection.execute(
+            """
+            insert into familiar_turn_decisions (
+              id,
+              model_run_id,
+              thread_id,
+              user_message_id,
+              turn_kind,
+              answer_mode,
+              confidence,
+              reasons_json,
+              reader_context_policy,
+              answer_outcome,
+              outcome_json,
+              metadata_json,
+              created_at,
+              updated_at
+            )
+            values (
+              'decision-1',
+              'model-1',
+              'thread-1',
+              'message-1',
+              'conversation',
+              'direct',
+              'high',
+              '["greeting_or_social_text"]',
+              'ignore',
+              'direct_response',
+              '{}',
+              '{}',
+              '2026-06-10T00:00:00Z',
+              '2026-06-10T00:00:00Z'
+            )
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                insert into familiar_turn_decisions (
+                  id,
+                  model_run_id,
+                  thread_id,
+                  user_message_id,
+                  turn_kind,
+                  answer_mode,
+                  confidence,
+                  reasons_json,
+                  reader_context_policy,
+                  outcome_json,
+                  metadata_json,
+                  created_at,
+                  updated_at
+                )
+                values (
+                  'decision-bad',
+                  'model-1',
+                  'thread-1',
+                  'message-1',
+                  'anything_goes',
+                  'research',
+                  'high',
+                  '[]',
+                  'ignore',
+                  '{}',
+                  '{}',
+                  '2026-06-10T00:00:00Z',
+                  '2026-06-10T00:00:00Z'
+                )
+                """
+            )
 
 
 def test_familiar_research_plans_migration_rebuilds_agent_tables(
@@ -1078,6 +1194,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0006_embedding_provider_identity",
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
+        "0009_familiar_reliability_contract",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -1089,6 +1206,7 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0006_embedding_provider_identity",
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
+        "0009_familiar_reliability_contract",
     )
 
 
@@ -1109,6 +1227,7 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0006_embedding_provider_identity",
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
+        "0009_familiar_reliability_contract",
     )
     with open_connection(db_path) as connection:
         assert (

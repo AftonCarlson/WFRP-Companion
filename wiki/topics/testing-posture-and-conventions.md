@@ -16,7 +16,8 @@ Phase 7 PR7 retrieval rank fusion/reranker protocol, Phase 7 PR8 local
 vector retrieval channel, Phase 7 PR9 structured source-object evidence, Phase
 7 PR10 printed page-label calibration/backfill, Phase 7 PR11 Familiar prompt
 history/history-aware retrieval planning, the local semantic embeddings phase,
-and the Familiar tool-calling hybrid RAG research-agent phase.
+the Familiar tool-calling hybrid RAG research-agent phase, the Familiar
+evidence-gate hardening phase, and the Familiar reliability-contract phase.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -33,6 +34,14 @@ Prioritize tests around places where silent errors would damage trust:
 - Prompt construction includes citations and respects context limits.
 - Assistant responses handle missing context honestly.
 - Citation links open the correct PDF page.
+- Turn triage keeps direct/clarifying turns out of research and provider
+  construction.
+- App-owned requirement plans cover every required part of multi-part rules and
+  statline requests before retries.
+- Retry runs execute the persisted turn decision contract rather than a fresh
+  classifier result.
+- Public provider failures use bounded safe messages and do not persist raw
+  exception strings.
 
 ## Test Types
 
@@ -96,16 +105,22 @@ Current focused test files:
 - `tests/api/test_source_set_routes.py`
 - `tests/assistant/test_chat_service.py`
 - `tests/assistant/test_chat_store.py`
+- `tests/assistant/test_answer_contract.py`
 - `tests/assistant/test_conversation_context.py`
 - `tests/assistant/test_context_resolution.py`
+- `tests/assistant/test_evidence_policy.py`
 - `tests/assistant/test_evidence_validation.py`
 - `tests/assistant/test_familiar_agent.py`
+- `tests/assistant/test_familiar_golden_contract.py`
+- `tests/assistant/test_prompt_diagnostics.py`
 - `tests/assistant/test_prompts.py`
 - `tests/assistant/test_provider.py`
+- `tests/assistant/test_requirement_planner.py`
 - `tests/assistant/test_research.py`
 - `tests/assistant/test_research_tools.py`
 - `tests/assistant/test_retrieval.py`
 - `tests/assistant/test_retrieval_module_contracts.py`
+- `tests/assistant/test_turn_contract.py`
 - `tests/db/test_schema.py`
 - `tests/db/test_migrations.py`
 - `tests/library/test_identity.py`
@@ -258,24 +273,31 @@ whole-library failure modes such as career/profile false positives, wrong
 named entities, table/prose mentions without stat fields, heading-only matches,
 vector-only wrong-entity candidates, and scattered multi-word subjects.
 
+Familiar reliability-contract tests cover direct/clarifying turn triage,
+provider-unavailable direct responses, advisory provider planning fallback,
+deterministic app-owned requirement planning, zero-attempt requirement
+scheduling before retries, corrective evidence policy, partial/insufficient
+answer outcomes, retry decision immutability, safe public provider error
+messages, `turn_decision` stream events, and golden user-level failures such as
+hit-location plus armor-by-location lookup.
+
 Frontend tests cover the API client, initial workspace loading, validated
 workspace storage, pointer and keyboard panel resize/collapse/maximize
 behavior, Library/Search tabs, grouped book sections, per-book source-set
 toggles, section-level Library bulk toggles, absence of noisy per-book
 readiness labels, search result full text expansion/error handling, Grimoire
 tab, page, zoom, and view-mode behavior, two-page spread math, guarded PDF.js
-rendering/retry and cancellation behavior, Familiar shell behavior, Familiar
-reader-context request payloads, expandable research trace rendering including
-accepted/partial/rejected evidence counts and reason counts, safe
-Familiar markdown rendering, explicit PDF-page citation/search opens, and
-browser e2e flows for Library/Search/Grimoire/Familiar page-aware chat plus
-panel overflow.
+rendering/retry and cancellation behavior, Familiar shell behavior,
+`turn_decision` event handling, Familiar reader-context request payloads,
+expandable research trace rendering including accepted/partial/rejected
+evidence counts and reason counts, safe Familiar markdown rendering, explicit
+PDF-page citation/search opens, and browser e2e flows for
+Library/Search/Grimoire/Familiar page-aware chat plus panel overflow.
 
-The latest full backend verification command on 2026-06-09 reported 563 tests
-passing with 100% coverage across `wfrp_companion` and the tracked tool
-entrypoints. The latest frontend verification reported 137 Vitest tests
-passing with coverage above the configured 90% thresholds, a successful
-production build, and 2 Playwright e2e tests passing.
+The latest full backend verification command on 2026-06-10 reported 721 tests
+passing with 100.00% coverage for `wfrp_companion`. The latest frontend
+verification reported 139 Vitest tests passing with coverage above the
+configured 90% thresholds and a successful production build.
 
 ## Manual QA
 

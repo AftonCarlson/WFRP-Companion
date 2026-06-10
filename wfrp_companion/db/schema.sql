@@ -533,6 +533,50 @@ create table if not exists familiar_research_runs (
   check(tool_rounds_used <= max_tool_rounds)
 );
 
+create table if not exists familiar_turn_decisions (
+  id text primary key,
+  model_run_id text not null unique references model_runs(id) on delete cascade,
+  thread_id text not null references chat_threads(id) on delete cascade,
+  user_message_id text not null references chat_messages(id) on delete cascade,
+  retry_of_decision_id text references familiar_turn_decisions(id) on delete set null,
+  turn_kind text not null,
+  answer_mode text not null,
+  subject text,
+  confidence text not null,
+  reasons_json text not null default '[]',
+  reader_context_policy text not null,
+  answer_outcome text,
+  outcome_json text not null default '{}',
+  metadata_json text not null default '{}',
+  created_at text not null,
+  updated_at text not null,
+  check(turn_kind in (
+    'conversation',
+    'app_help',
+    'rules_lookup',
+    'statline_lookup',
+    'source_navigation',
+    'lore_lookup',
+    'scene_prep',
+    'clarification_needed'
+  )),
+  check(answer_mode in ('direct', 'research', 'clarify')),
+  check(confidence in ('high', 'medium', 'low')),
+  check(reader_context_policy in (
+    'ignore',
+    'routing_hint',
+    'page_navigation_hint'
+  )),
+  check(answer_outcome is null or answer_outcome in (
+    'direct_response',
+    'full_answer',
+    'partial_answer',
+    'clarifying_question',
+    'insufficient_evidence',
+    'provider_error'
+  ))
+);
+
 create table if not exists familiar_research_plans (
   id text primary key,
   research_run_id text not null references familiar_research_runs(id) on delete cascade,
@@ -653,6 +697,10 @@ create unique index if not exists ux_model_runs_one_active_retry
 on model_runs(retry_of_model_run_id)
 where retry_of_model_run_id is not null
   and status in ('queued', 'retrieving', 'calling_model');
+create index if not exists ix_familiar_turn_decisions_thread
+on familiar_turn_decisions(thread_id, created_at);
+create index if not exists ix_familiar_turn_decisions_retry
+on familiar_turn_decisions(retry_of_decision_id);
 create index if not exists ix_familiar_research_runs_model_run
 on familiar_research_runs(model_run_id);
 create index if not exists ix_familiar_research_runs_thread

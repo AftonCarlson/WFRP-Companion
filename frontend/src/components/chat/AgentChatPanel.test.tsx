@@ -429,6 +429,10 @@ describe("AgentChatPanel", () => {
         model_run: modelRun("retrieving"),
       });
       options.onEvent({
+        type: "turn_decision",
+        metadata: { turn_kind: "statline_lookup", answer_mode: "research" },
+      });
+      options.onEvent({
         type: "research_started",
         metadata: { resolved_query: "harpy statline" },
       });
@@ -497,6 +501,7 @@ describe("AgentChatPanel", () => {
       await screen.findAllByText("Evidence sufficient; 1 accepted")
     )[0];
     await user.click(summary);
+    expect(screen.getByText("statline lookup; research")).toBeInTheDocument();
     expect(screen.getByText("Research started")).toBeInTheDocument();
     expect(screen.getByText("Research plan accepted")).toBeInTheDocument();
     expect(screen.getByText("Running hybrid search")).toBeInTheDocument();
@@ -504,6 +509,49 @@ describe("AgentChatPanel", () => {
       screen.getByText("Tool returned 1 candidate(s); vector ran"),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Answering from evidence").length).toBeGreaterThan(0);
+  });
+
+  it("does not render research trace chrome for direct turn decisions", async () => {
+    const user = userEvent.setup();
+    const client = chatClient({
+      async streamChatMessage(threadId, options) {
+        options.onEvent({
+          type: "accepted",
+          user_message: {
+            id: "m-direct",
+            thread_id: threadId,
+            role: "user",
+            content: options.content,
+            created_at: "now",
+          },
+          model_run: modelRun("calling_model"),
+        });
+        options.onEvent({
+          type: "turn_decision",
+          metadata: { turn_kind: "conversation", answer_mode: "direct" },
+        });
+        options.onEvent({
+          type: "completed",
+          assistant_message: {
+            id: "a-direct",
+            thread_id: threadId,
+            role: "assistant",
+            content: "Hello.",
+            created_at: "later",
+          },
+          model_run: modelRun("completed"),
+          citations: [],
+        });
+      },
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={false} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "hello");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(await screen.findByText("Hello.")).toBeInTheDocument();
+    expect(screen.queryByText("conversation; research")).not.toBeInTheDocument();
+    expect(screen.queryByText("Research turn")).not.toBeInTheDocument();
   });
 
   it("renders fallback research trace labels for non-search tool events", async () => {

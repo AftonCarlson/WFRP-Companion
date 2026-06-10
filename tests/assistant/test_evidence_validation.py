@@ -1341,3 +1341,55 @@ def test_required_terms_and_helper_edges_are_rejected_when_missing() -> None:
         "critical hit table",
         "critical table",
     )
+
+
+def test_subject_match_reason_edges_cover_identity_and_missing_zones() -> None:
+    evidence_requirement = requirement(
+        requirement_type="statline_evidence",
+        subject=subject_constraint(canonical="Black Orc", include_terms=("Black Orc",)),
+        object_type_hints=("stat_block",),
+    )
+    source_hit = hit(
+        context_text="Profile M 4 WS 31 BS 21 S 35 T 40 W 12.",
+        object_title="Black Orc",
+    )
+    zones = evidence_constraints.build_evidence_zones(
+        None,
+        source_hit,
+        source_book_ids={"bestiary"},
+    )
+    constraint = evidence_constraints.constraint_from_requirement(evidence_requirement)
+
+    assert evidence_validation.hit_matches_requirement_subject(
+        source_hit,
+        evidence_requirement,
+        zones,
+    )
+    assert (
+        evidence_validation.requirement_subject_match_reason(
+            source_hit,
+            constraint,
+            zones,
+        )
+        == "matched"
+    )
+    assert (
+        evidence_validation.corrective_subject_match_reason(
+            constraint,
+            None,
+        )
+        == "subject_mismatch"
+    )
+    assert (
+        evidence_validation.requirement_subject_match_reason(
+            hit(
+                context_text="Common Orc profile M 4 WS 31 BS 21 S 35 T 40 W 12.",
+                object_type="page_fallback",
+                object_title=None,
+                source_object_id=None,
+            ),
+            constraint,
+            None,
+        )
+        == "subject_mismatch"
+    )

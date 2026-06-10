@@ -168,6 +168,28 @@ def test_table_query_prefers_actual_table_over_prose_mention() -> None:
     assert ranked[0][0].source_object_id == "synthetic:hit-location-table"
 
 
+def test_over_specific_provider_subject_accepts_exact_hit_location_table() -> None:
+    result = validate(
+        hit(
+            subject="Hit Location",
+            book_id="synthetic-rules",
+            title="Synthetic Core Rules",
+            context_text="% roll Location 01-15 Head 16-35 Right Arm",
+            object_type="table",
+            object_title="Hit Location",
+        ),
+        requirement(
+            requirement_id="hit_location_rule",
+            subject="hit location determination in combat",
+            requirement_type="topical_evidence",
+            object_type_hints=("table", "rule_section"),
+        ),
+    )
+
+    assert result.status == "sufficient"
+    assert result.judgments[0].reason_code == "accepted_identity_subject_match"
+
+
 def test_heading_only_entity_match_is_not_selected_over_direct_match() -> None:
     heading_only = retrieval.EvidenceCandidate(
         book_id="synthetic-adventure",

@@ -210,7 +210,8 @@ def test_stream_message_can_emit_model_deltas_and_completed_event(
     events = [line for line in response.text.splitlines() if line]
     assert response.status_code == 200
     assert '"type":"accepted"' in events[0]
-    assert '"type":"research_started"' in events[1]
+    assert '"type":"turn_decision"' in events[1]
+    assert '"type":"research_started"' in events[2]
     assert any('"type":"retrieval"' in event for event in events)
     delta_event = next(event for event in events if '"type":"delta"' in event)
     assert '"text_delta":"Rules answer."' in delta_event
@@ -343,6 +344,7 @@ def test_thread_detail_route_collapses_successful_retry(tmp_path: Path) -> None:
     assert [event["type"] for event in turn["research_events"]] == [
         "research_started",
         "research_plan",
+        "tool_call",
         "tool_call",
     ]
     assert turn["research_events"][1]["label"] == "Research plan accepted"

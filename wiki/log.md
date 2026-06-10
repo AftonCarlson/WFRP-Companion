@@ -1,5 +1,32 @@
 # Wiki Compile Log
 
+## 2026-06-10 Familiar Reliability Contract Phase
+
+- Replaced provider-owned Familiar orchestration with an app-owned reliability
+  contract. Turns are triaged before provider construction and stored in
+  `familiar_turn_decisions`; direct/clarifying turns complete locally without
+  research rows.
+- App-owned requirement planning now builds the accepted research plan, while
+  provider planning is advisory metadata only. The scheduler prioritizes
+  required zero-attempt requirements before retries and suppresses exact
+  duplicate actions.
+- Added answer outcomes for full, partial, insufficient, direct, clarifying, and
+  provider-error responses. Final prompts receive accepted evidence plus
+  requirement/outcome summaries so partial answers can be cited honestly.
+- Hardened retry and failure behavior: retry execution uses the persisted
+  effective turn decision, advisory provider failures do not prevent local
+  research state from being recorded, and public provider failure messages are
+  bounded generic text rather than raw exception strings.
+- Updated frontend/API chat traces with `turn_decision` handling and kept
+  non-research decisions out of the visible research trace.
+- Vector readiness was smoke-verified locally with the `local-hash` provider;
+  operational readiness still depends on the running app's embedding provider,
+  model, dimensions, and current local embedding rows matching.
+- Verification completed: `ruff check wfrp_companion tests tools`; backend
+  coverage gate with 721 tests at 100.00%; frontend Vitest coverage with 139
+  tests passing; frontend production build. Independent agent review green-lit
+  the PR after two rounds of fixes.
+
 ## 2026-06-09 Familiar Evidence-Gate Hardening Phase
 
 - Implemented requirement-scoped evidence constraints for Familiar retrieval

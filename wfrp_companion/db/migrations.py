@@ -18,6 +18,7 @@ PAGE_LABEL_CALIBRATION_MIGRATION_ID = "0005_page_label_calibration"
 EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID = "0006_embedding_provider_identity"
 FAMILIAR_AGENT_RESEARCH_MIGRATION_ID = "0007_familiar_agent_research"
 FAMILIAR_RESEARCH_PLANS_MIGRATION_ID = "0008_familiar_research_plans"
+FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID = "0009_familiar_reliability_contract"
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
@@ -27,6 +28,7 @@ MIGRATION_IDS: tuple[str, ...] = (
     EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID,
     FAMILIAR_AGENT_RESEARCH_MIGRATION_ID,
     FAMILIAR_RESEARCH_PLANS_MIGRATION_ID,
+    FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID,
 )
 
 
@@ -142,6 +144,8 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         migration_function = apply_familiar_agent_research
     elif migration_id == FAMILIAR_RESEARCH_PLANS_MIGRATION_ID:
         migration_function = apply_familiar_research_plans
+    elif migration_id == FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID:
+        migration_function = apply_familiar_reliability_contract
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -282,6 +286,12 @@ def apply_familiar_research_plans(connection: sqlite3.Connection) -> None:
     create_familiar_research_plan_indexes(connection)
 
 
+def apply_familiar_reliability_contract(connection: sqlite3.Connection) -> None:
+    connection.execute(FAMILIAR_TURN_DECISIONS_TABLE_SQL)
+    for statement in FAMILIAR_TURN_DECISION_INDEX_SQL:
+        connection.execute(statement)
+
+
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
     for statement in sql.split(";"):
         statement = statement.strip()
@@ -327,6 +337,7 @@ def collect_table_counts(connection: sqlite3.Connection) -> tuple[tuple[str, int
         "retrieval_hits",
         "model_runs",
         "chat_thread_context",
+        "familiar_turn_decisions",
         "familiar_research_runs",
         "familiar_research_plans",
         "familiar_tool_calls",
@@ -1312,6 +1323,53 @@ create table familiar_research_runs (
 """
 
 
+FAMILIAR_TURN_DECISIONS_TABLE_SQL = """
+create table if not exists familiar_turn_decisions (
+  id text primary key,
+  model_run_id text not null unique references model_runs(id) on delete cascade,
+  thread_id text not null references chat_threads(id) on delete cascade,
+  user_message_id text not null references chat_messages(id) on delete cascade,
+  retry_of_decision_id text references familiar_turn_decisions(id) on delete set null,
+  turn_kind text not null,
+  answer_mode text not null,
+  subject text,
+  confidence text not null,
+  reasons_json text not null default '[]',
+  reader_context_policy text not null,
+  answer_outcome text,
+  outcome_json text not null default '{}',
+  metadata_json text not null default '{}',
+  created_at text not null,
+  updated_at text not null,
+  check(turn_kind in (
+    'conversation',
+    'app_help',
+    'rules_lookup',
+    'statline_lookup',
+    'source_navigation',
+    'lore_lookup',
+    'scene_prep',
+    'clarification_needed'
+  )),
+  check(answer_mode in ('direct', 'research', 'clarify')),
+  check(confidence in ('high', 'medium', 'low')),
+  check(reader_context_policy in (
+    'ignore',
+    'routing_hint',
+    'page_navigation_hint'
+  )),
+  check(answer_outcome is null or answer_outcome in (
+    'direct_response',
+    'full_answer',
+    'partial_answer',
+    'clarifying_question',
+    'insufficient_evidence',
+    'provider_error'
+  ))
+)
+"""
+
+
 FAMILIAR_TOOL_CALLS_TABLE_SQL = """
 create table familiar_tool_calls (
   id text primary key,
@@ -1484,5 +1542,17 @@ FAMILIAR_RESEARCH_INDEX_SQL: tuple[str, ...] = (
     """
     create index if not exists ix_familiar_evidence_judgments_requirement
     on familiar_evidence_judgments(research_plan_id, requirement_id, status)
+    """,
+)
+
+
+FAMILIAR_TURN_DECISION_INDEX_SQL: tuple[str, ...] = (
+    """
+    create index if not exists ix_familiar_turn_decisions_thread
+    on familiar_turn_decisions(thread_id, created_at)
+    """,
+    """
+    create index if not exists ix_familiar_turn_decisions_retry
+    on familiar_turn_decisions(retry_of_decision_id)
     """,
 )

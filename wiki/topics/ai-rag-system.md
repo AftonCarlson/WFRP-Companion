@@ -16,23 +16,47 @@ Vector search alone is not enough for rules-heavy material.
 
 Current Familiar implementation:
 
-- Familiar is a bounded tool-calling research agent, not a single retrieval
-  call chained directly to one model answer.
-- Each run resolves the user's request, preserves active follow-up context
-  such as the current subject, records a `familiar_research_runs` row, and
-  must accept a provider-submitted public research plan before any retrieval
-  tool runs.
-- Accepted plans are stored in `familiar_research_plans`; tool calls and
-  evidence judgments carry `research_plan_id` and `requirement_id` so the app
-  can audit which requirement each retrieval attempt served.
-- Familiar requirement ids are provider-facing plan contract fields, not
-  database-internal names. The parser and tool schemas share one published
-  pattern and explicitly accept short provider ids such as `r1`, while still
-  rejecting unsafe shapes such as hyphenated ids.
+- Familiar now uses an **app-owned reliability contract** instead of a
+  provider-owned research trajectory. `chat_service` triages each turn before
+  provider construction or research and stores the result in
+  `familiar_turn_decisions`.
+- Turn triage distinguishes direct conversation, app help, clarifying turns,
+  rules lookup, statline lookup, source navigation, lore lookup, and scene prep.
+  Direct and clarifying turns complete locally and create no
+  `familiar_research_runs` row.
+- Retry runs copy immutable triage fields from the original
+  `familiar_turn_decisions` row when one exists, and runtime uses that persisted
+  effective decision after recording. Stored retry metadata may link to the
+  original decision, but answer outcome is recorded fresh for the retry.
+- Research turns resolve the request, preserve active follow-up context such as
+  the current subject, record a `familiar_research_runs` row, and then store an
+  app-owned accepted plan in `familiar_research_plans`. Tool calls and evidence
+  judgments carry `research_plan_id` and `requirement_id` so the app can audit
+  which requirement each retrieval attempt served.
+- Provider planning is **advisory only**. The provider may return a planning
+  tool call and its call id may be attached as metadata, but
+  `requirement_planner.build_research_plan()` always produces the accepted plan
+  that drives retrieval. Provider unavailability during advisory planning is
+  swallowed so deterministic local research can still run and persist state.
+- The provider is used for final prose after research. Provider failures at
+  final generation fail the model run after evidence validation has been
+  persisted. Public/persisted provider failure messages are bounded generic
+  strings; raw exception text, local paths, provider payloads, and PDF filenames
+  must not be streamed or stored in public chat state.
+- Requirement planning is deterministic and app-owned. It creates explicit
+  requirements for known multi-part requests such as hit-location plus
+  armor-by-location, statline comparisons, page references, and broad
+  rules/lore/scene-prep lookups. Provider-authored subject phrases are not hard
+  validation law.
+- The backend scheduler owns requirement coverage. It executes the planned
+  first local action, then prioritizes required zero-attempt requirements before
+  retrying an already-attempted unsatisfied requirement with a different query.
+  Exact duplicate actions are suppressed, and the max tool-round budget remains
+  bounded.
 - Chat requests may include `reader_context` from the active Grimoire tab:
   active book id, active PDF page number, optional printed page label, and open
-  book ids. Familiar treats this only as a routing hint for page-aware
-  recovery; it is not evidence and cannot satisfy citations by itself.
+  book ids. Familiar treats this only as a routing/page-navigation hint; it is
+  not evidence and cannot satisfy citations by itself.
 - `search_library` is the default tool. It uses hybrid retrieval over the
   thread's checked source-book snapshot: page FTS, source-object FTS,
   source-object fallback scan, current local vector candidates when embeddings
@@ -53,48 +77,35 @@ Current Familiar implementation:
   subject identity, book/page hints, object-type hints, statline field
   sufficiency, and required supporting terms before a hit can become accepted
   evidence.
-- Structural requirements fail closed when the provider supplies only generic
-  subject words such as `profile`, `stat block`, `table`, or `page`.
-  Subjectless `page_evidence` is allowed only when it has both a concrete book
-  hint and a concrete page hint. A book-only or page-only hint is not enough to
-  accept unrelated page text.
+- Corrective evidence policy strips generic/filler terms from hard subject
+  matching and allows exact identity/object/page evidence to recover from
+  over-specific plan wording while still rejecting wrong-source evidence.
+- Structural requirements fail closed when only generic subject words such as
+  `profile`, `stat block`, `table`, or `page` are available. Subjectless
+  `page_evidence` is allowed only when it has concrete page fallback hints; a
+  book-only or page-only hint is not enough to accept unrelated page text.
 - Statline requirements require enough WFRP-style profile fields to be present
   in the validated evidence zone; an object type or a few isolated stat tokens
   is not sufficient. Multi-word structural subjects must match as a phrase in
   source-object identity text, with page-fallback evidence allowed to prove the
   phrase from body text.
-- Requirement hint matching is tolerant of common provider wording while still
-  being strict semantically: object-type hints normalize spaces/underscores,
-  book hints ignore words such as `book`/`pdf`, and page hints ignore words
-  such as `printed`/`page` while still requiring the actual anchor tokens.
+- Requirement hint matching is tolerant of common wording while still being
+  strict semantically: object-type hints normalize spaces/underscores, book
+  hints ignore words such as `book`/`pdf`, and page hints ignore words such as
+  `printed`/`page` while still requiring the actual anchor tokens.
 - **A Familiar run is not sufficient until every required plan requirement has
   met its own `min_accepted_hits`.** Accepted evidence is tracked per
   requirement, so one successful retrieval cannot prematurely satisfy a
   multi-requirement plan.
 - Accepted evidence is deduplicated by the same key that `retrieval_hits`
   enforces for a single run: source-object id when present, otherwise page id.
-  Repeated provider lookups can waste tool rounds, but they must not inflate a
-  requirement ledger or crash final accepted-evidence persistence with duplicate
-  hit rows.
-- Weak or empty evidence can trigger bounded provider-directed tool actions.
-  The backend validates tool names, requirement ids, argument/requirement
-  equality, scope, evidence status, and max tool rounds before any local side
-  effect. A `finish_research` action can stop without running another
-  retrieval, but `requirements_satisfied` is accepted only when the backend's
-  per-requirement ledger is satisfied. The final answer still uses only
-  accepted evidence or an honest insufficiency.
-- Recovery planning is stateless with respect to OpenAI response storage:
-  provider calls do not rely on `previous_response_id` or hosted tool-result
-  chaining. Prior local tool outputs are summarized in the next research prompt
-  instead, and the prompt includes the accepted public plan plus requirement
-  ids/status/counts and bounded requirement constraints such as subject terms,
-  required/excluded terms, object hints, and page/book hints so recovery
-  actions stay anchored to the plan while preserving local-first/private
-  behavior and avoiding stale provider response ids.
-- Requirement-aware validation now checks plan constraints rather than only a
-  literal normalized subject. This lets Familiar reject excluded evidence such
-  as Rat Ogre hits for regular Ogre requirements while accepting broad cited
-  recommendation evidence when the plan does not require a fake subject phrase.
+  Repeated lookups must not inflate a requirement ledger or crash final
+  accepted-evidence persistence with duplicate hit rows.
+- Answer outcomes are app-owned: `direct_response`, `full_answer`,
+  `partial_answer`, `clarifying_question`, `insufficient_evidence`, or
+  `provider_error`. Final prompts receive accepted evidence plus requirement
+  status/missing summaries so Familiar can give cited partial answers instead
+  of collapsing every validation miss into a blanket refusal.
 - Active stat follow-ups such as "give me the stats",
   "give me their stats", and common typo forms such as "give me there stats"
   resolve to the current thread subject before retrieval.
@@ -108,14 +119,18 @@ Current Familiar implementation:
   books, source-object indexed books, table/stat indexed books, current
   vectorized books, vectorized enabled books, provider, dimensions, and
   aggregate vector status.
-- Familiar chat turns surface a compact expandable public research trace from
-  stream events and persisted chat history: research start, accepted plan,
-  tool call, retrieval/candidate counts, vector status when reported,
-  evidence validation status, finalizing decisions, and failures. **Public trace
-  metadata is intentionally enum/count/id/status based** before it reaches the
-  API/UI; resolved queries, plan summaries, tool purposes, raw provider tool
-  arguments, local paths, PDF filenames, and copied source text are not exposed
-  through progress metadata.
+- **Vector readiness is operational, not automatic.** A running app needs
+  matching `WFRP_EMBEDDING_PROVIDER` / model / dimensions settings and current
+  local embeddings. If those do not match, hybrid retrieval fails closed to
+  lexical/source-object/page channels and the trace should expose why vectors
+  were skipped.
+- Familiar chat turns surface compact public trace events from streaming and
+  persisted chat history: `turn_decision`, research start, accepted app plan,
+  tool call, retrieval/candidate counts, vector status when reported, evidence
+  validation status, and failures. **Public trace metadata is intentionally
+  enum/count/id/status based** before it reaches the API/UI; resolved queries,
+  plan summaries, tool purposes, raw provider tool arguments, local paths, PDF
+  filenames, and copied source text are not exposed through progress metadata.
 - Retrieval and tool-result stream payloads expose accepted citations only.
   Public traces may show accepted/partial/rejected counts and reason counts,
   but rejected snippets and raw rejected citation payloads are kept out of the
@@ -567,16 +582,16 @@ only for conversational references and user intent; it is not retrieved
 rules/evidence. Current retrieved context remains the only basis for cited WFRP
 claims.
 
-The current Familiar agent has two prompt surfaces:
+The current Familiar agent has two provider prompt surfaces:
 
-- A research prompt that exposes only bounded tools:
-  `search_library`, `open_page`, and `lookup_source_object`. It instructs the
-  model to use tools only for retrieval correction and to keep factual claims
-  out of tool planning.
-- A final answer prompt that receives accepted evidence only. It instructs
-  Familiar to cite book/page references for factual WFRP claims, say when
-  evidence is insufficient, distinguish rules from GM interpretation, and avoid
-  long copyrighted excerpts.
+- An advisory planning prompt that can request `set_research_plan`, but the app
+  still builds and stores the accepted deterministic plan. Advisory provider
+  output must not become hard subject constraints or scheduler control.
+- A final answer prompt that receives accepted evidence only plus app-owned
+  requirement/outcome summaries. It instructs Familiar to cite book/page
+  references for factual WFRP claims, give honest partial/insufficient-evidence
+  answers, distinguish rules from GM interpretation, and avoid long copyrighted
+  excerpts.
 
 ## Streaming Provider Loop
 
@@ -587,6 +602,8 @@ Familiar streams output through the backend-owned endpoint
 `fetch()` with a request body and reads newline-delimited JSON events:
 
 - `accepted` after the user message and `model_runs` row are persisted.
+- `turn_decision` after app-owned triage is persisted; direct/clarifying turns
+  complete locally after this event and do not create research rows.
 - `research_started` after the Familiar research run is created and the
   request has a resolved intent/query.
 - `tool_call` before each backend research tool is executed.

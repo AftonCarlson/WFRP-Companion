@@ -1,6 +1,6 @@
 # WFRP Companion Knowledge Base
 
-Last compiled: 2026-06-09 Familiar tool-calling hybrid RAG
+Last compiled: 2026-06-10 Familiar reliability contract
 
 ## Topics
 

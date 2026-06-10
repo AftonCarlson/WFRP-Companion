@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from wfrp_companion.assistant import agent_planning
 from wfrp_companion.assistant import chat_store
 from wfrp_companion.assistant import evidence_constraints
+from wfrp_companion.assistant import evidence_policy
 from wfrp_companion.assistant import research
 from wfrp_companion.assistant import statline_fields
 from wfrp_companion.assistant.evidence import RetrievedHit
@@ -26,6 +27,10 @@ STATLINE_OBJECT_TYPES = {
 STATLINE_MARKER_RE = re.compile(
     r"\b(?:m|ws|bs|s|t|w|ag|int|wp|fel|a|fp|ip|sb|tb)\b\s*[:0-9]",
     re.IGNORECASE,
+)
+CORRECTIVE_SUBJECT_REQUIREMENT_TYPES = (
+    *evidence_constraints.STRUCTURAL_REQUIREMENT_TYPES,
+    "topical_evidence",
 )
 QUESTION_FILLER_TERMS = {
     "about",
@@ -200,7 +205,12 @@ def validate_hit_for_requirement(
             subject_constraint=constraint_json,
             constraint_status="failed",
         )
-    if evidence_constraint.has_generic_subject_only:
+    page_hint_only_lookup = (
+        evidence_constraint.requirement_type == "page_evidence"
+        and bool(evidence_constraint.page_hints)
+        and "page_fallback" in evidence_constraint.object_type_hints
+    )
+    if evidence_constraint.has_generic_subject_only and not page_hint_only_lookup:
         return EvidenceJudgmentDraft(
             hit=hit,
             requirement_type=requirement_type,
@@ -210,7 +220,12 @@ def validate_hit_for_requirement(
             subject_constraint=constraint_json,
             constraint_status="failed",
         )
-    if not hit_matches_requirement_subject(hit, evidence_constraint, zones):
+    subject_match = requirement_subject_match_reason(
+        hit,
+        evidence_constraint,
+        zones,
+    )
+    if subject_match == "subject_mismatch":
         return EvidenceJudgmentDraft(
             hit=hit,
             requirement_type=requirement_type,
@@ -283,13 +298,20 @@ def validate_hit_for_requirement(
             subject_constraint=constraint_json,
             constraint_status="failed",
         )
+    accepted_reason_code = (
+        "accepted_identity_subject_match"
+        if subject_match == "accepted_identity_subject_match"
+        else (
+            "statline_evidence"
+            if requirement_type == "statline_evidence"
+            else "topical_evidence"
+        )
+    )
     return EvidenceJudgmentDraft(
         hit=hit,
         requirement_type=requirement_type,
         status="accepted",
-        reason_code="statline_evidence"
-        if requirement_type == "statline_evidence"
-        else "topical_evidence",
+        reason_code=accepted_reason_code,
         reasons=("Evidence matches the requested source scope, subject, and intent.",),
         subject_constraint=constraint_json,
         constraint_status="passed",
@@ -373,13 +395,25 @@ def hit_matches_requirement_subject(
     | evidence_constraints.EvidenceConstraint,
     zones: evidence_constraints.EvidenceZones | None = None,
 ) -> bool:
+    return (
+        requirement_subject_match_reason(hit, requirement, zones)
+        != "subject_mismatch"
+    )
+
+
+def requirement_subject_match_reason(
+    hit: RetrievedHit,
+    requirement: agent_planning.EvidenceRequirement
+    | evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones | None = None,
+) -> str:
     constraint = (
         evidence_constraints.constraint_from_requirement(requirement)
         if isinstance(requirement, agent_planning.EvidenceRequirement)
         else requirement
     )
     if not constraint.subject_terms:
-        return True
+        return "matched"
     if (
         len(constraint.subject_terms) > 1
         and constraint.requirement_type in evidence_constraints.STRUCTURAL_REQUIREMENT_TYPES
@@ -389,28 +423,54 @@ def hit_matches_requirement_subject(
             zones is not None
             and hit.object_type != "page_fallback"
         ):
-            return evidence_constraints.text_matches_phrase(
+            if evidence_constraints.text_matches_phrase(
                 subject_identity_text(zones),
                 phrase,
-            )
+            ):
+                return "matched"
+            return corrective_subject_match_reason(constraint, zones)
         phrase_evidence_text = (
             subject_evidence_text(zones)
             if zones is not None
             else evidence_text_for_hit(hit)
         )
-        return evidence_constraints.text_matches_phrase(
+        if evidence_constraints.text_matches_phrase(
             phrase_evidence_text,
             phrase,
-        )
+        ):
+            return "matched"
+        return corrective_subject_match_reason(constraint, zones)
     evidence_text = (
         subject_evidence_text(zones)
         if zones is not None
         else evidence_text_for_hit(hit)
     )
-    return evidence_constraints.text_matches_all_terms(
+    if evidence_constraints.text_matches_all_terms(
         evidence_text,
         constraint.subject_terms,
-    )
+    ):
+        return "matched"
+    return corrective_subject_match_reason(constraint, zones)
+
+
+def corrective_subject_match_reason(
+    constraint: evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones | None,
+) -> str:
+    if (
+        zones is None
+        or constraint.requirement_type
+        not in CORRECTIVE_SUBJECT_REQUIREMENT_TYPES
+    ):
+        return "subject_mismatch"
+    subject_source = constraint.canonical_subject or " ".join(constraint.subject_terms)
+    essential_terms = evidence_policy.essential_subject_terms(subject_source)
+    if evidence_policy.identity_satisfies_essential_terms(
+        subject_identity_text(zones),
+        essential_terms,
+    ):
+        return "accepted_identity_subject_match"
+    return "subject_mismatch"
 
 
 def hit_matches_required_terms(

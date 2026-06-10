@@ -491,6 +491,16 @@ function lastTraceLabel(trace: string[]): string {
 
 function researchTraceLabel(event: ChatStreamEvent): string | null {
   const metadata = event.metadata ?? {};
+  if (event.type === "turn_decision") {
+    const answerMode = stringValue(metadata.answer_mode);
+    if (answerMode !== "research") {
+      return null;
+    }
+    const turnKind = stringValue(metadata.turn_kind);
+    return turnKind
+      ? `${shortLabel(turnKind.replace(/_/g, " "))}; research`
+      : "Research turn";
+  }
   if (event.type === "research_started") {
     return "Research started";
   }
