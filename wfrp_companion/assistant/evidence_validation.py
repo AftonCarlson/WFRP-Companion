@@ -6,10 +6,14 @@ from dataclasses import dataclass
 
 from wfrp_companion.assistant import agent_planning
 from wfrp_companion.assistant import chat_store
+from wfrp_companion.assistant import evidence_constraints
+from wfrp_companion.assistant import evidence_policy
 from wfrp_companion.assistant import research
+from wfrp_companion.assistant import statline_fields
 from wfrp_companion.assistant.evidence import RetrievedHit
 from wfrp_companion.assistant.query_planner import meaningful_tokens
 from wfrp_companion.config import AppConfig
+from wfrp_companion.db.connection import initialize_database
 
 
 STATLINE_INTENT = "statline_lookup"
@@ -23,6 +27,10 @@ STATLINE_OBJECT_TYPES = {
 STATLINE_MARKER_RE = re.compile(
     r"\b(?:m|ws|bs|s|t|w|ag|int|wp|fel|a|fp|ip|sb|tb)\b\s*[:0-9]",
     re.IGNORECASE,
+)
+CORRECTIVE_SUBJECT_REQUIREMENT_TYPES = (
+    *evidence_constraints.STRUCTURAL_REQUIREMENT_TYPES,
+    "topical_evidence",
 )
 QUESTION_FILLER_TERMS = {
     "about",
@@ -40,6 +48,8 @@ class EvidenceJudgmentDraft:
     status: str
     reason_code: str
     reasons: tuple[str, ...]
+    subject_constraint: dict[str, object]
+    constraint_status: evidence_constraints.ConstraintStatus
 
 
 @dataclass(frozen=True)
@@ -55,6 +65,7 @@ def validate_hits(
     subject: str | None,
     intent: str,
     source_book_ids: Sequence[str],
+    config: AppConfig | None = None,
 ) -> EvidenceValidationResult:
     requirement_type = (
         "statline_evidence" if intent == STATLINE_INTENT else "topical_evidence"
@@ -79,6 +90,7 @@ def validate_hits(
         hits,
         requirement=requirement,
         source_book_ids=source_book_ids,
+        config=config,
     )
 
 
@@ -87,13 +99,17 @@ def validate_hits_for_requirement(
     *,
     requirement: agent_planning.EvidenceRequirement,
     source_book_ids: Sequence[str],
+    config: AppConfig | None = None,
 ) -> EvidenceValidationResult:
     scoped_book_ids = set(source_book_ids)
+    constraint = evidence_constraints.constraint_from_requirement(requirement)
     judgments = tuple(
         validate_hit_for_requirement(
             hit,
             requirement=requirement,
+            constraint=constraint,
             source_book_ids=scoped_book_ids,
+            config=config,
         )
         for hit in hits
     )
@@ -122,6 +138,7 @@ def validate_hit(
     subject: str | None,
     intent: str,
     source_book_ids: set[str],
+    config: AppConfig | None = None,
 ) -> EvidenceJudgmentDraft:
     requirement_type = (
         "statline_evidence" if intent == STATLINE_INTENT else "topical_evidence"
@@ -145,6 +162,7 @@ def validate_hit(
         hit,
         requirement=requirement,
         source_book_ids=source_book_ids,
+        config=config,
     )
 
 
@@ -152,9 +170,20 @@ def validate_hit_for_requirement(
     hit: RetrievedHit,
     *,
     requirement: agent_planning.EvidenceRequirement,
+    constraint: evidence_constraints.EvidenceConstraint | None = None,
     source_book_ids: set[str],
+    config: AppConfig | None = None,
 ) -> EvidenceJudgmentDraft:
     requirement_type = requirement.requirement_type
+    evidence_constraint = constraint or evidence_constraints.constraint_from_requirement(
+        requirement
+    )
+    constraint_json = evidence_constraint.to_json()
+    zones = evidence_zones_for_hit(
+        config,
+        hit,
+        source_book_ids=source_book_ids,
+    )
     if hit.book_id not in source_book_ids:
         return EvidenceJudgmentDraft(
             hit=hit,
@@ -162,8 +191,10 @@ def validate_hit_for_requirement(
             status="rejected",
             reason_code="unchecked_source",
             reasons=(f"{hit.book_id} is not in the enabled thread source scope.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
         )
-    excluded_term = first_matching_excluded_term(hit, requirement)
+    excluded_term = first_matching_excluded_term(hit, evidence_constraint, zones)
     if excluded_term is not None:
         return EvidenceJudgmentDraft(
             hit=hit,
@@ -171,16 +202,73 @@ def validate_hit_for_requirement(
             status="rejected",
             reason_code="excluded_subject",
             reasons=(f"Evidence matches excluded term {excluded_term!r}.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
         )
-    if not hit_matches_requirement_subject(hit, requirement):
+    page_hint_only_lookup = (
+        evidence_constraint.requirement_type == "page_evidence"
+        and bool(evidence_constraint.page_hints)
+        and "page_fallback" in evidence_constraint.object_type_hints
+    )
+    if evidence_constraint.has_generic_subject_only and not page_hint_only_lookup:
+        return EvidenceJudgmentDraft(
+            hit=hit,
+            requirement_type=requirement_type,
+            status="rejected",
+            reason_code="generic_subject_only",
+            reasons=("The requirement contains only generic structural subject terms.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
+        )
+    subject_match = requirement_subject_match_reason(
+        hit,
+        evidence_constraint,
+        zones,
+    )
+    if subject_match == "subject_mismatch":
         return EvidenceJudgmentDraft(
             hit=hit,
             requirement_type=requirement_type,
             status="rejected",
             reason_code="subject_mismatch",
             reasons=("Evidence does not match the requested subject constraint.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
         )
-    if requirement_type == "statline_evidence" and not hit_has_statline_evidence(hit):
+    if not hit_matches_book_hints(evidence_constraint, zones):
+        return EvidenceJudgmentDraft(
+            hit=hit,
+            requirement_type=requirement_type,
+            status="rejected",
+            reason_code="book_hint_mismatch",
+            reasons=("Evidence does not match the requested book hint.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
+        )
+    if not hit_matches_page_hints(evidence_constraint, zones):
+        return EvidenceJudgmentDraft(
+            hit=hit,
+            requirement_type=requirement_type,
+            status="rejected",
+            reason_code="page_hint_mismatch",
+            reasons=("Evidence does not match the requested page hint.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
+        )
+    if not hit_matches_object_type_hints(hit, evidence_constraint):
+        return EvidenceJudgmentDraft(
+            hit=hit,
+            requirement_type=requirement_type,
+            status="rejected",
+            reason_code="object_type_mismatch",
+            reasons=("Evidence does not match the requested source object type.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
+        )
+    if requirement_type == "statline_evidence" and not hit_has_statline_evidence(
+        hit,
+        zones,
+    ):
         if hit.object_type == "page_fallback":
             return EvidenceJudgmentDraft(
                 hit=hit,
@@ -188,30 +276,45 @@ def validate_hit_for_requirement(
                 status="partial",
                 reason_code="subject_only_page",
                 reasons=("Page evidence mentions the subject but lacks statline markers.",),
+                subject_constraint=constraint_json,
+                constraint_status="partial",
             )
         return EvidenceJudgmentDraft(
             hit=hit,
             requirement_type=requirement_type,
             status="rejected",
-            reason_code="missing_statline_markers",
-            reasons=("Evidence does not contain a structured stat/profile marker.",),
+            reason_code=statline_failure_reason_code(hit),
+            reasons=("Evidence does not contain sufficient stat/profile fields.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
         )
-    if not hit_matches_required_terms(hit, requirement):
+    if not hit_matches_required_terms(hit, evidence_constraint, zones):
         return EvidenceJudgmentDraft(
             hit=hit,
             requirement_type=requirement_type,
             status="rejected",
             reason_code="missing_required_terms",
             reasons=("Evidence does not contain required supporting terms.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
         )
+    accepted_reason_code = (
+        "accepted_identity_subject_match"
+        if subject_match == "accepted_identity_subject_match"
+        else (
+            "statline_evidence"
+            if requirement_type == "statline_evidence"
+            else "topical_evidence"
+        )
+    )
     return EvidenceJudgmentDraft(
         hit=hit,
         requirement_type=requirement_type,
         status="accepted",
-        reason_code="statline_evidence"
-        if requirement_type == "statline_evidence"
-        else "topical_evidence",
+        reason_code=accepted_reason_code,
         reasons=("Evidence matches the requested source scope, subject, and intent.",),
+        subject_constraint=constraint_json,
+        constraint_status="passed",
     )
 
 
@@ -239,6 +342,8 @@ def record_evidence_judgments(
             status=judgment.status,
             reason_code=judgment.reason_code,
             reasons=judgment.reasons,
+            subject_constraint=judgment.subject_constraint,
+            constraint_status=judgment.constraint_status,
         )
         for judgment in validation.judgments
     )
@@ -286,48 +391,255 @@ def hit_mentions_subject(hit: RetrievedHit, subject: str) -> bool:
 
 def hit_matches_requirement_subject(
     hit: RetrievedHit,
-    requirement: agent_planning.EvidenceRequirement,
+    requirement: agent_planning.EvidenceRequirement
+    | evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones | None = None,
 ) -> bool:
-    include_terms = tuple(
-        term
-        for term in (
-            *requirement.subject.include_terms,
-            *(meaningful_tokens(requirement.subject.canonical or "")),
-        )
-        if term
+    return (
+        requirement_subject_match_reason(hit, requirement, zones)
+        != "subject_mismatch"
     )
-    if not include_terms:
-        return True
-    evidence_text = evidence_text_for_hit(hit)
-    return any(text_matches_term_or_tokens(evidence_text, term) for term in include_terms)
+
+
+def requirement_subject_match_reason(
+    hit: RetrievedHit,
+    requirement: agent_planning.EvidenceRequirement
+    | evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones | None = None,
+) -> str:
+    constraint = (
+        evidence_constraints.constraint_from_requirement(requirement)
+        if isinstance(requirement, agent_planning.EvidenceRequirement)
+        else requirement
+    )
+    if not constraint.subject_terms:
+        return "matched"
+    if (
+        len(constraint.subject_terms) > 1
+        and constraint.requirement_type in evidence_constraints.STRUCTURAL_REQUIREMENT_TYPES
+    ):
+        phrase = " ".join(constraint.subject_terms)
+        if (
+            zones is not None
+            and hit.object_type != "page_fallback"
+        ):
+            if evidence_constraints.text_matches_phrase(
+                subject_identity_text(zones),
+                phrase,
+            ):
+                return "matched"
+            return corrective_subject_match_reason(constraint, zones)
+        phrase_evidence_text = (
+            subject_evidence_text(zones)
+            if zones is not None
+            else evidence_text_for_hit(hit)
+        )
+        if evidence_constraints.text_matches_phrase(
+            phrase_evidence_text,
+            phrase,
+        ):
+            return "matched"
+        return corrective_subject_match_reason(constraint, zones)
+    evidence_text = (
+        subject_evidence_text(zones)
+        if zones is not None
+        else evidence_text_for_hit(hit)
+    )
+    if evidence_constraints.text_matches_all_terms(
+        evidence_text,
+        constraint.subject_terms,
+    ):
+        return "matched"
+    return corrective_subject_match_reason(constraint, zones)
+
+
+def corrective_subject_match_reason(
+    constraint: evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones | None,
+) -> str:
+    if (
+        zones is None
+        or constraint.requirement_type
+        not in CORRECTIVE_SUBJECT_REQUIREMENT_TYPES
+    ):
+        return "subject_mismatch"
+    subject_source = constraint.canonical_subject or " ".join(constraint.subject_terms)
+    essential_terms = evidence_policy.essential_subject_terms(subject_source)
+    if evidence_policy.identity_satisfies_essential_terms(
+        subject_identity_text(zones),
+        essential_terms,
+    ):
+        return "accepted_identity_subject_match"
+    return "subject_mismatch"
 
 
 def hit_matches_required_terms(
     hit: RetrievedHit,
-    requirement: agent_planning.EvidenceRequirement,
+    requirement: agent_planning.EvidenceRequirement
+    | evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones | None = None,
 ) -> bool:
-    if not requirement.required_terms:
+    constraint = (
+        evidence_constraints.constraint_from_requirement(requirement)
+        if isinstance(requirement, agent_planning.EvidenceRequirement)
+        else requirement
+    )
+    if not constraint.required_terms:
         return True
-    evidence_text = evidence_text_for_hit(hit)
+    evidence_text = zones_text(zones) if zones is not None else evidence_text_for_hit(hit)
     return all(
         text_matches_required_term(evidence_text, term)
-        for term in requirement.required_terms
+        for term in constraint.required_terms
     )
+
+
+def hit_matches_book_hints(
+    constraint: evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones,
+) -> bool:
+    if not constraint.book_title_hints:
+        return True
+    return any(
+        evidence_constraints.text_matches_hint(
+            zones.page_scope_text,
+            hint,
+            ignored_terms=evidence_constraints.BOOK_HINT_STOP_TERMS,
+        )
+        for hint in constraint.book_title_hints
+    )
+
+
+def hit_matches_page_hints(
+    constraint: evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones,
+) -> bool:
+    if not constraint.page_hints:
+        return True
+    return any(
+        evidence_constraints.text_matches_hint(
+            zones.page_scope_text,
+            hint,
+            ignored_terms=evidence_constraints.PAGE_HINT_STOP_TERMS,
+        )
+        for hint in constraint.page_hints
+    )
+
+
+def hit_matches_object_type_hints(
+    hit: RetrievedHit,
+    constraint: evidence_constraints.EvidenceConstraint,
+) -> bool:
+    if not constraint.object_type_hints:
+        return True
+    if hit.object_type == "page_fallback":
+        return True
+    hint_keys = {
+        key
+        for key in (
+            evidence_constraints.normalized_object_type_key(hint)
+            for hint in constraint.object_type_hints
+        )
+        if key
+    }
+    if not hint_keys:
+        return True
+    if evidence_constraints.normalized_object_type_key(hit.object_type) in hint_keys:
+        return True
+    return any(
+        normalized_linked_object_type_reason(reason) in hint_keys
+        for reason in hit.rank_reasons
+    )
+
+
+def normalized_linked_object_type_reason(reason: str) -> str | None:
+    for prefix in ("linked_source_object:", "linked_evidence:"):
+        if reason.startswith(prefix):
+            return evidence_constraints.normalized_object_type_key(
+                reason.removeprefix(prefix)
+            )
+    return None
 
 
 def first_matching_excluded_term(
     hit: RetrievedHit,
-    requirement: agent_planning.EvidenceRequirement,
+    requirement: agent_planning.EvidenceRequirement
+    | evidence_constraints.EvidenceConstraint,
+    zones: evidence_constraints.EvidenceZones | None = None,
 ) -> str | None:
-    excluded_terms = (
-        *requirement.subject.exclude_terms,
-        *requirement.excluded_terms,
+    constraint = (
+        evidence_constraints.constraint_from_requirement(requirement)
+        if isinstance(requirement, agent_planning.EvidenceRequirement)
+        else requirement
     )
-    evidence_text = evidence_text_for_hit(hit)
-    for term in excluded_terms:
+    evidence_text = zones_text(zones) if zones is not None else evidence_text_for_hit(hit)
+    for term in constraint.excluded_terms:
         if term and text_contains_term(evidence_text, term):
             return term
     return None
+
+
+def evidence_zones_for_hit(
+    config: AppConfig | None,
+    hit: RetrievedHit,
+    *,
+    source_book_ids: set[str],
+) -> evidence_constraints.EvidenceZones:
+    if config is None or hit.source_object_id is None:
+        return evidence_constraints.build_evidence_zones(
+            None,
+            hit,
+            source_book_ids=source_book_ids,
+        )
+    with initialize_database(config.db_path) as connection:
+        return evidence_constraints.build_evidence_zones(
+            connection,
+            hit,
+            source_book_ids=source_book_ids,
+        )
+
+
+def zones_text(zones: evidence_constraints.EvidenceZones | None) -> str:
+    if zones is None:
+        return ""
+    return " ".join(
+        part
+        for part in (
+            zones.identity_text,
+            zones.direct_body_text,
+            zones.structural_text,
+            zones.page_scope_text,
+            zones.linked_identity_text,
+            zones.linked_stat_text,
+        )
+        if part
+    ).casefold()
+
+
+def subject_evidence_text(zones: evidence_constraints.EvidenceZones | None) -> str:
+    if zones is None:
+        return ""
+    return " ".join(
+        part
+        for part in (
+            zones.identity_text,
+            zones.direct_body_text,
+            zones.linked_identity_text,
+        )
+        if part
+    ).casefold()
+
+
+def subject_identity_text(zones: evidence_constraints.EvidenceZones | None) -> str:
+    if zones is None:
+        return ""
+    return " ".join(
+        part
+        for part in (
+            zones.identity_text,
+            zones.linked_identity_text,
+        )
+        if part
+    ).casefold()
 
 
 def evidence_text_for_hit(hit: RetrievedHit) -> str:
@@ -344,17 +656,14 @@ def evidence_text_for_hit(hit: RetrievedHit) -> str:
 
 
 def text_contains_term(text: str, term: str) -> bool:
-    normalized = term.casefold().strip()
-    if not normalized:
-        return False
-    return normalized in text
+    return evidence_constraints.text_matches_phrase(text, term)
 
 
 def text_matches_term_or_tokens(text: str, term: str) -> bool:
     if text_contains_term(text, term):
         return True
     tokens = meaningful_tokens(term)
-    return bool(tokens) and all(token.casefold() in text for token in tokens)
+    return bool(tokens) and all(text_contains_term(text, token) for token in tokens)
 
 
 def text_matches_required_term(text: str, term: str) -> bool:
@@ -365,12 +674,22 @@ def text_matches_required_term(text: str, term: str) -> bool:
         for token in meaningful_tokens(term)
         if token.casefold() not in QUESTION_FILLER_TERMS
     )
-    return bool(tokens) and all(token.casefold() in text for token in tokens)
+    return bool(tokens) and all(text_contains_term(text, token) for token in tokens)
 
 
-def hit_has_statline_evidence(hit: RetrievedHit) -> bool:
+def hit_has_statline_evidence(
+    hit: RetrievedHit,
+    zones: evidence_constraints.EvidenceZones | None = None,
+) -> bool:
+    evidence_text = zones_text(zones) if zones is not None else hit.context_text.casefold()
+    if statline_fields.has_sufficient_statline_fields(evidence_text):
+        return True
+    return bool(STATLINE_MARKER_RE.search(evidence_text)) and len(
+        statline_fields.extract_stat_fields(evidence_text)
+    ) >= statline_fields.MINIMUM_STAT_FIELD_COUNT
+
+
+def statline_failure_reason_code(hit: RetrievedHit) -> str:
     if hit.object_type in STATLINE_OBJECT_TYPES:
-        return True
-    if "stat_block" in hit.context_text.casefold():
-        return True
-    return bool(STATLINE_MARKER_RE.search(hit.context_text))
+        return "missing_statline_fields"
+    return "missing_statline_markers"

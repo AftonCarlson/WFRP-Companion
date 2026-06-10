@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
 from wfrp_companion.assistant import agent_planning
+from wfrp_companion.assistant import answer_contract
 from wfrp_companion.assistant import chat_store
 from wfrp_companion.assistant import context_resolution
+from wfrp_companion.assistant import evidence_constraints
 from wfrp_companion.assistant import evidence_validation
 from wfrp_companion.assistant import prompts
 from wfrp_companion.assistant import provider
+from wfrp_companion.assistant import requirement_planner
 from wfrp_companion.assistant import research
 from wfrp_companion.assistant import research_tools
+from wfrp_companion.assistant import turn_contract
 from wfrp_companion.assistant.conversation_context import ConversationContext
 from wfrp_companion.assistant.evidence import RetrievedHit
 from wfrp_companion.config import AppConfig
@@ -34,6 +38,7 @@ class FamiliarResearchResult:
     research_run: research.FamiliarResearchRun
     accepted_hits: tuple[RetrievedHit, ...]
     evidence_status: str
+    answer_outcome: answer_contract.AnswerOutcome
     final_retrieval_run_id: str | None
     final_prompt_messages: tuple[prompts.PromptMessage, ...]
     progress_events: tuple[FamiliarProgressEvent, ...]
@@ -45,7 +50,8 @@ def run_research(
     result: chat_store.SendChatResult,
     content: str,
     conversation: ConversationContext,
-    response_provider: object,
+    turn_decision: turn_contract.TurnDecision,
+    response_provider_factory: Callable[[AppConfig], object],
     reader_context: research.ReaderContext | None = None,
 ) -> FamiliarResearchResult:
     active_context = merge_reader_context(
@@ -95,7 +101,9 @@ def run_research(
     final_diagnostics: research.RetrievalDiagnostics | None = None
     last_validation_status = "not_evaluated"
 
+    advisory_provider_call_id: str | None = None
     try:
+        response_provider = response_provider_factory(config)
         plan_result = request_research_plan(
             response_provider,
             request_id=result.model_run.id,
@@ -104,20 +112,29 @@ def run_research(
             initial_query=initial_query,
             conversation=conversation,
         )
-        research_plan = chat_store.record_familiar_research_plan(
-            config,
-            plan_result.plan,
-        )
-    except Exception:
-        chat_store.transition_familiar_research_run(
-            config,
-            research_run.id,
-            from_statuses=("planning",),
-            to_status="failed",
-            evidence_status="insufficient",
-            tool_rounds_used=0,
-        )
-        raise
+        advisory_provider_call_id = plan_result.plan.provider_call_id
+    except (agent_planning.PlanValidationError, provider.ProviderError):
+        advisory_provider_call_id = None
+    planning_content = (
+        initial_query
+        if conversation.history_strategy == "followup_contextualized"
+        or (resolved.subject is None and initial_query != content.strip().casefold())
+        else content
+    )
+    planning_decision = (
+        replace(turn_decision, subject=None)
+        if conversation.history_strategy == "followup_contextualized"
+        else turn_decision
+    )
+    app_plan = requirement_planner.build_research_plan(
+        research_run_id=research_run.id,
+        content=planning_content,
+        decision=planning_decision,
+        resolved=resolved,
+    )
+    if advisory_provider_call_id is not None:
+        app_plan = replace(app_plan, provider_call_id=advisory_provider_call_id)
+    research_plan = chat_store.record_familiar_research_plan(config, app_plan)
     progress.append(
         FamiliarProgressEvent(
             type="research_plan",
@@ -130,146 +147,60 @@ def run_research(
     partial_hits_by_requirement: dict[str, list[RetrievedHit]] = {
         requirement.id: [] for requirement in research_plan.requirements
     }
-    first_action = (
-        research_plan.planned_actions[0] if research_plan.planned_actions else None
+    attempted_action_signatures: set[tuple[str, str, str]] = set()
+    first_action = research_plan.planned_actions[0]
+    validated_first_action = validate_planned_tool_action(
+        research_plan,
+        first_action,
     )
-    if first_action is None:
-        accepted_hits = []
-        final_diagnostics = None
-        last_validation_status = "insufficient"
-        prior_tool_outputs = []
-        tool_rounds_used = 0
-    elif first_action.tool_name == "finish_research":
-        validate_finish_research_action(
+    outcome = execute_tool_and_validate(
+        config,
+        research_run=research_run,
+        result=result,
+        resolved=resolved,
+        research_plan_id=research_plan.id,
+        requirement_id=validated_first_action.requirement_id,
+        requirement=requirement_by_id(
             research_plan,
-            first_action.arguments,
-            accepted_hits=(),
-            tool_rounds_used=0,
-        )
-        chat_store.transition_familiar_research_run(
-            config,
-            research_run.id,
-            from_statuses=("planning",),
-            to_status="finalizing",
-        )
-        progress.append(
-            FamiliarProgressEvent(
-                type="finalizing",
-                metadata=finish_research_event_metadata(
-                    research_run.id,
-                    first_action.arguments,
-                ),
-            )
-        )
-        final_diagnostics = None
-        last_validation_status = string_argument(
-            first_action.arguments,
-            "evidence_status",
-        ) or "insufficient"
-        prior_tool_outputs = []
-        tool_rounds_used = 0
-    else:
-        validated_first_action = validate_planned_tool_action(
-            research_plan,
-            first_action,
-        )
-        outcome = execute_tool_and_validate(
-            config,
-            research_run=research_run,
-            result=result,
-            resolved=resolved,
-            research_plan_id=research_plan.id,
-            requirement_id=validated_first_action.requirement_id,
-            requirement=requirement_by_id(
-                research_plan,
-                validated_first_action.requirement_id,
-            ),
-            purpose=validated_first_action.purpose,
-            step_number=1,
-            call_index=0,
-            provider_call_id=None,
-            tool_name=validated_first_action.tool_name,
-            arguments=validated_first_action.arguments,
-            conversation=conversation,
-        )
-        tool_rounds_used += 1
-        progress.extend(outcome.progress_events)
-        extend_unique_hits(accepted_hits, outcome.validation.accepted_hits)
-        record_requirement_validation_outcome(
-            accepted_hits_by_requirement,
-            partial_hits_by_requirement,
             validated_first_action.requirement_id,
-            outcome.validation,
-        )
-        if outcome.validation.status == "partial":
-            extend_unique_hits(partial_hits, partial_hits_from_judgments(outcome.validation))
-        final_retrieval_run_id = outcome.tool_result.retrieval_run_id
-        final_diagnostics = outcome.tool_result.diagnostics
-        last_validation_status = outcome.validation.status
-        prior_tool_outputs: list[dict[str, object]] = [outcome.tool_output]
+        ),
+        purpose=validated_first_action.purpose,
+        step_number=1,
+        call_index=0,
+        provider_call_id=None,
+        tool_name=validated_first_action.tool_name,
+        arguments=validated_first_action.arguments,
+        conversation=conversation,
+    )
+    attempted_action_signatures.add(action_signature(validated_first_action))
+    tool_rounds_used += 1
+    progress.extend(outcome.progress_events)
+    extend_unique_hits(accepted_hits, outcome.validation.accepted_hits)
+    record_requirement_validation_outcome(
+        accepted_hits_by_requirement,
+        partial_hits_by_requirement,
+        validated_first_action.requirement_id,
+        outcome.validation,
+    )
+    if outcome.validation.status == "partial":
+        extend_unique_hits(partial_hits, partial_hits_from_judgments(outcome.validation))
+    final_retrieval_run_id = outcome.tool_result.retrieval_run_id
+    final_diagnostics = outcome.tool_result.diagnostics
+    last_validation_status = outcome.validation.status
+    prior_tool_outputs: list[dict[str, object]] = [outcome.tool_output]
     while (
         not plan_requirements_satisfied(research_plan, accepted_hits_by_requirement)
         and tool_rounds_used < MAX_TOOL_ROUNDS
     ):
-        try:
-            planning = request_recovery_tool(
-                response_provider,
-                request_id=result.model_run.id,
-                resolved=resolved,
-                research_plan=research_plan,
-                requirement_summaries=requirement_status_summaries(
-                    research_plan,
-                    accepted_hits_by_requirement=accepted_hits_by_requirement,
-                    partial_hits_by_requirement=partial_hits_by_requirement,
-                ),
-                conversation=conversation,
-                prior_tool_outputs=tuple(prior_tool_outputs),
-            )
-            if planning.tool_call is None:
-                break
-            tool_call = planning.tool_call
-            if tool_call.tool_name == "finish_research":
-                validate_finish_research_action(
-                    research_plan,
-                    tool_call.arguments,
-                    accepted_hits=tuple(accepted_hits),
-                    tool_rounds_used=tool_rounds_used,
-                    plan_satisfied=plan_requirements_satisfied(
-                        research_plan,
-                        accepted_hits_by_requirement,
-                    ),
-                )
-                chat_store.transition_familiar_research_run(
-                    config,
-                    research_run.id,
-                    from_statuses=("planning", "tool_calling", "validating"),
-                    to_status="finalizing",
-                )
-                progress.append(
-                    FamiliarProgressEvent(
-                        type="finalizing",
-                        metadata=finish_research_event_metadata(
-                            research_run.id,
-                            tool_call.arguments,
-                        ),
-                    )
-                )
-                last_validation_status = string_argument(
-                    tool_call.arguments,
-                    "evidence_status",
-                ) or last_validation_status
-                break
-            validated_action = validate_provider_tool_action(research_plan, tool_call)
-        except provider.ProviderError:
-            chat_store.transition_familiar_research_run(
-                config,
-                research_run.id,
-                from_statuses=("planning", "tool_calling", "validating", "finalizing"),
-                to_status="failed",
-                evidence_status="insufficient",
-                tool_rounds_used=tool_rounds_used,
-            )
-            raise
+        validated_action = next_backend_scheduled_action(
+            research_plan,
+            accepted_hits_by_requirement=accepted_hits_by_requirement,
+            partial_hits_by_requirement=partial_hits_by_requirement,
+            attempted_action_signatures=attempted_action_signatures,
+        )
+        if validated_action is None:
+            break
+        attempted_action_signatures.add(action_signature(validated_action))
         outcome = execute_tool_and_validate(
             config,
             research_run=research_run,
@@ -311,6 +242,11 @@ def run_research(
         partial_hits_by_requirement=partial_hits_by_requirement,
         fallback_status=last_validation_status,
     )
+    answer_outcome = answer_contract.build_answer_outcome(
+        research_plan,
+        accepted_hits_by_requirement=accepted_hits_by_requirement,
+        partial_hits_by_requirement=partial_hits_by_requirement,
+    )
     if accepted_hits:
         final_retrieval_run_id = record_accepted_evidence_retrieval_run(
             config,
@@ -348,6 +284,8 @@ def run_research(
                     partial_hits_by_requirement=partial_hits_by_requirement,
                 ),
                 "tool_rounds_used": tool_rounds_used,
+                "answer_outcome": answer_outcome.kind,
+                "missing_summaries": list(answer_outcome.missing_summaries),
             },
         )
     )
@@ -362,6 +300,8 @@ def run_research(
             partial_hits_by_requirement=partial_hits_by_requirement,
         ),
         answer_policy="cite_required",
+        answer_outcome=answer_outcome.kind,
+        missing_summaries=answer_outcome.missing_summaries,
         recent_messages=conversation.prompt_messages,
         context_char_limit=config.chat_context_char_limit,
     )
@@ -369,6 +309,7 @@ def run_research(
         research_run=research_run,
         accepted_hits=tuple(accepted_hits),
         evidence_status=evidence_status,
+        answer_outcome=answer_outcome,
         final_retrieval_run_id=final_retrieval_run_id,
         final_prompt_messages=final_prompt_messages,
         progress_events=tuple(progress),
@@ -446,12 +387,6 @@ class ProviderToolRequest:
     tool_name: str | None
     tool_call_id: str | None
     arguments: dict[str, object]
-
-
-@dataclass(frozen=True)
-class ProviderPlanningResult:
-    tool_call: ProviderToolRequest | None
-    provider_response_id: str | None
 
 
 @dataclass(frozen=True)
@@ -534,6 +469,7 @@ def execute_tool_and_validate(
             tool_name=tool_name,
             arguments=arguments,
             conversation=conversation,
+            requirement=requirement,
         )
         if requirement is None:
             validation = evidence_validation.validate_hits(
@@ -541,12 +477,14 @@ def execute_tool_and_validate(
                 subject=resolved.subject,
                 intent=resolved.intent,
                 source_book_ids=tool_result.source_book_ids,
+                config=config,
             )
         else:
             validation = evidence_validation.validate_hits_for_requirement(
                 tool_result.hits,
                 requirement=requirement,
                 source_book_ids=tool_result.source_book_ids,
+                config=config,
             )
         evidence_validation.record_evidence_judgments(
             config,
@@ -610,16 +548,25 @@ def execute_tool_and_validate(
     )
     progress.extend(
         (
-            FamiliarProgressEvent(type="retrieval", hits=tool_result.hits),
+            FamiliarProgressEvent(
+                type="retrieval",
+                hits=validation.accepted_hits,
+                metadata={
+                    "retrieval_run_id": tool_result.retrieval_run_id,
+                    "candidate_hit_count": len(tool_result.hits),
+                    "accepted_hit_count": len(validation.accepted_hits),
+                },
+            ),
             FamiliarProgressEvent(
                 type="tool_result",
-                hits=tool_result.hits,
+                hits=validation.accepted_hits,
                 metadata={
                     "research_run_id": research_run.id,
                     "tool_call_id": succeeded.id,
                     "tool_name": succeeded.tool_name,
                     "retrieval_run_id": tool_result.retrieval_run_id,
                     "hit_count": len(tool_result.hits),
+                    "accepted_hit_count": len(validation.accepted_hits),
                     "diagnostics": retrieval_diagnostics_metadata(
                         tool_result.diagnostics
                     ),
@@ -646,9 +593,15 @@ def execute_tool(
     tool_name: str,
     arguments: dict[str, object],
     conversation: ConversationContext,
+    requirement: agent_planning.EvidenceRequirement | None = None,
 ) -> research_tools.SearchLibraryResult:
     if tool_name == "search_library":
         query = string_argument(arguments, "query") or resolved.resolved_query
+        requirement_constraint = (
+            evidence_constraints.constraint_from_requirement(requirement)
+            if requirement is not None
+            else None
+        )
         return research_tools.search_library(
             config=config,
             thread_id=result.thread.id,
@@ -663,6 +616,7 @@ def execute_tool(
             history_message_ids=conversation.history_message_ids,
             history_turn_count=conversation.history_turn_count,
             history_strategy=conversation.history_strategy,
+            requirement_constraint=requirement_constraint,
         )
     if tool_name == "open_page":
         return research_tools.open_page(
@@ -752,60 +706,6 @@ def request_research_plan(
     )
     return ResearchPlanResult(
         plan=plan,
-        provider_response_id=provider_response_id,
-    )
-
-
-def request_recovery_tool(
-    response_provider: object,
-    *,
-    request_id: str,
-    resolved: context_resolution.ResolvedResearchRequest,
-    research_plan: agent_planning.ResearchPlan,
-    requirement_summaries: Sequence[dict[str, object]],
-    conversation: ConversationContext,
-    prior_tool_outputs: Sequence[dict[str, object]] = (),
-) -> ProviderPlanningResult:
-    messages = prompts.build_research_prompt_messages(
-        raw_query=resolved.raw_query,
-        resolved_query=resolved.resolved_query,
-        intent=resolved.intent,
-        subject=resolved.subject,
-        active_book_id=resolved.active_book_id,
-        active_printed_page_label=None
-        if resolved.page_reference is None
-        else resolved.page_reference.printed_page_label,
-        recent_messages=conversation.prompt_messages,
-        prior_tool_outputs=prior_tool_outputs,
-        plan_summary=research_plan.plan_summary,
-        requirement_summaries=requirement_summaries,
-    )
-    provider_messages = tuple(
-        provider.ProviderMessage(role=message.role, content=message.content)
-        for message in messages
-    )
-    tool_call: ProviderToolRequest | None = None
-    provider_response_id: str | None = None
-    for event in response_provider.stream_response(
-        messages=provider_messages,
-        request_id=request_id,
-        tools=tool_definitions(),
-        tool_results=(),
-        previous_response_id=None,
-        parallel_tool_calls=False,
-    ):
-        if event.type == "tool_call":
-            if tool_call is not None:
-                raise provider.ProviderError("Research action returned multiple tool calls")
-            tool_call = ProviderToolRequest(
-                tool_name=event.tool_name,
-                tool_call_id=event.tool_call_id,
-                arguments=parse_tool_arguments(event.tool_arguments_json),
-            )
-        elif event.type == "completed":
-            provider_response_id = event.provider_response_id
-    return ProviderPlanningResult(
-        tool_call=tool_call,
         provider_response_id=provider_response_id,
     )
 
@@ -905,19 +805,6 @@ def requirement_by_id(
     raise provider.ProviderError(f"unknown requirement: {requirement_id}")
 
 
-def finish_research_event_metadata(
-    research_run_id: str,
-    arguments: dict[str, object],
-) -> dict[str, object]:
-    return {
-        "research_run_id": research_run_id,
-        "reason": string_argument(arguments, "reason") or "no_useful_action",
-        "requirement_ids": list(string_list_argument(arguments, "requirement_ids")),
-        "evidence_status": string_argument(arguments, "evidence_status")
-        or "insufficient",
-    }
-
-
 def local_tool_names() -> set[str]:
     return {"search_library", "open_page", "lookup_source_object"}
 
@@ -981,6 +868,116 @@ def requirement_status_summaries(
             }
         )
     return tuple(summaries)
+
+
+def next_backend_scheduled_action(
+    plan: agent_planning.ResearchPlan,
+    *,
+    accepted_hits_by_requirement: dict[str, list[RetrievedHit]],
+    partial_hits_by_requirement: dict[str, list[RetrievedHit]],
+    attempted_action_signatures: set[tuple[str, str, str]],
+) -> ValidatedToolAction | None:
+    del partial_hits_by_requirement
+    attempted_requirement_ids = {
+        requirement_id
+        for requirement_id, _tool_name, _target in attempted_action_signatures
+    }
+    unsatisfied = tuple(
+        requirement
+        for requirement in plan.requirements
+        if requirement.required
+        and len(accepted_hits_by_requirement.get(requirement.id, ()))
+        < requirement.min_accepted_hits
+    )
+    for require_fresh_requirement in (True, False):
+        for requirement in unsatisfied:
+            if require_fresh_requirement and requirement.id in attempted_requirement_ids:
+                continue
+            action = scheduled_search_action(plan, requirement)
+            if action_signature(action) in attempted_action_signatures:
+                continue
+            return action
+    return None
+
+
+def scheduled_search_action(
+    plan: agent_planning.ResearchPlan,
+    requirement: agent_planning.EvidenceRequirement,
+) -> ValidatedToolAction:
+    subject = (
+        requirement.subject.canonical
+        or requirement.subject.surface
+        or " ".join(requirement.subject.include_terms)
+        or plan.subject.canonical
+        or plan.subject.surface
+    )
+    query = requirement_query(requirement, subject=subject)
+    arguments: dict[str, object] = {
+        "requirement_id": requirement.id,
+        "query": query,
+        "intent": plan.intent,
+        "subject": subject,
+        "limit": DEFAULT_HIT_LIMIT,
+        "include_terms": list(requirement.subject.include_terms),
+        "exclude_terms": list(
+            (*requirement.subject.exclude_terms, *requirement.excluded_terms)
+        ),
+        "object_type_hints": list(requirement.object_type_hints),
+        "book_title_hints": list(requirement.subject.book_title_hints),
+        "page_hints": list(requirement.subject.page_hints),
+    }
+    return ValidatedToolAction(
+        tool_name="search_library",
+        requirement_id=requirement.id,
+        purpose=f"Search checked books for unsatisfied requirement {requirement.id}.",
+        arguments=arguments,
+        provider_call_id=None,
+    )
+
+
+def requirement_query(
+    requirement: agent_planning.EvidenceRequirement,
+    *,
+    subject: str | None,
+) -> str:
+    parts: list[str] = []
+    if subject:
+        parts.append(subject)
+    subject_tokens = set(subject.casefold().split()) if subject else set()
+    if requirement.requirement_type == "topical_evidence":
+        parts.extend(
+            term
+            for term in requirement.subject.include_terms
+            if term.casefold() not in subject_tokens
+        )
+    parts.extend(requirement.required_terms)
+    if requirement.requirement_type == "statline_evidence":
+        parts.append("statline")
+    elif requirement.requirement_type == "page_evidence":
+        parts.extend(requirement.subject.page_hints)
+    elif requirement.requirement_type == "source_object_evidence":
+        parts.extend(requirement.object_type_hints)
+    unique_parts: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        normalized = " ".join(part.casefold().split())
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_parts.append(part)
+    query = " ".join(unique_parts).strip()
+    return query or requirement.id.replace("_", " ")
+
+
+def action_signature(action: ValidatedToolAction) -> tuple[str, str, str]:
+    query = string_argument(action.arguments, "query") or ""
+    source_object_id = string_argument(action.arguments, "source_object_id") or ""
+    page = (
+        string_argument(action.arguments, "printed_page_label")
+        or str(integer_argument(action.arguments, "pdf_page_number") or "")
+    )
+    target = query or source_object_id or page
+    return (action.requirement_id, action.tool_name, target.casefold())
 
 
 def public_requirement_status_summaries(
@@ -1188,107 +1185,6 @@ def initial_tool_arguments(
     }
 
 
-def tool_definitions() -> tuple[provider.ProviderToolDefinition, ...]:
-    return (
-        provider.ProviderToolDefinition(
-            name="search_library",
-            description=(
-                "Run backend-owned hybrid retrieval over enabled local source books."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "requirement_id": agent_planning.requirement_id_schema(),
-                    "query": {"type": "string"},
-                    "intent": {"type": "string"},
-                    "subject": {"type": ["string", "null"]},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 12},
-                },
-                "required": ["requirement_id", "query", "intent", "subject", "limit"],
-                "additionalProperties": False,
-            },
-        ),
-        provider.ProviderToolDefinition(
-            name="open_page",
-            description="Open a printed or PDF page from an enabled local source book.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "requirement_id": agent_planning.requirement_id_schema(),
-                    "book_id": {"type": ["string", "null"]},
-                    "book_title_hint": {"type": ["string", "null"]},
-                    "printed_page_label": {"type": ["string", "null"]},
-                    "pdf_page_number": {"type": ["integer", "null"]},
-                    "subject_hint": {"type": ["string", "null"]},
-                    "intent": {"type": "string"},
-                },
-                "required": [
-                    "requirement_id",
-                    "book_id",
-                    "book_title_hint",
-                    "printed_page_label",
-                    "pdf_page_number",
-                    "subject_hint",
-                    "intent",
-                ],
-                "additionalProperties": False,
-            },
-        ),
-        provider.ProviderToolDefinition(
-            name="lookup_source_object",
-            description="Inspect a structured source object from enabled local books.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "requirement_id": agent_planning.requirement_id_schema(),
-                    "source_object_id": {"type": "string"},
-                    "intent": {"type": "string"},
-                },
-                "required": ["requirement_id", "source_object_id", "intent"],
-                "additionalProperties": False,
-            },
-        ),
-        provider.ProviderToolDefinition(
-            name="finish_research",
-            description=(
-                "Stop local research and proceed to the final answer from accepted "
-                "evidence or an honest insufficiency."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "enum": [
-                            "requirements_satisfied",
-                            "budget_exhausted",
-                            "no_useful_action",
-                        ],
-                    },
-                    "requirement_ids": {
-                        "type": "array",
-                        "items": agent_planning.requirement_id_schema(),
-                        "minItems": 1,
-                        "maxItems": 6,
-                    },
-                    "evidence_status": {
-                        "type": "string",
-                        "enum": ["sufficient", "partial", "insufficient"],
-                    },
-                    "decision_summary": {"type": "string"},
-                },
-                "required": [
-                    "reason",
-                    "requirement_ids",
-                    "evidence_status",
-                    "decision_summary",
-                ],
-                "additionalProperties": False,
-            },
-        ),
-    )
-
-
 def parse_tool_arguments(arguments_json: str | None) -> dict[str, object]:
     if not arguments_json:
         return {}
@@ -1363,10 +1259,27 @@ def tool_output_payload(
     *,
     validation: evidence_validation.EvidenceValidationResult,
 ) -> dict[str, object]:
+    accepted_hit_payloads = [hit_payload(hit) for hit in validation.accepted_hits]
     return {
         **tool_output_summary(tool_result, validation=validation),
-        "hits": [hit_payload(hit) for hit in tool_result.hits],
+        "hits": accepted_hit_payloads,
+        "accepted_hits": accepted_hit_payloads,
+        "partial_reason_counts": judgment_reason_counts(validation, status="partial"),
+        "rejected_reason_counts": judgment_reason_counts(validation, status="rejected"),
     }
+
+
+def judgment_reason_counts(
+    validation: evidence_validation.EvidenceValidationResult,
+    *,
+    status: str,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for judgment in validation.judgments:
+        if judgment.status != status:
+            continue
+        counts[judgment.reason_code] = counts.get(judgment.reason_code, 0) + 1
+    return counts
 
 
 def hit_payload(hit: RetrievedHit) -> dict[str, object]:

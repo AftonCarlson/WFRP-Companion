@@ -192,6 +192,7 @@ export type ChatThreadDetailResponse = {
 export type ChatStreamEvent = {
   type:
     | "accepted"
+    | "turn_decision"
     | "research_started"
     | "research_plan"
     | "tool_call"

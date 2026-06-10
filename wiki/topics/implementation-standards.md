@@ -50,6 +50,16 @@ The current codebase has working local implementations for steps 1 through 6:
 - Familiar retrieval now fuses candidate-channel ranks and applies a
   replaceable reranker protocol. The default reranker is deterministic and
   local; provider-backed reranking is not part of the current codebase.
+- Familiar now has an app-owned reliability contract: `turn_contract.py`
+  triages turns before provider construction, `requirement_planner.py` builds
+  the accepted deterministic research plan, `familiar_agent.py` schedules local
+  tool actions by unsatisfied requirement coverage, and `answer_contract.py`
+  records whether the final response is full, partial, insufficient, direct,
+  clarifying, or provider-error.
+- `familiar_turn_decisions` stores the turn-level contract. Retry runs copy
+  immutable triage fields from the original decision when available, and chat
+  execution uses the persisted effective decision rather than a fresh
+  classifier result.
 - `tools/rebuild_embeddings.py` now rebuilds local source-object vectors when
   embeddings are explicitly enabled. `local-hash` remains the deterministic
   test/smoke provider; `sentence-transformers` is the real local semantic
@@ -144,6 +154,17 @@ external service blocker, not as repo work.
 - Query-time vector scoring must also fail closed for malformed local vector
   rows. Skip bad vector rows rather than surfacing blob/dimension errors as
   Familiar model-run failures.
+- Treat provider planning as advisory metadata. The app must own turn triage,
+  accepted requirement plans, scheduler control, evidence validation, answer
+  outcomes, and retry decision execution.
+- Do not let raw provider or generic exception strings enter public chat
+  streams, `model_runs.error_message`, or `familiar_turn_decisions.outcome_json`.
+  Use bounded public messages and private diagnostics that expose counts,
+  enums, ids, and statuses rather than local paths, provider payloads, PDF
+  filenames, or copied source text.
+- For multi-requirement research, schedule required zero-attempt requirements
+  before retrying an already-attempted unsatisfied requirement. Exact duplicate
+  tool actions should still be suppressed.
 - Treat linked source-object traversal as evidence resolution, not scope
   expansion. Links may resolve row/stat/index/cross-reference candidates to
   complete parent or target objects only when the target book is in the checked

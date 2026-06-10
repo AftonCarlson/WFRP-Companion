@@ -195,6 +195,10 @@ class BrokenProvider:
         yield provider.ProviderStreamEvent(type="completed")
 
 
+def unavailable_provider_factory(_config: AppConfig) -> chat_service.ResponseProvider:
+    raise provider.ProviderUnavailableError("provider should not be constructed")
+
+
 def make_config(tmp_path: Path) -> AppConfig:
     data_dir = tmp_path / "data"
     return AppConfig(
@@ -325,6 +329,7 @@ def test_stream_chat_message_persists_completed_run_and_streams_deltas(
 
     assert [event.type for event in events] == [
         "accepted",
+        "turn_decision",
         "research_started",
         "research_plan",
         "tool_call",
@@ -343,6 +348,18 @@ def test_stream_chat_message_persists_completed_run_and_streams_deltas(
     assert events[-1].assistant_message.content == "Critical hits."
     assert events[-1].model_run.status == "completed"
     assert events[-1].model_run.provider_response_id == "resp-1"
+    with open_connection(config.db_path) as connection:
+        decision_row = connection.execute(
+            """
+            select answer_outcome, outcome_json
+            from familiar_turn_decisions
+            where model_run_id = ?
+            """,
+            (events[-1].model_run.id,),
+        ).fetchone()
+    outcome = json.loads(decision_row["outcome_json"])
+    assert decision_row["answer_outcome"] == "full_answer"
+    assert outcome["kind"] == "full_answer"
     assert events[-1].citations[0].title == "Core Rules"
     assert events[-1].citations[0].page_number == 134
 
@@ -377,6 +394,204 @@ def test_stream_chat_message_persists_completed_run_and_streams_deltas(
     assert [event.type for event in duplicate_events] == ["accepted", "completed"]
     assert duplicate_events[-1].assistant_message is not None
     assert duplicate_events[-1].assistant_message.content == "Critical hits."
+
+
+def test_hello_does_not_create_research_run_or_instantiate_provider(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="hello",
+            idempotency_key="hello-no-research",
+            provider_factory=unavailable_provider_factory,
+        )
+    )
+
+    assert [event.type for event in events] == [
+        "accepted",
+        "turn_decision",
+        "delta",
+        "completed",
+    ]
+    assert events[-1].assistant_message is not None
+    assert "look up" in events[-1].assistant_message.content
+    assert events[-1].model_run.status == "completed"
+    with open_connection(config.db_path) as connection:
+        research_count = connection.execute(
+            "select count(*) from familiar_research_runs"
+        ).fetchone()[0]
+        decision = connection.execute(
+            """
+            select turn_kind, answer_mode, reader_context_policy, answer_outcome
+            from familiar_turn_decisions
+            where model_run_id = ?
+            """,
+            (events[-1].model_run.id,),
+        ).fetchone()
+
+    assert research_count == 0
+    assert dict(decision) == {
+        "turn_kind": "conversation",
+        "answer_mode": "direct",
+        "reader_context_policy": "ignore",
+        "answer_outcome": "direct_response",
+    }
+
+
+def test_provider_unavailable_greeting_completes_locally(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    config = AppConfig(
+        pdf_root=config.pdf_root,
+        data_dir=config.data_dir,
+        db_path=config.db_path,
+        asset_dir=config.asset_dir,
+        openai_api_key=None,
+    )
+    seed_searchable_books(config)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="hi",
+            idempotency_key="hello-provider-down",
+        )
+    )
+
+    assert [event.type for event in events] == [
+        "accepted",
+        "turn_decision",
+        "delta",
+        "completed",
+    ]
+    assert events[-1].model_run.status == "completed"
+    assert events[-1].assistant_message is not None
+    assert "look up" in events[-1].assistant_message.content
+
+
+def test_thanks_completes_locally_with_acknowledgment(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="thanks",
+            idempotency_key="thanks-no-research",
+            provider_factory=unavailable_provider_factory,
+        )
+    )
+
+    assert [event.type for event in events] == [
+        "accepted",
+        "turn_decision",
+        "delta",
+        "completed",
+    ]
+    assert events[-1].assistant_message is not None
+    assert events[-1].assistant_message.content.startswith("You are welcome.")
+    with open_connection(config.db_path) as connection:
+        research_count = connection.execute(
+            "select count(*) from familiar_research_runs"
+        ).fetchone()[0]
+        decision = connection.execute(
+            """
+            select subject, answer_outcome
+            from familiar_turn_decisions
+            where model_run_id = ?
+            """,
+            (events[-1].model_run.id,),
+        ).fetchone()
+
+    assert research_count == 0
+    assert dict(decision) == {
+        "subject": "thanks",
+        "answer_outcome": "direct_response",
+    }
+
+
+def test_direct_response_text_handles_thanks_and_default_provider(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    direct_text = chat_service.direct_response_text(
+        chat_service.turn_contract.TurnDecision(
+            turn_kind="conversation",
+            answer_mode="direct",
+            subject="thanks",
+            confidence="high",
+            reasons=("greeting_or_social_text",),
+            reader_context_policy="ignore",
+        )
+    )
+    app_help_text = chat_service.direct_response_text(
+        chat_service.turn_contract.TurnDecision(
+            turn_kind="app_help",
+            answer_mode="direct",
+            subject=None,
+            confidence="high",
+            reasons=("app_help_request",),
+            reader_context_policy="ignore",
+        )
+    )
+    provider_instance = chat_service.default_provider_factory(config)
+
+    assert direct_text.startswith("You are welcome.")
+    assert "local books" in app_help_text
+    assert isinstance(provider_instance, chat_service.provider.OpenAIProvider)
+
+
+def test_ambiguous_frustration_does_not_enter_research(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="why are you doing that",
+            idempotency_key="ambiguous-no-research",
+            provider_factory=unavailable_provider_factory,
+        )
+    )
+
+    assert [event.type for event in events] == [
+        "accepted",
+        "turn_decision",
+        "delta",
+        "completed",
+    ]
+    assert events[-1].assistant_message is not None
+    assert "what would you like" in events[-1].assistant_message.content.lower()
+    with open_connection(config.db_path) as connection:
+        research_count = connection.execute(
+            "select count(*) from familiar_research_runs"
+        ).fetchone()[0]
+        decision = connection.execute(
+            """
+            select turn_kind, answer_mode, answer_outcome
+            from familiar_turn_decisions
+            where model_run_id = ?
+            """,
+            (events[-1].model_run.id,),
+        ).fetchone()
+
+    assert research_count == 0
+    assert dict(decision) == {
+        "turn_kind": "clarification_needed",
+        "answer_mode": "clarify",
+        "answer_outcome": "clarifying_question",
+    }
 
 
 def test_stream_chat_message_sends_recent_completed_turns_to_provider(
@@ -561,12 +776,13 @@ def test_stream_close_after_retrieval_marks_active_run_failed(
     events = chat_service.stream_chat_message(
         config,
         thread_id=thread.id,
-        content="What about it?",
+        content="What about critical hits?",
         idempotency_key="send-interrupted",
         provider_factory=lambda _: CapturingProvider(),
     )
 
     accepted_event = next(events)
+    decision_event = next(events)
     research_event = next(events)
     plan_event = next(events)
     tool_event = next(events)
@@ -574,6 +790,7 @@ def test_stream_close_after_retrieval_marks_active_run_failed(
     events.close()
 
     assert accepted_event.type == "accepted"
+    assert decision_event.type == "turn_decision"
     assert research_event.type == "research_started"
     assert plan_event.type == "research_plan"
     assert tool_event.type == "tool_call"
@@ -611,10 +828,42 @@ def test_stream_chat_message_fails_without_openai_key(tmp_path: Path) -> None:
         )
     )
 
-    assert [event.type for event in events] == ["accepted", "failed"]
+    assert [event.type for event in events] == [
+        "accepted",
+        "turn_decision",
+        "research_started",
+        "research_plan",
+        "tool_call",
+        "retrieval",
+        "tool_result",
+        "evidence_validation",
+        "failed",
+    ]
     assert events[-1].model_run.status == "failed"
     assert events[-1].model_run.error_code == "provider_unavailable"
-    assert "OPENAI_API_KEY" in (events[-1].error_message or "")
+    assert events[-1].error_message == (
+        "The model provider is unavailable. Check backend provider configuration."
+    )
+    with open_connection(config.db_path) as connection:
+        assert connection.execute(
+            "select count(*) from familiar_research_runs"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "select count(*) from familiar_tool_calls"
+        ).fetchone()[0] == 1
+        decision = connection.execute(
+            """
+            select answer_outcome, outcome_json
+            from familiar_turn_decisions
+            where model_run_id = ?
+            """,
+            (events[-1].model_run.id,),
+        ).fetchone()
+    outcome = json.loads(decision["outcome_json"])
+    assert decision["answer_outcome"] == "provider_error"
+    assert outcome["kind"] == "provider_error"
+    assert outcome["error_code"] == "provider_unavailable"
+    assert "OPENAI_API_KEY" not in outcome["error_message"]
 
     duplicate_events = tuple(
         chat_service.stream_chat_message(
@@ -647,6 +896,7 @@ def test_stream_chat_message_ignores_empty_deltas(tmp_path: Path) -> None:
 
     assert [event.type for event in events] == [
         "accepted",
+        "turn_decision",
         "research_started",
         "research_plan",
         "tool_call",
@@ -682,7 +932,23 @@ def test_stream_chat_message_marks_provider_unavailable_during_stream(
     assert events[-1].type == "failed"
     assert events[-1].model_run.status == "failed"
     assert events[-1].model_run.error_code == "provider_unavailable"
-    assert events[-1].error_message == "provider dropped"
+    assert events[-1].error_message == (
+        "The model provider is unavailable. Check backend provider configuration."
+    )
+    with open_connection(config.db_path) as connection:
+        decision = connection.execute(
+            """
+            select answer_outcome, outcome_json
+            from familiar_turn_decisions
+            where model_run_id = ?
+            """,
+            (events[-1].model_run.id,),
+        ).fetchone()
+    outcome = json.loads(decision["outcome_json"])
+    assert decision["answer_outcome"] == "provider_error"
+    assert outcome["kind"] == "provider_error"
+    assert outcome["error_code"] == "provider_unavailable"
+    assert "provider dropped" not in outcome["error_message"]
 
 
 def test_stream_chat_message_marks_generic_provider_failure(tmp_path: Path) -> None:
@@ -705,7 +971,99 @@ def test_stream_chat_message_marks_generic_provider_failure(tmp_path: Path) -> N
     assert events[-1].type == "failed"
     assert events[-1].model_run.status == "failed"
     assert events[-1].model_run.error_code == "provider_error"
-    assert events[-1].error_message == "provider exploded"
+    assert events[-1].error_message == (
+        "The model provider failed while generating the answer."
+    )
+    with open_connection(config.db_path) as connection:
+        decision = connection.execute(
+            """
+            select answer_outcome, outcome_json
+            from familiar_turn_decisions
+            where model_run_id = ?
+            """,
+            (events[-1].model_run.id,),
+        ).fetchone()
+    outcome = json.loads(decision["outcome_json"])
+    assert decision["answer_outcome"] == "provider_error"
+    assert outcome["kind"] == "provider_error"
+    assert outcome["error_code"] == "provider_error"
+    assert "provider exploded" not in outcome["error_message"]
+
+
+def test_retry_uses_persisted_turn_decision_for_execution(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_searchable_books(config)
+    thread = chat_service.chat_store.create_thread(config)
+    original = chat_service.chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="hello",
+        idempotency_key="send-original-rules-contract",
+        provider="openai",
+        model="gpt-test",
+    )
+    original_decision = chat_service.chat_store.record_familiar_turn_decision(
+        config,
+        model_run_id=original.model_run.id,
+        decision=chat_service.turn_contract.TurnDecision(
+            turn_kind="rules_lookup",
+            answer_mode="research",
+            subject="hello",
+            confidence="medium",
+            reasons=("rules_terms",),
+            reader_context_policy="routing_hint",
+        ),
+    )
+    chat_service.chat_store.fail_model_run(
+        config,
+        original.model_run.id,
+        error_code="provider_error",
+        error_message="provider failed",
+    )
+
+    events = tuple(
+        chat_service.stream_retry_model_run(
+            config,
+            model_run_id=original.model_run.id,
+            idempotency_key="retry-original-rules-contract",
+            provider_factory=lambda _: FakeProvider(),
+        )
+    )
+
+    assert [event.type for event in events] == [
+        "accepted",
+        "turn_decision",
+        "research_started",
+        "research_plan",
+        "tool_call",
+        "retrieval",
+        "tool_result",
+        "evidence_validation",
+        "delta",
+        "delta",
+        "completed",
+    ]
+    assert events[1].metadata is not None
+    assert events[1].metadata["turn_kind"] == "rules_lookup"
+    assert events[1].metadata["retry_of_decision_id"] == original_decision.id
+    with open_connection(config.db_path) as connection:
+        assert connection.execute(
+            "select count(*) from familiar_research_runs"
+        ).fetchone()[0] == 1
+        retry_decision = connection.execute(
+            """
+            select turn_kind, answer_mode, retry_of_decision_id
+            from familiar_turn_decisions
+            where model_run_id = ?
+            """,
+            (events[-1].model_run.id,),
+        ).fetchone()
+
+    assert dict(retry_decision) == {
+        "turn_kind": "rules_lookup",
+        "answer_mode": "research",
+        "retry_of_decision_id": original_decision.id,
+    }
 
 
 def test_stream_chat_message_leaves_existing_inflight_run_alone(

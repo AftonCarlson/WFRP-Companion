@@ -429,6 +429,10 @@ describe("AgentChatPanel", () => {
         model_run: modelRun("retrieving"),
       });
       options.onEvent({
+        type: "turn_decision",
+        metadata: { turn_kind: "statline_lookup", answer_mode: "research" },
+      });
+      options.onEvent({
         type: "research_started",
         metadata: { resolved_query: "harpy statline" },
       });
@@ -497,6 +501,7 @@ describe("AgentChatPanel", () => {
       await screen.findAllByText("Evidence sufficient; 1 accepted")
     )[0];
     await user.click(summary);
+    expect(screen.getByText("statline lookup; research")).toBeInTheDocument();
     expect(screen.getByText("Research started")).toBeInTheDocument();
     expect(screen.getByText("Research plan accepted")).toBeInTheDocument();
     expect(screen.getByText("Running hybrid search")).toBeInTheDocument();
@@ -504,6 +509,49 @@ describe("AgentChatPanel", () => {
       screen.getByText("Tool returned 1 candidate(s); vector ran"),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Answering from evidence").length).toBeGreaterThan(0);
+  });
+
+  it("does not render research trace chrome for direct turn decisions", async () => {
+    const user = userEvent.setup();
+    const client = chatClient({
+      async streamChatMessage(threadId, options) {
+        options.onEvent({
+          type: "accepted",
+          user_message: {
+            id: "m-direct",
+            thread_id: threadId,
+            role: "user",
+            content: options.content,
+            created_at: "now",
+          },
+          model_run: modelRun("calling_model"),
+        });
+        options.onEvent({
+          type: "turn_decision",
+          metadata: { turn_kind: "conversation", answer_mode: "direct" },
+        });
+        options.onEvent({
+          type: "completed",
+          assistant_message: {
+            id: "a-direct",
+            thread_id: threadId,
+            role: "assistant",
+            content: "Hello.",
+            created_at: "later",
+          },
+          model_run: modelRun("completed"),
+          citations: [],
+        });
+      },
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={false} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "hello");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(await screen.findByText("Hello.")).toBeInTheDocument();
+    expect(screen.queryByText("conversation; research")).not.toBeInTheDocument();
+    expect(screen.queryByText("Research turn")).not.toBeInTheDocument();
   });
 
   it("renders fallback research trace labels for non-search tool events", async () => {
@@ -566,6 +614,52 @@ describe("AgentChatPanel", () => {
     expect(screen.getByText("Tool returned results")).toBeInTheDocument();
     expect(screen.getByText("Evidence partial")).toBeInTheDocument();
     expect(screen.getByText("No evidence.")).toBeInTheDocument();
+  });
+
+  it("renders validation reason counts without calling partial evidence sufficient", async () => {
+    const user = userEvent.setup();
+    const client = chatClient({
+      async streamChatMessage(threadId, options) {
+        options.onEvent({
+          type: "accepted",
+          user_message: {
+            id: "m1",
+            thread_id: threadId,
+            role: "user",
+            content: "trace counts",
+            created_at: "now",
+          },
+          model_run: modelRun("retrieving"),
+        });
+        options.onEvent({
+          type: "evidence_validation",
+          metadata: {
+            evidence_status: "partial",
+            accepted_hit_count: 0,
+            partial_hit_count: 1,
+            rejected_hit_count: 2,
+            reason_counts: {
+              subject_mismatch: 1,
+              missing_statline_fields: 1,
+            },
+          },
+        });
+        options.onEvent({ type: "failed", error_message: "Still missing evidence." });
+      },
+    });
+    renderApp(<AgentChatPanel client={client} historyOpen={false} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "trace counts");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    const summary = (await screen.findAllByText("Research failed"))[0];
+    await user.click(summary);
+    expect(
+      screen.getByText(
+        "Evidence partial; 0 accepted, 1 partial, 2 rejected (missing_statline_fields 1, subject_mismatch 1)",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Evidence sufficient; 0 accepted/i)).not.toBeInTheDocument();
   });
 
   it("ignores stream updates for unknown model run ids", async () => {

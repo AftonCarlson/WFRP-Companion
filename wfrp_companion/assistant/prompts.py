@@ -229,6 +229,8 @@ def build_final_answer_prompt_messages(
     plan_summary: str | None = None,
     requirement_summaries: Sequence[Mapping[str, object]] = (),
     answer_policy: str = "cite_required",
+    answer_outcome: str | None = None,
+    missing_summaries: Sequence[str] = (),
     context_char_limit: int = 9000,
 ) -> tuple[PromptMessage, ...]:
     evidence_block = build_context_block(
@@ -237,7 +239,7 @@ def build_final_answer_prompt_messages(
     )
     if evidence_block:
         evidence_section = f"Accepted evidence:\n{evidence_block}"
-        instruction = "Answer only from accepted evidence and cite book/page."
+        instruction = final_answer_instruction(answer_outcome)
     else:
         evidence_section = "No accepted evidence was found."
         instruction = (
@@ -248,6 +250,8 @@ def build_final_answer_prompt_messages(
         plan_summary=plan_summary,
         requirement_summaries=requirement_summaries,
         answer_policy=answer_policy,
+        answer_outcome=answer_outcome,
+        missing_summaries=missing_summaries,
     )
     user_content = f"""Question:
 {question}
@@ -271,9 +275,12 @@ def build_final_plan_block(
     plan_summary: str | None,
     requirement_summaries: Sequence[Mapping[str, object]],
     answer_policy: str,
+    answer_outcome: str | None = None,
+    missing_summaries: Sequence[str] = (),
 ) -> str:
     lines = [
         f"Answer policy: {answer_policy}",
+        f"Answer outcome: {answer_outcome or 'not_recorded'}",
         f"Public plan: {plan_summary or 'No public plan summary was recorded.'}",
     ]
     if requirement_summaries:
@@ -285,7 +292,20 @@ def build_final_plan_block(
             lines.append(f"- {requirement_id} ({requirement_type}): {status}")
     else:
         lines.append("Requirement status: none recorded")
+    if missing_summaries:
+        lines.append("Missing requirements:")
+        lines.extend(f"- {safe_summary_value(summary)}" for summary in missing_summaries)
     return "\n".join(lines)
+
+
+def final_answer_instruction(answer_outcome: str | None) -> str:
+    if answer_outcome == "partial_answer":
+        return (
+            "Answer the satisfied requirements from accepted evidence. Do not answer "
+            "unsatisfied requirements. Briefly name missing requirements without "
+            "blaming the user."
+        )
+    return "Answer only from accepted evidence and cite book/page."
 
 
 def build_context_block(

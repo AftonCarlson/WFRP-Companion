@@ -192,7 +192,7 @@ class ToolThenFinalProvider:
                 tool_call_id="call-open-page",
                 tool_arguments_json=json.dumps(
                     {
-                        "requirement_id": "harpy_stats",
+                        "requirement_id": "statline_harpy",
                         "book_id": None,
                         "book_title_hint": "Old World Bestiary",
                         "printed_page_label": "99",
@@ -299,7 +299,7 @@ class PartialOpenPageThenFinalProvider:
                     tool_call_id="call-partial-open-page",
                     tool_arguments_json=json.dumps(
                         {
-                            "requirement_id": "harpy_stats",
+                            "requirement_id": "statline_harpy",
                             "book_title_hint": "Old World Bestiary",
                             "printed_page_label": "99",
                             "subject_hint": "harpy",
@@ -398,7 +398,7 @@ class FinishAfterEmptySearchProvider:
                 tool_arguments_json=json.dumps(
                     {
                         "reason": "no_useful_action",
-                        "requirement_ids": ["harpy_stats"],
+                        "requirement_ids": ["statline_harpy"],
                         "evidence_status": "insufficient",
                         "decision_summary": "No useful remaining local tool.",
                     }
@@ -459,6 +459,52 @@ class MultiRequirementProvider:
         yield provider.ProviderStreamEvent(type="completed")
 
 
+class RepeatingRecoveryProvider:
+    def __init__(self) -> None:
+        self.recovery_calls = 0
+
+    def stream_response(
+        self,
+        *,
+        messages: Sequence[provider.ProviderMessage],
+        request_id: str,
+        tools: Sequence[provider.ProviderToolDefinition] = (),
+        tool_results: Sequence[provider.ProviderToolResult] = (),
+        previous_response_id: str | None = None,
+        tool_choice: object | None = None,
+        parallel_tool_calls: bool | None = None,
+    ):
+        if tools and [tool.name for tool in tools] == ["set_research_plan"]:
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="set_research_plan",
+                tool_call_id="call-plan",
+                tool_arguments_json=json.dumps(multi_requirement_plan_payload()),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
+        if tools:
+            self.recovery_calls += 1
+            yield provider.ProviderStreamEvent(
+                type="tool_call",
+                tool_name="search_library",
+                tool_call_id=f"call-repeat-harpy-{self.recovery_calls}",
+                tool_arguments_json=json.dumps(
+                    {
+                        "requirement_id": "statline_harpy",
+                        "query": "harpy statline",
+                        "intent": "statline_lookup",
+                        "subject": "harpy",
+                        "decision_summary": "Repeat the already satisfied requirement.",
+                    }
+                ),
+            )
+            yield provider.ProviderStreamEvent(type="completed")
+            return
+        yield provider.ProviderStreamEvent(type="delta", text_delta="Both statlines cited.")
+        yield provider.ProviderStreamEvent(type="completed")
+
+
 class MultipleRecoveryCallsProvider:
     def stream_response(
         self,
@@ -484,7 +530,7 @@ class MultipleRecoveryCallsProvider:
             assert parallel_tool_calls is False
             payload = json.dumps(
                 {
-                    "requirement_id": "harpy_stats",
+                    "requirement_id": "statline_harpy",
                     "query": "harpy statline",
                     "intent": "statline_lookup",
                 }
@@ -501,7 +547,7 @@ class MultipleRecoveryCallsProvider:
                 tool_call_id="call-open-2",
                 tool_arguments_json=json.dumps(
                     {
-                        "requirement_id": "harpy_stats",
+                        "requirement_id": "statline_harpy",
                         "printed_page_label": "99",
                     }
                 ),
@@ -723,7 +769,7 @@ def plan_payload(
     query: str,
     subject: str | None = "harpy",
     intent: str = "statline_lookup",
-    requirement_id: str = "harpy_stats",
+    requirement_id: str = "statline_harpy",
 ) -> dict[str, object]:
     include_terms = [] if subject is None else [subject]
     return {
@@ -942,6 +988,7 @@ def test_familiar_runs_hybrid_search_and_filters_final_citations(
 
     assert [event.type for event in events] == [
         "accepted",
+        "turn_decision",
         "research_started",
         "research_plan",
         "tool_call",
@@ -980,13 +1027,13 @@ def test_familiar_runs_hybrid_search_and_filters_final_citations(
 
     assert dict(research_run) == {"status": "completed", "evidence_status": "sufficient"}
     assert sorted(tuple(row) for row in judgments) == [
-        ("accepted", "statline_evidence", plan_id, "harpy_stats"),
-        ("rejected", "subject_mismatch", plan_id, "harpy_stats"),
+        ("accepted", "statline_evidence", plan_id, "statline_harpy"),
+        ("rejected", "subject_mismatch", plan_id, "statline_harpy"),
     ]
     assert retrieval_metadata["validation_status"] == "sufficient"
 
 
-def test_familiar_accepts_provider_short_requirement_ids(
+def test_familiar_ignores_provider_short_requirement_ids(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1040,6 +1087,7 @@ def test_familiar_accepts_provider_short_requirement_ids(
     assert len(observed_tool_call_ids) == 1
     assert [event.type for event in events] == [
         "accepted",
+        "turn_decision",
         "research_started",
         "research_plan",
         "tool_call",
@@ -1062,9 +1110,9 @@ def test_familiar_accepts_provider_short_requirement_ids(
             "select requirement_id from familiar_evidence_judgments"
         ).fetchone()
 
-    assert plan_requirement["id"] == "r1"
-    assert tool_row["requirement_id"] == "r1"
-    assert judgment_row["requirement_id"] == "r1"
+    assert plan_requirement["id"] == "statline_orc"
+    assert tool_row["requirement_id"] == "statline_orc"
+    assert judgment_row["requirement_id"] == "statline_orc"
 
 
 def test_familiar_tool_call_trace_uses_public_scrubbed_arguments(
@@ -1130,6 +1178,7 @@ def test_familiar_tool_call_trace_uses_public_scrubbed_arguments(
     assert public_arguments == {
         "intent": "statline_lookup",
         "limit": 8,
+        "requirement_id": "statline_harpy",
     }
 
 
@@ -1189,8 +1238,9 @@ def test_familiar_persists_plan_before_executing_local_retrieval(
     )
 
     assert observed == ["search_after_plan:accepted"]
-    assert [event.type for event in events][:4] == [
+    assert [event.type for event in events][:5] == [
         "accepted",
+        "turn_decision",
         "research_started",
         "research_plan",
         "tool_call",
@@ -1203,7 +1253,7 @@ def test_familiar_persists_plan_before_executing_local_retrieval(
         "requirement_count": 1,
         "requirements": [
             {
-                "id": "harpy_stats",
+                "id": "statline_harpy",
                 "requirement_type": "statline_evidence",
                 "min_accepted_hits": 1,
                 "required": True,
@@ -1230,11 +1280,11 @@ def test_familiar_persists_plan_before_executing_local_retrieval(
 
     assert dict(plan_row) == {"status": "accepted", "provider_call_id": "call-plan"}
     assert tool_row["research_plan_id"] == plan_event.metadata["research_plan_id"]
-    assert tool_row["requirement_id"] == "harpy_stats"
-    assert tool_row["purpose"] == "Search checked books for harpy statline."
+    assert tool_row["requirement_id"] == "statline_harpy"
+    assert tool_row["purpose"] == "Search checked books for statline_harpy."
 
 
-def test_planning_provider_unavailable_creates_no_tool_calls_and_fails_run(
+def test_planning_provider_unavailable_uses_app_plan_then_final_provider_fails(
     tmp_path: Path,
 ) -> None:
     config = make_config(tmp_path)
@@ -1251,12 +1301,25 @@ def test_planning_provider_unavailable_creates_no_tool_calls_and_fails_run(
         )
     )
 
-    assert [event.type for event in events] == ["accepted", "failed"]
+    assert [event.type for event in events] == [
+        "accepted",
+        "turn_decision",
+        "research_started",
+        "research_plan",
+        "tool_call",
+        "retrieval",
+        "tool_result",
+        "evidence_validation",
+        "failed",
+    ]
     assert events[-1].model_run.status == "failed"
     assert events[-1].model_run.error_code == "provider_unavailable"
     with open_connection(config.db_path) as connection:
         research_row = connection.execute(
-            "select status, evidence_status from familiar_research_runs"
+            """
+            select status, evidence_status, tool_rounds_used
+            from familiar_research_runs
+            """
         ).fetchone()
         tool_count = connection.execute(
             "select count(*) from familiar_tool_calls"
@@ -1266,14 +1329,15 @@ def test_planning_provider_unavailable_creates_no_tool_calls_and_fails_run(
         ).fetchone()[0]
 
     assert dict(research_row) == {
-        "status": "failed",
+        "status": "insufficient",
         "evidence_status": "insufficient",
+        "tool_rounds_used": 1,
     }
-    assert tool_count == 0
-    assert retrieval_count == 0
+    assert tool_count == 1
+    assert retrieval_count == 1
 
 
-def test_planning_multiple_tool_calls_fails_before_retrieval(tmp_path: Path) -> None:
+def test_planning_multiple_tool_calls_falls_back_to_app_plan(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_bestiary(config)
     thread = chat_service.chat_store.create_thread(config)
@@ -1288,13 +1352,16 @@ def test_planning_multiple_tool_calls_fails_before_retrieval(tmp_path: Path) -> 
         )
     )
 
-    assert events[-1].type == "failed"
-    assert events[-1].error_message == "Planning returned multiple tool calls"
+    assert events[-1].type == "completed"
     with open_connection(config.db_path) as connection:
-        assert connection.execute("select count(*) from retrieval_runs").fetchone()[0] == 0
+        assert connection.execute("select count(*) from retrieval_runs").fetchone()[0] == 1
+        plan_row = connection.execute(
+            "select provider_call_id from familiar_research_plans"
+        ).fetchone()
+    assert plan_row["provider_call_id"] is None
 
 
-def test_planning_without_tool_call_fails_before_retrieval(tmp_path: Path) -> None:
+def test_planning_without_tool_call_falls_back_to_app_plan(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_bestiary(config)
     thread = chat_service.chat_store.create_thread(config)
@@ -1309,8 +1376,13 @@ def test_planning_without_tool_call_fails_before_retrieval(tmp_path: Path) -> No
         )
     )
 
-    assert events[-1].type == "failed"
-    assert events[-1].error_message == "Planning did not return set_research_plan"
+    assert events[-1].type == "completed"
+    with open_connection(config.db_path) as connection:
+        assert connection.execute("select count(*) from retrieval_runs").fetchone()[0] == 1
+        plan_row = connection.execute(
+            "select provider_call_id from familiar_research_plans"
+        ).fetchone()
+    assert plan_row["provider_call_id"] is None
 
 
 def test_familiar_handles_plan_with_no_initial_actions(tmp_path: Path) -> None:
@@ -1336,28 +1408,35 @@ def test_familiar_handles_plan_with_no_initial_actions(tmp_path: Path) -> None:
 
     assert [event.type for event in events] == [
         "accepted",
+        "turn_decision",
         "research_started",
         "research_plan",
+        "tool_call",
+        "retrieval",
+        "tool_result",
         "evidence_validation",
         "delta",
         "completed",
     ]
     assert events[-1].assistant_message is not None
     assert events[-1].assistant_message.content == "No action answer."
+    with open_connection(config.db_path) as connection:
+        assert connection.execute("select count(*) from familiar_tool_calls").fetchone()[0] == 1
+        assert connection.execute("select count(*) from retrieval_runs").fetchone()[0] == 1
 
 
-def test_familiar_handles_initial_finish_research_action(tmp_path: Path) -> None:
+def test_familiar_ignores_initial_provider_finish_research_action(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     seed_bestiary(config)
     payload = plan_payload(query="harpy statline")
     payload["planned_actions"] = [
         {
             "tool_name": "finish_research",
-            "requirement_id": "harpy_stats",
+            "requirement_id": "statline_harpy",
             "purpose": "Stop before retrieval.",
             "arguments": {
                 "reason": "no_useful_action",
-                "requirement_ids": ["harpy_stats"],
+                "requirement_ids": ["statline_harpy"],
                 "evidence_status": "insufficient",
                 "decision_summary": "No local tool can improve this.",
             },
@@ -1381,16 +1460,20 @@ def test_familiar_handles_initial_finish_research_action(tmp_path: Path) -> None
 
     assert [event.type for event in events] == [
         "accepted",
+        "turn_decision",
         "research_started",
         "research_plan",
-        "finalizing",
+        "tool_call",
+        "retrieval",
+        "tool_result",
         "evidence_validation",
         "delta",
         "completed",
     ]
     assert events[-1].assistant_message is not None
     with open_connection(config.db_path) as connection:
-        assert connection.execute("select count(*) from retrieval_runs").fetchone()[0] == 0
+        assert connection.execute("select count(*) from familiar_tool_calls").fetchone()[0] == 1
+        assert connection.execute("select count(*) from retrieval_runs").fetchone()[0] == 1
 
 
 def test_familiar_accepts_topical_evidence_for_dungeon_crawl_recommendation(
@@ -1490,7 +1573,7 @@ def test_familiar_accepts_topical_evidence_for_dungeon_crawl_recommendation(
     assert [tuple(row) for row in judgments] == [("accepted", "topical_evidence")]
 
 
-def test_familiar_uses_provider_requested_page_lookup_after_weak_search(
+def test_familiar_stops_after_no_new_backend_action_for_weak_search(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1528,30 +1611,24 @@ def test_familiar_uses_provider_requested_page_lookup_after_weak_search(
 
     event_types = [event.type for event in events]
     assert "research_plan" in event_types
-    assert event_types.count("tool_call") == 2
-    assert event_types.count("tool_result") == 2
+    assert event_types.count("tool_call") == 1
+    assert event_types.count("tool_result") == 1
     assert "evidence_validation" in event_types
     assert events[-1].assistant_message is not None
     assert events[-1].assistant_message.content == "Recovered harpy stats."
-    assert events[-1].citations[0].title == "Old World Bestiary"
-    assert events[-1].citations[0].page_label == "99"
+    assert events[-1].citations == ()
     assert provider_instance.calls[0]["tools"]
     assert provider_instance.calls[0]["tool_results"] == ()
-    assert provider_instance.calls[1]["tools"]
-    assert '"hit_count": 0' in provider_instance.calls[1]["messages"][-1].content
-    assert "Prior local tool results:" in provider_instance.calls[1]["messages"][-1].content
+    assert not provider_instance.calls[1]["tools"]
     assert provider_instance.calls[-1]["tool_choice"] in (None, "none")
     with open_connection(config.db_path) as connection:
         tool_rows = connection.execute(
             "select tool_name, status from familiar_tool_calls order by step_number"
         ).fetchall()
-    assert [tuple(row) for row in tool_rows] == [
-        ("search_library", "succeeded"),
-        ("open_page", "succeeded"),
-    ]
+    assert [tuple(row) for row in tool_rows] == [("search_library", "succeeded")]
 
 
-def test_familiar_rejects_provider_action_with_unknown_requirement(
+def test_familiar_ignores_provider_recovery_action_with_unknown_requirement(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1586,8 +1663,7 @@ def test_familiar_rejects_provider_action_with_unknown_requirement(
         )
     )
 
-    assert events[-1].type == "failed"
-    assert "unknown requirement" in (events[-1].error_message or "")
+    assert events[-1].type == "completed"
     with open_connection(config.db_path) as connection:
         research_row = connection.execute(
             """
@@ -1603,15 +1679,15 @@ def test_familiar_rejects_provider_action_with_unknown_requirement(
         ).fetchall()
 
     assert dict(research_row) == {
-        "status": "failed",
+        "status": "insufficient",
         "evidence_status": "insufficient",
         "tool_rounds_used": 1,
     }
     assert retrieval_count == 1
-    assert [tuple(row) for row in tool_rows] == [("search_library", "harpy_stats")]
+    assert [tuple(row) for row in tool_rows] == [("search_library", "statline_harpy")]
 
 
-def test_familiar_finish_research_action_runs_no_additional_retrieval(
+def test_familiar_ignores_provider_finish_research_recovery_action(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1647,15 +1723,15 @@ def test_familiar_finish_research_action_runs_no_additional_retrieval(
         )
     )
 
-    assert provider_instance.action_calls == 1
+    assert provider_instance.action_calls == 0
     assert [event.type for event in events] == [
         "accepted",
+        "turn_decision",
         "research_started",
         "research_plan",
         "tool_call",
         "retrieval",
         "tool_result",
-        "finalizing",
         "evidence_validation",
         "delta",
         "completed",
@@ -1672,6 +1748,68 @@ def test_familiar_finish_research_action_runs_no_additional_retrieval(
 
     assert retrieval_count == 1
     assert [row["tool_name"] for row in tool_rows] == ["search_library"]
+
+
+def test_recovery_and_final_prompts_summarize_rejections_without_rejected_text(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    provider_instance = NoToolThenFinalProvider()
+
+    def fake_wrong_search_library(**kwargs):
+        rejected_hit = hit(rank=1, subject="gor")
+        retrieval_run_id = chat_store.record_retrieval_run(
+            config,
+            thread_id=kwargs["thread_id"],
+            message_id=kwargs["message_id"],
+            source_set_id="rules-core",
+            query=kwargs["query"],
+            hits=(rejected_hit,),
+            source_book_ids=("bestiary",),
+            diagnostics=diagnostics(),
+            tool_call_id=kwargs["tool_call_id"],
+            attempt_number=kwargs["attempt_number"],
+            intent=kwargs["intent"],
+            resolved_query=kwargs["query"],
+            tool_name="search_library",
+        )
+        return research_tools.SearchLibraryResult(
+            retrieval_run_id=retrieval_run_id,
+            query=kwargs["query"],
+            source_set_id="rules-core",
+            source_book_ids=("bestiary",),
+            hits=(rejected_hit,),
+            diagnostics=diagnostics(),
+        )
+
+    monkeypatch.setattr(research_tools, "search_library", fake_wrong_search_library)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="harpy statline",
+            idempotency_key="send-agent-rejected-ledger",
+            provider_factory=lambda _: provider_instance,
+        )
+    )
+
+    assert events[-1].assistant_message is not None
+    assert events[-1].assistant_message.content == "No citable evidence."
+    leaked_events = [
+        event
+        for event in events
+        if event.type in {"retrieval", "tool_result", "failed", "completed"}
+        and event.citations
+    ]
+    assert leaked_events == []
+    final_prompt = provider_instance.messages_by_call[1][-1].content
+    assert "Synthetic Gor stat_block" not in final_prompt
+    assert "No accepted evidence was found." in final_prompt
+    assert "- statline_harpy (statline_evidence): unsatisfied" in final_prompt
 
 
 def test_familiar_continues_until_all_required_plan_requirements_are_satisfied(
@@ -1727,12 +1865,7 @@ def test_familiar_continues_until_all_required_plan_requirements_are_satisfied(
     assert queries == ["harpy statline", "gor statline"]
     assert events[-1].assistant_message is not None
     assert events[-1].assistant_message.content == "Both statlines cited."
-    recovery_prompt = provider_instance.recovery_messages[-1].content
-    assert "Accepted research plan:" in recovery_prompt
-    assert "harpy_stats (statline_evidence): satisfied" in recovery_prompt
-    assert "include: harpy" in recovery_prompt
-    assert "required_terms: harpy" in recovery_prompt
-    assert "gor_stats (statline_evidence): unsatisfied" in recovery_prompt
+    assert provider_instance.recovery_messages == ()
     tool_event = next(event for event in events if event.type == "tool_call")
     assert "purpose" not in tool_event.metadata
     validation_event = next(
@@ -1768,12 +1901,162 @@ def test_familiar_continues_until_all_required_plan_requirements_are_satisfied(
         "tool_rounds_used": 2,
     }
     assert [tuple(row) for row in tool_rows] == [
-        ("search_library", "harpy_stats"),
-        ("search_library", "gor_stats"),
+        ("search_library", "statline_harpy"),
+        ("search_library", "statline_gor"),
     ]
 
 
-def test_familiar_rejects_multiple_recovery_tool_calls(
+def test_familiar_tracks_partial_evidence_from_scheduled_requirement(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    provider_instance = MultiRequirementProvider()
+    queries: list[str] = []
+
+    def fake_search_library(**kwargs):
+        queries.append(kwargs["query"])
+        is_gor = "gor" in kwargs["query"]
+        retrieved_hit = hit(
+            rank=1,
+            subject="gor" if is_gor else "harpy",
+            object_type="page_fallback" if is_gor else "stat_block",
+        )
+        if is_gor:
+            retrieved_hit = RetrievedHit(
+                **{
+                    **retrieved_hit.__dict__,
+                    "context_text": "Gor creature entry mentions horns and ambushes.",
+                    "snippet": "Gor creature entry mentions horns and ambushes.",
+                    "source_object_id": None,
+                    "object_title": None,
+                }
+            )
+        retrieval_run_id = chat_store.record_retrieval_run(
+            config,
+            thread_id=kwargs["thread_id"],
+            message_id=kwargs["message_id"],
+            source_set_id="rules-core",
+            query=kwargs["query"],
+            hits=(retrieved_hit,),
+            source_book_ids=("bestiary",),
+            diagnostics=diagnostics("partial" if is_gor else "accepted"),
+            tool_call_id=kwargs["tool_call_id"],
+            attempt_number=kwargs["attempt_number"],
+            intent=kwargs["intent"],
+            resolved_query=kwargs["query"],
+            tool_name="search_library",
+        )
+        return research_tools.SearchLibraryResult(
+            retrieval_run_id=retrieval_run_id,
+            query=kwargs["query"],
+            source_set_id="rules-core",
+            source_book_ids=("bestiary",),
+            hits=(retrieved_hit,),
+            diagnostics=diagnostics("partial" if is_gor else "accepted"),
+        )
+
+    monkeypatch.setattr(research_tools, "search_library", fake_search_library)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="compare harpy and gor statlines",
+            idempotency_key="send-agent-scheduled-partial",
+            provider_factory=lambda _: provider_instance,
+        )
+    )
+
+    assert queries == ["harpy statline", "gor statline"]
+    assert events[-1].assistant_message is not None
+    with open_connection(config.db_path) as connection:
+        research_run = connection.execute(
+            """
+            select status, evidence_status, tool_rounds_used
+            from familiar_research_runs
+            """
+        ).fetchone()
+
+    assert dict(research_run) == {
+        "status": "insufficient",
+        "evidence_status": "partial",
+        "tool_rounds_used": 2,
+    }
+
+
+def test_familiar_scheduler_tries_unsatisfied_requirement_before_provider_repeat(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    provider_instance = RepeatingRecoveryProvider()
+    queries: list[str] = []
+
+    def fake_search_library(**kwargs):
+        queries.append(kwargs["query"])
+        subject = "gor" if "gor" in kwargs["query"] else "harpy"
+        retrieved_hit = hit(rank=1, subject=subject)
+        retrieval_run_id = chat_store.record_retrieval_run(
+            config,
+            thread_id=kwargs["thread_id"],
+            message_id=kwargs["message_id"],
+            source_set_id="rules-core",
+            query=kwargs["query"],
+            hits=(retrieved_hit,),
+            source_book_ids=("bestiary",),
+            diagnostics=diagnostics("accepted"),
+            tool_call_id=kwargs["tool_call_id"],
+            attempt_number=kwargs["attempt_number"],
+            intent=kwargs["intent"],
+            resolved_query=kwargs["query"],
+            tool_name="search_library",
+        )
+        return research_tools.SearchLibraryResult(
+            retrieval_run_id=retrieval_run_id,
+            query=kwargs["query"],
+            source_set_id="rules-core",
+            source_book_ids=("bestiary",),
+            hits=(retrieved_hit,),
+            diagnostics=diagnostics("accepted"),
+        )
+
+    monkeypatch.setattr(research_tools, "search_library", fake_search_library)
+    thread = chat_service.chat_store.create_thread(config)
+
+    events = tuple(
+        chat_service.stream_chat_message(
+            config,
+            thread_id=thread.id,
+            content="compare harpy and gor statlines",
+            idempotency_key="send-agent-scheduler-unsatisfied-first",
+            provider_factory=lambda _: provider_instance,
+        )
+    )
+
+    assert queries == ["harpy statline", "gor statline"]
+    assert provider_instance.recovery_calls == 0
+    assert events[-1].assistant_message is not None
+    with open_connection(config.db_path) as connection:
+        rows = connection.execute(
+            """
+            select requirement_id, arguments_json
+            from familiar_tool_calls
+            order by step_number, call_index
+            """
+        ).fetchall()
+
+    assert [row["requirement_id"] for row in rows] == [
+        "statline_harpy",
+        "statline_gor",
+    ]
+    assert "gor statline" in rows[1]["arguments_json"]
+
+
+def test_familiar_does_not_request_multiple_recovery_tool_calls(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1807,8 +2090,7 @@ def test_familiar_rejects_multiple_recovery_tool_calls(
             provider_factory=lambda _: MultipleRecoveryCallsProvider(),
         )
     )
-    assert events[-1].type == "failed"
-    assert events[-1].error_message == "Research action returned multiple tool calls"
+    assert events[-1].type == "completed"
     with open_connection(config.db_path) as connection:
         tool_count = connection.execute(
             "select count(*) from familiar_tool_calls"
@@ -1818,7 +2100,7 @@ def test_familiar_rejects_multiple_recovery_tool_calls(
         ).fetchone()
     assert tool_count == 1
     assert dict(research_run) == {
-        "status": "failed",
+        "status": "insufficient",
         "evidence_status": "insufficient",
     }
 
@@ -1853,7 +2135,8 @@ def test_familiar_uses_reader_context_for_page_correction(
         "book_id": "bestiary",
         "printed_page_label": "99",
         "pdf_page_number": None,
-        "intent": "rules_lookup",
+        "intent": "source_navigation",
+        "requirement_id": "page_reference",
     }
     assert events[-1].assistant_message is not None
     assert events[-1].assistant_message.content == "Page-corrected answer."
@@ -2035,7 +2318,7 @@ def test_familiar_tracks_partial_page_evidence_from_initial_search(
     assert dict(row) == {"status": "insufficient", "evidence_status": "partial"}
 
 
-def test_familiar_tracks_partial_page_evidence_from_provider_tool(
+def test_familiar_does_not_use_provider_tool_for_partial_page_evidence(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -2079,7 +2362,7 @@ def test_familiar_tracks_partial_page_evidence_from_provider_tool(
         )
     )
 
-    assert provider_instance.planning_calls == 2
+    assert provider_instance.planning_calls == 0
     assert all(call["previous_response_id"] is None for call in provider_instance.calls)
     assert all(call["tool_results"] == () for call in provider_instance.calls)
     assert events[-1].assistant_message is not None
@@ -2087,7 +2370,7 @@ def test_familiar_tracks_partial_page_evidence_from_provider_tool(
         row = connection.execute(
             "select status, evidence_status from familiar_research_runs"
         ).fetchone()
-    assert dict(row) == {"status": "insufficient", "evidence_status": "partial"}
+    assert dict(row) == {"status": "insufficient", "evidence_status": "insufficient"}
 
 
 def test_familiar_marks_tool_and_research_failed_when_tool_execution_raises(
@@ -2113,7 +2396,7 @@ def test_familiar_marks_tool_and_research_failed_when_tool_execution_raises(
         )
     )
 
-    assert [event.type for event in events] == ["accepted", "failed"]
+    assert [event.type for event in events] == ["accepted", "turn_decision", "failed"]
     with open_connection(config.db_path) as connection:
         research_row = connection.execute(
             """
@@ -2195,9 +2478,9 @@ def test_tool_argument_parsing_and_status_helpers_handle_edges() -> None:
     assert familiar_agent.parse_tool_arguments("[]") == {}
     assert familiar_agent.string_list_argument({}, "requirement_ids") == ()
     assert familiar_agent.string_list_argument(
-        {"requirement_ids": ["harpy_stats", "", 42]},
+        {"requirement_ids": ["statline_harpy", "", 42]},
         "requirement_ids",
-    ) == ("harpy_stats",)
+    ) == ("statline_harpy",)
     assert familiar_agent.aggregate_evidence_status(
         accepted_hits=(),
         partial_hits=(),
@@ -2279,7 +2562,7 @@ def test_action_validation_helpers_reject_invalid_actions() -> None:
             familiar_agent.ProviderToolRequest(
                 tool_name="missing_tool",
                 tool_call_id="call-tool",
-                arguments={"requirement_id": "harpy_stats"},
+                arguments={"requirement_id": "statline_harpy"},
             ),
         )
     with pytest.raises(provider.ProviderError, match="missing requirement_id"):
@@ -2292,7 +2575,33 @@ def test_action_validation_helpers_reject_invalid_actions() -> None:
             ),
         )
     with pytest.raises(provider.ProviderError, match="unknown requirement"):
+        familiar_agent.validate_provider_tool_action(
+            plan,
+            familiar_agent.ProviderToolRequest(
+                tool_name="search_library",
+                tool_call_id="call-missing-requirement",
+                arguments={"requirement_id": "missing_requirement"},
+            ),
+        )
+    provider_action = familiar_agent.validate_provider_tool_action(
+        plan,
+        familiar_agent.ProviderToolRequest(
+            tool_name="search_library",
+            tool_call_id="call-tool",
+            arguments={
+                "requirement_id": planned_action.requirement_id,
+                "query": "harpy statline",
+                "decision_summary": "Search for Harpy.",
+            },
+        ),
+    )
+    with pytest.raises(provider.ProviderError, match="unknown requirement"):
         familiar_agent.requirement_by_id(plan, "missing_requirement")
+
+    assert provider_action.tool_name == "search_library"
+    assert provider_action.requirement_id == planned_action.requirement_id
+    assert provider_action.purpose == "Search for Harpy."
+    assert provider_action.provider_call_id == "call-tool"
 
 
 @pytest.mark.parametrize(
@@ -2301,7 +2610,7 @@ def test_action_validation_helpers_reject_invalid_actions() -> None:
         (
             {
                 "reason": "bad",
-                "requirement_ids": ["harpy_stats"],
+                "requirement_ids": ["statline_harpy"],
                 "evidence_status": "insufficient",
                 "decision_summary": "Stop.",
             },
@@ -2312,7 +2621,7 @@ def test_action_validation_helpers_reject_invalid_actions() -> None:
         (
             {
                 "reason": "no_useful_action",
-                "requirement_ids": ["harpy_stats"],
+                "requirement_ids": ["statline_harpy"],
                 "evidence_status": "bad",
                 "decision_summary": "Stop.",
             },
@@ -2334,7 +2643,7 @@ def test_action_validation_helpers_reject_invalid_actions() -> None:
         (
             {
                 "reason": "requirements_satisfied",
-                "requirement_ids": ["harpy_stats"],
+                "requirement_ids": ["statline_harpy"],
                 "evidence_status": "sufficient",
                 "decision_summary": "Stop.",
             },
@@ -2345,7 +2654,7 @@ def test_action_validation_helpers_reject_invalid_actions() -> None:
         (
             {
                 "reason": "budget_exhausted",
-                "requirement_ids": ["harpy_stats"],
+                "requirement_ids": ["statline_harpy"],
                 "evidence_status": "insufficient",
                 "decision_summary": "Stop.",
             },
@@ -2356,7 +2665,7 @@ def test_action_validation_helpers_reject_invalid_actions() -> None:
         (
             {
                 "reason": "no_useful_action",
-                "requirement_ids": ["harpy_stats"],
+                "requirement_ids": ["statline_harpy"],
                 "evidence_status": "insufficient",
             },
             (),
@@ -2366,7 +2675,7 @@ def test_action_validation_helpers_reject_invalid_actions() -> None:
         (
             {
                 "reason": "requirements_satisfied",
-                "requirement_ids": ["harpy_stats"],
+                "requirement_ids": ["statline_harpy"],
                 "evidence_status": "sufficient",
                 "decision_summary": "Stop.",
             },
@@ -2411,6 +2720,15 @@ def test_plan_requirement_helpers_cover_empty_and_partial_states() -> None:
 
     assert familiar_agent.plan_requirements_satisfied(plan, {}) is False
     assert (
+        familiar_agent.next_backend_scheduled_action(
+            plan,
+            accepted_hits_by_requirement={},
+            partial_hits_by_requirement={},
+            attempted_action_signatures=set(),
+        )
+        is None
+    )
+    assert (
         familiar_agent.aggregate_evidence_status(
             accepted_hits=(hit(rank=1, subject="harpy"),),
             partial_hits=(),
@@ -2418,6 +2736,70 @@ def test_plan_requirement_helpers_cover_empty_and_partial_states() -> None:
         )
         == "sufficient"
     )
+
+
+def test_scheduler_prioritizes_zero_attempt_requirement_before_retry() -> None:
+    hit_requirement = agent_planning.EvidenceRequirement(
+        id="hit_location_rule",
+        requirement_type="topical_evidence",
+        subject=agent_planning.SubjectConstraint(
+            canonical="hit location",
+            surface="hit location",
+            include_terms=("hit", "location"),
+        ),
+        object_type_hints=("table",),
+    )
+    armor_requirement = agent_planning.EvidenceRequirement(
+        id="armor_location_rule",
+        requirement_type="topical_evidence",
+        subject=agent_planning.SubjectConstraint(
+            canonical="armor location",
+            surface="armor location",
+            include_terms=("armor", "location"),
+        ),
+        object_type_hints=("table",),
+    )
+    plan = agent_planning.ResearchPlan(
+        id="plan-1",
+        research_run_id="research-1",
+        revision=1,
+        intent="rules_lookup",
+        plan_summary="Find hit-location and armor-location evidence.",
+        subject=agent_planning.SubjectConstraint(
+            canonical="hit location armor location",
+            surface="hit location and armor location",
+            include_terms=("hit", "location", "armor"),
+        ),
+        requirements=(hit_requirement, armor_requirement),
+        planned_actions=(
+            agent_planning.PlannedAction(
+                tool_name="search_library",
+                requirement_id="hit_location_rule",
+                purpose="Search broad hit-location terms.",
+                arguments={
+                    "requirement_id": "hit_location_rule",
+                    "query": "hit location combat table body location",
+                    "intent": "rules_lookup",
+                    "subject": "hit location",
+                    "limit": 8,
+                },
+            ),
+        ),
+    )
+    first_action = familiar_agent.validate_planned_tool_action(
+        plan,
+        plan.planned_actions[0],
+    )
+
+    scheduled = familiar_agent.next_backend_scheduled_action(
+        plan,
+        accepted_hits_by_requirement={},
+        partial_hits_by_requirement={},
+        attempted_action_signatures={familiar_agent.action_signature(first_action)},
+    )
+
+    assert scheduled is not None
+    assert scheduled.requirement_id == "armor_location_rule"
     assert (
         familiar_agent.aggregate_evidence_status(
             accepted_hits=(),
@@ -2426,6 +2808,56 @@ def test_plan_requirement_helpers_cover_empty_and_partial_states() -> None:
         )
         == "partial"
     )
+
+
+def test_requirement_query_handles_page_source_and_duplicate_edges() -> None:
+    page_requirement = agent_planning.EvidenceRequirement(
+        id="page_reference",
+        requirement_type="page_evidence",
+        subject=agent_planning.SubjectConstraint(
+            canonical=None,
+            surface=None,
+            include_terms=(),
+            page_hints=("231",),
+        ),
+        required_terms=("hit", "", "hit"),
+        object_type_hints=(),
+    )
+    source_requirement = agent_planning.EvidenceRequirement(
+        id="source_object",
+        requirement_type="source_object_evidence",
+        subject=agent_planning.SubjectConstraint(
+            canonical=None,
+            surface=None,
+            include_terms=(),
+        ),
+        required_terms=(),
+        object_type_hints=("stat_block",),
+    )
+    fallback_requirement = agent_planning.EvidenceRequirement(
+        id="empty_requirement",
+        requirement_type="topical_evidence",
+        subject=agent_planning.SubjectConstraint(
+            canonical=None,
+            surface=None,
+            include_terms=("",),
+        ),
+        required_terms=("",),
+        object_type_hints=(),
+    )
+
+    assert familiar_agent.requirement_query(
+        page_requirement,
+        subject=None,
+    ) == "hit 231"
+    assert familiar_agent.requirement_query(
+        source_requirement,
+        subject=None,
+    ) == "stat_block"
+    assert familiar_agent.requirement_query(
+        fallback_requirement,
+        subject=None,
+    ) == "empty requirement"
 
 
 def test_public_trace_helpers_scrub_lists_truncate_and_fallback_types() -> None:
@@ -2536,6 +2968,109 @@ def test_execute_tool_dispatches_lookup_source_object_and_rejects_unknown_tool(
             arguments={},
             conversation=conversation,
         )
+
+
+def test_execute_tool_passes_requirement_constraint_to_search_library(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    seed_bestiary(config)
+    thread = chat_service.chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="orc stats",
+        idempotency_key="send-agent-constraint",
+        provider="openai",
+        model="gpt-5.4-mini",
+    )
+    resolved = context_resolution.resolve_research_request(
+        "orc stats",
+        active_context=None,
+    )
+    conversation = conversation_context.ConversationContext(
+        prompt_messages=(),
+        retrieval_query="orc stats",
+        history_message_ids=(),
+        history_turn_count=0,
+        history_strategy="none",
+    )
+    tool_call = research.FamiliarToolCall(
+        id="tool-call-constraint",
+        research_run_id="research-constraint",
+        research_plan_id=None,
+        requirement_id="orc_stats",
+        purpose=None,
+        step_number=1,
+        call_index=0,
+        provider_call_id=None,
+        tool_name="search_library",
+        arguments={"query": "orc stats", "intent": "statline_lookup"},
+        argument_hash="hash",
+        status="running",
+        retrieval_run_id=None,
+        output_summary={},
+        error_code=None,
+        error_message=None,
+        created_at="2026-06-09T00:00:00Z",
+        updated_at="2026-06-09T00:00:00Z",
+        completed_at=None,
+    )
+    requirement = agent_planning.EvidenceRequirement(
+        id="orc_stats",
+        requirement_type="statline_evidence",
+        subject=agent_planning.SubjectConstraint(
+            canonical="Orc",
+            surface="orc",
+            book_title_hints=("Old World Bestiary",),
+            page_hints=("104",),
+        ),
+        required_terms=("WS", "BS", "S", "T"),
+        object_type_hints=("stat_block",),
+        min_accepted_hits=1,
+        required=True,
+    )
+    expected = research_tools.SearchLibraryResult(
+        retrieval_run_id="retrieval-constraint",
+        query="orc stats",
+        source_set_id="rules-core",
+        source_book_ids=("bestiary",),
+        hits=(),
+        diagnostics=diagnostics(),
+    )
+
+    def fake_search_library(**kwargs):
+        constraint = kwargs["requirement_constraint"]
+        assert constraint.requirement_id == "orc_stats"
+        assert constraint.subject_terms == ("orc",)
+        assert constraint.object_type_hints == ("stat_block",)
+        assert constraint.book_title_hints == ("Old World Bestiary",)
+        assert constraint.page_hints == ("104",)
+        return expected
+
+    monkeypatch.setattr(research_tools, "search_library", fake_search_library)
+    result = chat_store.SendChatResult(
+        thread=thread,
+        user_message=queued.user_message,
+        assistant_message=None,
+        model_run=queued.model_run,
+        citations=(),
+    )
+
+    dispatched = familiar_agent.execute_tool(
+        config,
+        result=result,
+        resolved=resolved,
+        tool_call=tool_call,
+        step_number=1,
+        tool_name="search_library",
+        arguments={"query": "orc stats", "intent": "statline_lookup"},
+        conversation=conversation,
+        requirement=requirement,
+    )
+
+    assert dispatched == expected
 
 
 def test_execute_tool_and_validate_uses_compatibility_validation(

@@ -1,5 +1,56 @@
 # Wiki Compile Log
 
+## 2026-06-10 Familiar Reliability Contract Phase
+
+- Replaced provider-owned Familiar orchestration with an app-owned reliability
+  contract. Turns are triaged before provider construction and stored in
+  `familiar_turn_decisions`; direct/clarifying turns complete locally without
+  research rows.
+- App-owned requirement planning now builds the accepted research plan, while
+  provider planning is advisory metadata only. The scheduler prioritizes
+  required zero-attempt requirements before retries and suppresses exact
+  duplicate actions.
+- Added answer outcomes for full, partial, insufficient, direct, clarifying, and
+  provider-error responses. Final prompts receive accepted evidence plus
+  requirement/outcome summaries so partial answers can be cited honestly.
+- Hardened retry and failure behavior: retry execution uses the persisted
+  effective turn decision, advisory provider failures do not prevent local
+  research state from being recorded, and public provider failure messages are
+  bounded generic text rather than raw exception strings.
+- Updated frontend/API chat traces with `turn_decision` handling and kept
+  non-research decisions out of the visible research trace.
+- Vector readiness was smoke-verified locally with the `local-hash` provider;
+  operational readiness still depends on the running app's embedding provider,
+  model, dimensions, and current local embedding rows matching.
+- Verification completed: `ruff check wfrp_companion tests tools`; backend
+  coverage gate with 721 tests at 100.00%; frontend Vitest coverage with 139
+  tests passing; frontend production build. Independent agent review green-lit
+  the PR after two rounds of fixes.
+
+## 2026-06-09 Familiar Evidence-Gate Hardening Phase
+
+- Implemented requirement-scoped evidence constraints for Familiar retrieval
+  tools. Validation now checks checked-book scope, excluded subjects, subject
+  identity, book/page hints, object-type hints, statline field sufficiency, and
+  required terms before evidence can be accepted.
+- Tightened structural evidence failure modes that caused wrong-source or
+  wrong-entity answers: generic subjects such as `profile`/`stat block` fail
+  closed, subjectless page evidence needs both book and page anchors,
+  multi-word structural subjects must match as phrases, and object/book/page
+  hints normalize common provider wording without becoming fuzzy matches.
+- Kept rejected evidence out of final prompts and UI-facing citation payloads.
+  Public traces now show candidate counts plus accepted/partial/rejected counts
+  and reason counts, while accepted citations remain the only evidence list
+  shown to the model and the UI.
+- Added privacy-safe synthetic regressions for whole-library failure modes:
+  career/profile false positives, wrong named entities, table/prose mentions
+  without stat fields, heading-only matches, vector-only wrong-entity
+  candidates, page/book hint mismatches, and scattered multi-word subjects.
+- Independent reviewer follow-up found normalization and page-anchor edge
+  cases; they were fixed and the final review green-lit the PR. Verification
+  completed: backend 100% coverage gate with 680 tests at 100.00%; frontend
+  Vitest coverage with 19 test files and 138 tests passing.
+
 ## 2026-06-09 Familiar Reasoning-Led Research Agent Phase
 
 - Implemented provider-first Familiar research planning: no local retrieval

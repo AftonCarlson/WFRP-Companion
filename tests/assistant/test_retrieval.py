@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from wfrp_companion.assistant import chat_store
+from wfrp_companion.assistant import evidence_constraints
 from wfrp_companion.assistant import candidates as retrieval_candidates
 from wfrp_companion.assistant import retrieval
 from wfrp_companion.assistant import source_map as retrieval_source_map
@@ -4073,6 +4074,154 @@ def test_entity_queries_reject_heading_path_only_matches() -> None:
     assert [candidate.object_title for candidate, _score, _reasons in ranked] == [
         "The Black Knight"
     ]
+
+
+def test_requirement_constraint_hints_filter_book_page_and_object_type() -> None:
+    matching_candidate = retrieval.EvidenceCandidate(
+        book_id="bestiary",
+        title="Old World Bestiary",
+        category="Rules",
+        page_id="bestiary:104",
+        page_number=104,
+        pdf_page_number=104,
+        page_label="104",
+        page_start=104,
+        page_end=104,
+        page_range_label="104",
+        snippet="Common Orc profile",
+        base_score=-4,
+        context_text="Common Orc WS 35 BS 35 S 35 T 45 Ag 25.",
+        channel="source_object_fts",
+        source_object_id="bestiary:orc-stat",
+        object_type="stat_block",
+        object_title="Common Orc",
+        confidence=0.82,
+    )
+    wrong_book = replace(matching_candidate, book_id="career", title="Career Compendium")
+    wrong_page = replace(
+        matching_candidate,
+        page_id="bestiary:103",
+        page_number=103,
+        pdf_page_number=103,
+        page_label="103",
+        page_start=103,
+        page_end=103,
+        page_range_label="103",
+        source_object_id="bestiary:orc-lore",
+    )
+    wrong_type = replace(
+        matching_candidate,
+        object_type="rule_section",
+        source_object_id="bestiary:orc-rule",
+    )
+    constraint = evidence_constraints.EvidenceConstraint(
+        requirement_id="orc_stats",
+        requirement_type="statline_evidence",
+        canonical_subject="Orc",
+        subject_terms=("orc",),
+        subject_aliases=(),
+        excluded_terms=(),
+        required_terms=(),
+        structural_terms=("statline",),
+        object_type_hints=("stat_block",),
+        book_title_hints=("Old World Bestiary",),
+        page_hints=("104",),
+        min_accepted_hits=1,
+    )
+
+    filtered, skip_reasons = retrieval.apply_requirement_constraint_hints(
+        (wrong_book, wrong_page, wrong_type, matching_candidate),
+        constraint,
+    )
+
+    assert [candidate.source_object_id for candidate in filtered] == [
+        "bestiary:orc-stat"
+    ]
+    assert skip_reasons == {}
+    assert filtered[0].rank_reasons == (
+        "constraint_hint:book_title",
+        "constraint_hint:page",
+        "constraint_hint:object_type",
+    )
+
+
+def test_unresolved_requirement_hints_keep_candidates_and_report_diagnostics() -> None:
+    candidate = retrieval.EvidenceCandidate(
+        book_id="bestiary",
+        title="Old World Bestiary",
+        category="Rules",
+        page_id="bestiary:104",
+        page_number=104,
+        pdf_page_number=104,
+        page_label="104",
+        page_start=104,
+        page_end=104,
+        page_range_label="104",
+        snippet="Common Orc profile",
+        base_score=-4,
+        context_text="Common Orc WS 35 BS 35 S 35 T 45 Ag 25.",
+        channel="source_object_fts",
+        source_object_id="bestiary:orc-stat",
+        object_type="stat_block",
+        object_title="Common Orc",
+        confidence=0.82,
+    )
+    constraint = evidence_constraints.EvidenceConstraint(
+        requirement_id="orc_stats",
+        requirement_type="statline_evidence",
+        canonical_subject="Orc",
+        subject_terms=("orc",),
+        subject_aliases=(),
+        excluded_terms=(),
+        required_terms=(),
+        structural_terms=("statline",),
+        object_type_hints=("table",),
+        book_title_hints=("Karak Azgal",),
+        page_hints=("999"),
+        min_accepted_hits=1,
+    )
+
+    filtered, skip_reasons = retrieval.apply_requirement_constraint_hints(
+        (candidate,),
+        constraint,
+    )
+
+    assert filtered == (candidate,)
+    assert skip_reasons == {
+        "constraint_book_title": "no_matching_candidates",
+        "constraint_page": "no_matching_candidates",
+        "constraint_object_type": "no_matching_candidates",
+    }
+
+
+def test_requirement_hint_helpers_cover_duplicate_reason_and_blank_hint() -> None:
+    candidate = retrieval.EvidenceCandidate(
+        book_id="bestiary",
+        title="Old World Bestiary",
+        category="Rules",
+        page_id="bestiary:104",
+        page_number=104,
+        pdf_page_number=104,
+        page_label="104",
+        page_start=104,
+        page_end=104,
+        page_range_label="104",
+        snippet="Common Orc profile",
+        base_score=-4,
+        context_text="Common Orc WS 35 BS 35 S 35 T 45 Ag 25.",
+        channel="source_object_fts",
+        source_object_id="bestiary:orc-stat",
+        object_type="stat_block",
+        object_title="Common Orc",
+        confidence=0.82,
+        rank_reasons=("constraint_hint:page",),
+    )
+
+    assert (
+        retrieval.add_constraint_rank_reason(candidate, "constraint_hint:page")
+        is candidate
+    )
+    assert retrieval.hint_matches_text("   ", "Old World Bestiary") is False
 
 
 def test_retrieval_records_ranked_hits(tmp_path: Path) -> None:

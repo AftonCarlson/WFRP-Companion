@@ -238,12 +238,14 @@ def test_build_final_answer_prompt_uses_only_accepted_evidence() -> None:
             },
         ),
         answer_policy="cite_required",
+        answer_outcome="full_answer",
         recent_messages=(),
     )
 
     user_text = messages[-1].content
     assert "Public plan: Find cited Harpy statline evidence." in user_text
     assert "Answer policy: cite_required" in user_text
+    assert "Answer outcome: full_answer" in user_text
     assert "- harpy_stats (statline_evidence): satisfied" in user_text
     assert "Accepted evidence:" in user_text
     assert "Synthetic Harpy stat_block" in user_text
@@ -261,6 +263,53 @@ def test_build_final_answer_prompt_for_insufficient_evidence() -> None:
     user_text = messages[-1].content
     assert "No accepted evidence was found" in user_text
     assert "do not reconstruct the WFRP facts from memory" in user_text
+
+
+def test_build_final_answer_prompt_for_partial_answer_names_missing_parts() -> None:
+    accepted = RetrievedHit(
+        book_id="core-rules",
+        title="Core Rules",
+        category="Core Book & GM Essentials",
+        page_id="core-rules:130",
+        page_number=130,
+        pdf_page_number=130,
+        page_label="130",
+        snippet="Hit Location",
+        score=1,
+        rank=1,
+        context_text="Hit Location table.",
+        object_title="Hit Location",
+        object_type="table",
+        page_range_label="130",
+    )
+
+    messages = prompts.build_final_answer_prompt_messages(
+        question="hit location and armor per location",
+        accepted_hits=(accepted,),
+        evidence_status="partial",
+        plan_summary="Find hit-location and armor-by-location evidence.",
+        requirement_summaries=(
+            {
+                "id": "hit_location_rule",
+                "requirement_type": "topical_evidence",
+                "status": "satisfied",
+            },
+            {
+                "id": "armor_location_rule",
+                "requirement_type": "topical_evidence",
+                "status": "unsatisfied",
+            },
+        ),
+        answer_policy="cite_required",
+        answer_outcome="partial_answer",
+        missing_summaries=("Need accepted evidence for armor location.",),
+        recent_messages=(),
+    )
+
+    user_text = messages[-1].content
+    assert "Answer outcome: partial_answer" in user_text
+    assert "Need accepted evidence for armor location." in user_text
+    assert "Do not answer unsatisfied requirements" in user_text
 
 
 def test_build_prompt_includes_recent_messages_before_current_user_prompt() -> None:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from wfrp_companion.assistant import agent_planning, research
+from wfrp_companion.assistant import agent_planning, research, turn_contract
 from wfrp_companion.assistant import chat_store
 from wfrp_companion.assistant.evidence import RetrievedHit
 from wfrp_companion.config import AppConfig
@@ -1243,8 +1243,163 @@ def test_familiar_research_plan_and_requirement_linkage_round_trip(
         "exclude_terms": [],
     }
     assert judgment.constraint_status == "failed"
-    assert public_events[-1]["label"] == "Evidence partial; 0 accepted, 0 partial"
+    assert public_events[-1]["label"] == (
+        "Evidence partial; 0 accepted, 0 partial, 1 rejected"
+    )
+    assert public_events[-1]["metadata"] == {
+        "evidence_status": "partial",
+        "accepted_hit_count": 0,
+        "partial_hit_count": 0,
+        "rejected_hit_count": 1,
+        "reason_counts": {"missing_statline_markers": 1},
+    }
     assert count_rows(config, "familiar_research_plans") == 1
+
+
+def test_familiar_turn_decision_round_trip_and_missing_edges(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    queued = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="hello",
+        idempotency_key="turn-decision",
+        provider="openai",
+        model="gpt-test",
+    )
+    decision = turn_contract.TurnDecision(
+        turn_kind="conversation",
+        answer_mode="direct",
+        subject=None,
+        confidence="high",
+        reasons=("greeting_or_social_text",),
+        reader_context_policy="ignore",
+    )
+
+    created = chat_store.record_familiar_turn_decision(
+        config,
+        model_run_id=queued.model_run.id,
+        decision=decision,
+    )
+    duplicate = chat_store.record_familiar_turn_decision(
+        config,
+        model_run_id=queued.model_run.id,
+        decision=decision,
+    )
+    updated = chat_store.update_familiar_turn_decision_outcome(
+        config,
+        model_run_id=queued.model_run.id,
+        answer_outcome="direct_response",
+        outcome={"local_response": True},
+    )
+    with open_connection(config.db_path) as connection:
+        fetched = chat_store.familiar_turn_decision_row(connection, created.id)
+        with pytest.raises(chat_store.ModelRunNotFoundError):
+            chat_store.familiar_turn_decision_row(connection, "missing-decision")
+        connection.execute("pragma foreign_keys = off")
+        connection.execute(
+            """
+            insert into model_runs (
+              id,
+              thread_id,
+              user_message_id,
+              provider,
+              model,
+              status,
+              idempotency_key,
+              created_at,
+              updated_at
+            )
+            values ('turn-run-without-user', ?, null, 'fake', 'fake-model',
+                    'queued', 'turn-run-without-user', '2026-06-09T00:00:00Z',
+                    '2026-06-09T00:00:00Z')
+            """,
+            (thread.id,),
+        )
+
+    assert duplicate == created
+    assert updated.answer_outcome == "direct_response"
+    assert updated.outcome == {"local_response": True}
+    assert fetched["id"] == created.id
+    with pytest.raises(chat_store.ModelRunNotRetryableError, match="no user message"):
+        chat_store.record_familiar_turn_decision(
+            config,
+            model_run_id="turn-run-without-user",
+            decision=decision,
+        )
+    with pytest.raises(chat_store.ModelRunNotFoundError):
+        chat_store.update_familiar_turn_decision_outcome(
+            config,
+            model_run_id="missing-model-run",
+            answer_outcome="direct_response",
+        )
+
+
+def test_retry_turn_decision_copies_original_contract(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    seed_books(config)
+    thread = chat_store.create_thread(config)
+    original = chat_store.create_queued_turn(
+        config,
+        thread.id,
+        content="what happens if I have no armor?",
+        idempotency_key="send-original",
+        provider="openai",
+        model="gpt-test",
+    )
+    original_decision = chat_store.record_familiar_turn_decision(
+        config,
+        model_run_id=original.model_run.id,
+        decision=turn_contract.TurnDecision(
+            turn_kind="rules_lookup",
+            answer_mode="research",
+            subject="what happens if I have no armor?",
+            confidence="medium",
+            reasons=("rules_terms",),
+            reader_context_policy="routing_hint",
+        ),
+    )
+    chat_store.fail_model_run(
+        config,
+        original.model_run.id,
+        error_code="provider_error",
+        error_message="provider failed",
+    )
+    retry = chat_store.create_queued_retry(
+        config,
+        original.model_run.id,
+        idempotency_key="retry-original",
+        provider="openai",
+        model="gpt-test",
+    )
+
+    retry_decision = chat_store.record_familiar_turn_decision(
+        config,
+        model_run_id=retry.model_run.id,
+        decision=turn_contract.TurnDecision(
+            turn_kind="conversation",
+            answer_mode="direct",
+            subject=None,
+            confidence="high",
+            reasons=("greeting_or_social_text",),
+            reader_context_policy="ignore",
+        ),
+    )
+
+    assert retry_decision.retry_of_decision_id == original_decision.id
+    assert retry_decision.turn_kind == original_decision.turn_kind
+    assert retry_decision.answer_mode == original_decision.answer_mode
+    assert retry_decision.subject == original_decision.subject
+    assert retry_decision.confidence == original_decision.confidence
+    assert retry_decision.reasons == original_decision.reasons
+    assert retry_decision.reader_context_policy == (
+        original_decision.reader_context_policy
+    )
+    assert retry_decision.metadata == {
+        "retry_of_model_run_id": original.model_run.id,
+        "copied_from_retry_of_decision_id": original_decision.id,
+    }
 
 
 def test_public_research_events_cover_failed_and_tool_fallback_labels(
