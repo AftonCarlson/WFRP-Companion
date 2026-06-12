@@ -227,6 +227,18 @@ Structured evidence validation adds a reviewed layer beside raw source objects:
 - The structured resolver also enforces source-snapshot currentness at
   retrieval time, so an active validated row is ignored immediately if the
   underlying source/page snapshot has drifted before the next rebuild.
+- The visual structured-evidence contract phase adds a v2 contract registry in
+  `wfrp_companion/structured_evidence/contracts/`. It validates
+  `profile_card`, `career_entry`, `rules_entry`, and `structured_table`
+  payload shapes before later extraction/review phases persist or trust them.
+  This phase is intentionally not wired into runtime extraction yet; it is a
+  tested contract foundation.
+- The contract layer rejects label identities such as race/career labels,
+  stat-header fragments, and equipment-field labels; requires profile field
+  provenance; allows complete stat-grid-only profile cards; accepts career
+  advance schemes as careers rather than profiles; rejects empty-cell tables;
+  requires scope for unnumbered contextual tables; and requires `parent_ref`
+  for embedded child tables.
 - `tools/extract_structured_evidence.py` and
   `tools/rebuild_retrieval_assets.py` report counts only and must not print
   private table/profile text.

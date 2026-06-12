@@ -20,10 +20,15 @@ the Familiar tool-calling hybrid RAG research-agent phase, the Familiar
 evidence-gate hardening phase, the Familiar reliability-contract phase, and
 the structured evidence validation phase.
 Structured evidence validation tests now cover the reviewed table/profile
-layer, the manual review API/UI, intent-gated resolver integration, and
-retrieval-status counts. Follow-up regressions cover PyMuPDF layout metadata
-not creating missing-table candidates, force rebuilds after unreviewed,
-approved, corrected, and rejected candidates preserving review history without
+layer, the v2 contract registry, synthetic-only contract fixtures, the manual
+review API/UI, intent-gated resolver integration, and retrieval-status counts.
+Contract tests cover label-identity rejection, group profile identity with
+race/career fields, stat-grid-only profile acceptance, profile provenance,
+career-entry advance schemes, scoped unnumbered tables, embedded-child table
+parents, empty-cell table rejection, rules-entry bodies, and unknown contract
+shape handling. Follow-up regressions cover PyMuPDF layout metadata not
+creating missing-table candidates, force rebuilds after unreviewed, approved,
+corrected, and rejected candidates preserving review history without
 unique-index collisions, reviewed observation snapshots surviving rebuilds,
 active validated objects being filtered from retrieval immediately on source
 snapshot drift, and singular/plural evidence identity matching.
@@ -166,6 +171,12 @@ Current focused test files:
 - `tests/source_objects/test_source_map_builder.py`
 - `tests/source_objects/test_store.py`
 - `tests/structured_evidence/test_candidates.py`
+- `tests/structured_evidence/test_contract_registry.py`
+- `tests/structured_evidence/test_contracts_career_entry.py`
+- `tests/structured_evidence/test_contracts_profile_card.py`
+- `tests/structured_evidence/test_contracts_rules_entry.py`
+- `tests/structured_evidence/test_contracts_structured_table.py`
+- `tests/structured_evidence/test_failure_fixtures.py`
 - `tests/structured_evidence/test_structured_evidence_models.py`
 - `tests/structured_evidence/test_readers.py`
 - `tests/structured_evidence/test_structured_evidence_store.py`
