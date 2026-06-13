@@ -20,9 +20,20 @@ from wfrp_companion.source_objects.store import source_object_search_snapshot_sh
 from wfrp_companion.structured_evidence.candidates import (
     build_candidates_from_observations,
 )
+from wfrp_companion.structured_evidence.contracts import validator_for_shape
 from wfrp_companion.structured_evidence.models import (
+    CANDIDATE_STATUSES,
+    StructuredEnvelope,
+    StructuredEnvelopeKind,
+    StructuredEnvelopeScopeKind,
+    StructuredEnvelopeStatus,
     StructuredEvidenceCandidate,
+    StructuredReviewAction,
+    StructuredReviewActionKind,
+    StructuredVisualRegion,
+    StructuredVisualRegionKind,
     deterministic_candidate_id,
+    deterministic_visual_region_id,
     normalize_structured_alias,
     normalize_table_number,
 )
@@ -81,6 +92,7 @@ class StructuredEvidenceExtractionSummary:
 class StructuredReviewSummary:
     candidates_total: int
     candidates_needs_review: int
+    candidates_blocked: int
     validated_active: int
     validated_stale: int
     validated_retired: int
@@ -1055,6 +1067,233 @@ def stable_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def upsert_structured_visual_region(
+    connection: sqlite3.Connection,
+    region: StructuredVisualRegion,
+    *,
+    now: str,
+) -> str:
+    region_kind = _visual_region_kind(region.region_kind)
+    region_id = region.id or deterministic_visual_region_id(region)
+    connection.execute(
+        """
+        insert into structured_visual_regions (
+          id,
+          book_id,
+          source_snapshot_sha256,
+          ingest_job_id,
+          provider_name,
+          provider_version,
+          pdf_page_start,
+          pdf_page_end,
+          printed_page_start,
+          printed_page_end,
+          region_kind,
+          bbox_json,
+          crop_asset_path,
+          raw_text,
+          confidence,
+          issues_json,
+          created_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(id) do nothing
+        """,
+        (
+            region_id,
+            region.book_id,
+            region.source_snapshot_sha256,
+            region.ingest_job_id,
+            region.provider_name,
+            region.provider_version,
+            region.pdf_page_start,
+            region.pdf_page_end,
+            region.printed_page_start,
+            region.printed_page_end,
+            region_kind,
+            stable_json(region.bbox_json),
+            region.crop_asset_path,
+            region.raw_text,
+            region.confidence,
+            stable_json(list(region.issues)),
+            now,
+        ),
+    )
+    return region_id
+
+
+def upsert_structured_envelope(
+    connection: sqlite3.Connection,
+    envelope: StructuredEnvelope,
+    *,
+    now: str,
+) -> str:
+    envelope_kind = _envelope_kind(envelope.envelope_kind)
+    scope_kind = _scope_kind(envelope.scope_kind)
+    status = _envelope_status(envelope.status)
+    with connection:
+        connection.execute(
+            """
+            insert into structured_envelopes (
+              id,
+              book_id,
+              source_snapshot_sha256,
+              envelope_kind,
+              scope_kind,
+              scope_value,
+              identity_raw,
+              identity_normalized,
+              parent_envelope_id,
+              pdf_page_start,
+              pdf_page_end,
+              printed_page_start,
+              printed_page_end,
+              confidence,
+              status,
+              issues_json,
+              created_at,
+              updated_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(id) do update set
+              scope_kind = excluded.scope_kind,
+              scope_value = excluded.scope_value,
+              identity_raw = excluded.identity_raw,
+              identity_normalized = excluded.identity_normalized,
+              parent_envelope_id = excluded.parent_envelope_id,
+              pdf_page_start = excluded.pdf_page_start,
+              pdf_page_end = excluded.pdf_page_end,
+              printed_page_start = excluded.printed_page_start,
+              printed_page_end = excluded.printed_page_end,
+              confidence = excluded.confidence,
+              status = excluded.status,
+              issues_json = excluded.issues_json,
+              updated_at = excluded.updated_at
+            """,
+            (
+                envelope.id,
+                envelope.book_id,
+                envelope.source_snapshot_sha256,
+                envelope_kind,
+                scope_kind,
+                envelope.scope_value,
+                envelope.identity_raw,
+                envelope.identity_normalized,
+                envelope.parent_envelope_id,
+                envelope.pdf_page_start,
+                envelope.pdf_page_end,
+                envelope.printed_page_start,
+                envelope.printed_page_end,
+                envelope.confidence,
+                status,
+                stable_json(list(envelope.issues)),
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            "delete from structured_envelope_regions where envelope_id = ?",
+            (envelope.id,),
+        )
+        connection.execute(
+            "delete from structured_envelope_source_objects where envelope_id = ?",
+            (envelope.id,),
+        )
+        for visual_region_id, role, ordinal in envelope.region_links:
+            connection.execute(
+                """
+                insert into structured_envelope_regions (
+                  envelope_id,
+                  visual_region_id,
+                  role,
+                  ordinal
+                )
+                values (?, ?, ?, ?)
+                """,
+                (envelope.id, visual_region_id, _region_link_role(role), ordinal),
+            )
+        for source_object_id, role, ordinal in envelope.source_object_links:
+            connection.execute(
+                """
+                insert into structured_envelope_source_objects (
+                  envelope_id,
+                  source_object_id,
+                  role,
+                  ordinal
+                )
+                values (?, ?, ?, ?)
+                """,
+                (
+                    envelope.id,
+                    source_object_id,
+                    _source_object_link_role(role),
+                    ordinal,
+                ),
+            )
+    return envelope.id
+
+
+def transition_candidate_review_status(
+    connection: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    new_status: str,
+    now: str,
+) -> bool:
+    if new_status not in CANDIDATE_STATUSES:
+        raise ValueError(f"Unsupported candidate status: {new_status}")
+    if new_status in {"approved", "corrected"}:
+        raise ValueError(
+            "Promotional candidate status changes must use approve/correct flows"
+        )
+    cursor = connection.execute(
+        """
+        update structured_evidence_candidates
+        set status = ?,
+            updated_at = ?
+        where id = ?
+          and status in ('candidate', 'needs_review', 'blocked')
+        """,
+        (new_status, now, candidate_id),
+    )
+    return cursor.rowcount == 1
+
+
+def insert_structured_review_action(
+    connection: sqlite3.Connection,
+    action: StructuredReviewAction,
+    *,
+    now: str,
+) -> str:
+    action_kind = _review_action_kind(action.action_kind)
+    connection.execute(
+        """
+        insert into structured_review_actions (
+          id,
+          candidate_id,
+          envelope_id,
+          validated_object_id,
+          action_kind,
+          action_payload_json,
+          reviewer,
+          created_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            action.id,
+            action.candidate_id,
+            action.envelope_id,
+            action.validated_object_id,
+            action_kind,
+            stable_json(action.action_payload_json),
+            action.reviewer,
+            now,
+        ),
+    )
+    return action.id
+
+
 def structured_review_summary(config: AppConfig) -> StructuredReviewSummary:
     apply_pending_migrations(config.db_path)
     with initialize_database(config.db_path) as connection:
@@ -1081,6 +1320,7 @@ def structured_review_summary(config: AppConfig) -> StructuredReviewSummary:
     return StructuredReviewSummary(
         candidates_total=sum(candidate_counts.values()),
         candidates_needs_review=candidate_counts.get("needs_review", 0),
+        candidates_blocked=candidate_counts.get("blocked", 0),
         validated_active=validated_counts.get("active", 0),
         validated_stale=validated_counts.get("stale", 0),
         validated_retired=validated_counts.get("retired", 0),
@@ -1137,9 +1377,9 @@ def approve_structured_candidate(
 ) -> StructuredReviewResult:
     apply_pending_migrations(config.db_path)
     with initialize_database(config.db_path) as connection:
-        row = require_reviewable_candidate(connection, candidate_id)
+        row = require_promotable_candidate(connection, candidate_id)
         source_snapshot = require_current_structured_snapshot(connection, row)
-        payload = _payload_from_row(row)
+        payload = validate_payload_for_shape(row["object_shape"], _payload_from_row(row))
         return promote_candidate(
             connection,
             row=row,
@@ -1163,7 +1403,7 @@ def correct_structured_candidate(
 ) -> StructuredReviewResult:
     apply_pending_migrations(config.db_path)
     with initialize_database(config.db_path) as connection:
-        row = require_reviewable_candidate(connection, candidate_id)
+        row = require_promotable_candidate(connection, candidate_id)
         source_snapshot = require_current_structured_snapshot(connection, row)
         corrected_payload = validate_payload_for_shape(
             row["object_shape"],
@@ -1196,7 +1436,7 @@ def reject_structured_candidate(
             raise StructuredEvidenceNotFoundError(
                 f"Structured evidence candidate not found: {candidate_id}"
             )
-        if row["status"] not in {"candidate", "needs_review"}:
+        if row["status"] not in {"candidate", "needs_review", "blocked"}:
             raise StructuredEvidenceConflictError(
                 f"Candidate {candidate_id} cannot be rejected from {row['status']}"
             )
@@ -1357,9 +1597,25 @@ def require_reviewable_candidate(
         raise StructuredEvidenceNotFoundError(
             f"Structured evidence candidate not found: {candidate_id}"
         )
-    if row["status"] not in {"candidate", "needs_review"}:
+    if row["status"] not in {"candidate", "needs_review", "blocked"}:
         raise StructuredEvidenceConflictError(
             f"Candidate {candidate_id} cannot be reviewed from {row['status']}"
+        )
+    return row
+
+
+def require_promotable_candidate(
+    connection: sqlite3.Connection,
+    candidate_id: str,
+) -> sqlite3.Row:
+    row = load_candidate_row(connection, candidate_id)
+    if row is None:
+        raise StructuredEvidenceNotFoundError(
+            f"Structured evidence candidate not found: {candidate_id}"
+        )
+    if row["status"] not in {"candidate", "needs_review"}:
+        raise StructuredEvidenceConflictError(
+            f"Candidate {candidate_id} cannot be promoted from {row['status']}"
         )
     return row
 
@@ -1445,10 +1701,22 @@ def validate_payload_for_shape(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     try:
+        if object_shape == "structured_table" and payload.get("schema_version") == 2:
+            result = validator_for_shape(object_shape)(payload)
+            if not result.ok:
+                issue_codes = ", ".join(result.issue_codes)
+                raise ValueError(issue_codes)
+            return result.payload
         if object_shape == "structured_table":
             return validate_structured_table_payload(payload)
         if object_shape == "profile_bundle":
             return validate_profile_bundle_payload(payload)
+        if object_shape in {"profile_card", "career_entry", "rules_entry"}:
+            result = validator_for_shape(object_shape)(payload)
+            if not result.ok:
+                issue_codes = ", ".join(result.issue_codes)
+                raise ValueError(issue_codes)
+            return result.payload
     except ValueError as error:
         raise StructuredEvidenceInvalidPayloadError(str(error)) from error
     raise StructuredEvidenceInvalidPayloadError(
@@ -1552,12 +1820,18 @@ def retire_conflicting_active_objects(
         set validation_status = 'retired',
             updated_at = ?
         where book_id = ?
-          and object_shape = 'profile_bundle'
+          and object_shape = ?
           and canonical_name = ?
           and entity_kind = ?
           and validation_status = 'active'
         """,
-        (now, row["book_id"], identity["canonical_name"], row["entity_kind"]),
+        (
+            now,
+            row["book_id"],
+            row["object_shape"],
+            identity["canonical_name"],
+            row["entity_kind"],
+        ),
     )
 
 
@@ -1987,6 +2261,74 @@ def _optional_text(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
     return None
+
+
+def _visual_region_kind(value: StructuredVisualRegionKind | str) -> str:
+    try:
+        return str(StructuredVisualRegionKind(value))
+    except ValueError as error:
+        raise ValueError(f"Unsupported visual region kind: {value}") from error
+
+
+def _envelope_kind(value: StructuredEnvelopeKind | str) -> str:
+    try:
+        return str(StructuredEnvelopeKind(value))
+    except ValueError as error:
+        raise ValueError(f"Unsupported envelope kind: {value}") from error
+
+
+def _scope_kind(value: StructuredEnvelopeScopeKind | str) -> str:
+    try:
+        return str(StructuredEnvelopeScopeKind(value))
+    except ValueError as error:
+        raise ValueError(f"Unsupported envelope scope kind: {value}") from error
+
+
+def _envelope_status(value: StructuredEnvelopeStatus | str) -> str:
+    try:
+        return str(StructuredEnvelopeStatus(value))
+    except ValueError as error:
+        raise ValueError(f"Unsupported envelope status: {value}") from error
+
+
+def _review_action_kind(value: StructuredReviewActionKind | str) -> str:
+    try:
+        return str(StructuredReviewActionKind(value))
+    except ValueError as error:
+        raise ValueError(f"Unsupported review action kind: {value}") from error
+
+
+def _region_link_role(value: str) -> str:
+    allowed = {
+        "primary",
+        "heading",
+        "body",
+        "stat_grid",
+        "table",
+        "caption",
+        "footnote",
+        "supporting",
+    }
+    if value not in allowed:
+        raise ValueError(f"Unsupported envelope region role: {value}")
+    return value
+
+
+def _source_object_link_role(value: str) -> str:
+    allowed = {
+        "primary",
+        "heading",
+        "body",
+        "stat_block",
+        "table",
+        "table_row",
+        "profile_text",
+        "supporting",
+        "reference",
+    }
+    if value not in allowed:
+        raise ValueError(f"Unsupported envelope source-object role: {value}")
+    return value
 
 
 def new_review_id(candidate_id: str, action: str) -> str:

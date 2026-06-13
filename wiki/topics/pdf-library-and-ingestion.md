@@ -239,6 +239,23 @@ Structured evidence validation adds a reviewed layer beside raw source objects:
   advance schemes as careers rather than profiles; rejects empty-cell tables;
   requires scope for unnumbered contextual tables; and requires `parent_ref`
   for embedded child tables.
+- The visual structured-evidence storage phase adds the v2 workflow tables
+  that later visual extraction phases will populate:
+  `structured_visual_regions`, `structured_envelopes`,
+  `structured_envelope_regions`, `structured_envelope_source_objects`, and
+  `structured_review_actions`. These tables store page-region evidence,
+  human-recognizable object envelopes, region/source-object links, and
+  append-only semantic review actions.
+- The storage phase also widens structured-evidence status/object-shape
+  constraints for `blocked`, `profile_card`, `career_entry`, and
+  `rules_entry` while keeping legacy `profile_bundle` and v1
+  `structured_table` review flows compatible. `blocked` candidates are counted
+  separately from `needs_review` and are not promotable into validated
+  structured objects.
+- Important boundary: v2 visual regions and envelopes are storage/review
+  foundations only at this phase. Runtime extraction still does not assemble
+  visual envelopes, parse profile/career/table families from page crops, or let
+  Familiar answer from v2 envelope rows until later phases wire those flows.
 - `tools/extract_structured_evidence.py` and
   `tools/rebuild_retrieval_assets.py` report counts only and must not print
   private table/profile text.

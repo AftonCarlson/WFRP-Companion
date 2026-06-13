@@ -157,6 +157,7 @@ export function StructuredEvidenceReviewPanel({
           <>
             <span>Structured: {summary.candidates_total} candidates</span>
             <span>{summary.candidates_needs_review} needs review</span>
+            <span>{summary.candidates_blocked} blocked</span>
             <span>{summary.validated_active} validated</span>
           </>
         ) : (

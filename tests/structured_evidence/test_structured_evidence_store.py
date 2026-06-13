@@ -102,6 +102,118 @@ def valid_profile_payload() -> dict[str, object]:
     }
 
 
+def valid_career_entry_payload() -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "object_shape": "career_entry",
+        "identity": {"name_raw": "Synthetic Career"},
+        "source": {
+            "book_id": "rules",
+            "text_snapshot_sha256": "snapshot",
+        },
+        "career": {
+            "description": "Synthetic career description.",
+            "advance_scheme": {
+                "main_profile": {"ws": "+5%"},
+                "secondary_profile": {"w": "+2"},
+            },
+            "skills": ["Synthetic Skill"],
+            "talents": [],
+            "trappings": [],
+            "career_entries": [],
+            "career_exits": [],
+            "notes": [],
+        },
+        "provenance": {"field_confidence": {}},
+    }
+
+
+def valid_v2_table_payload() -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "object_shape": "structured_table",
+        "table_kind": "lookup",
+        "identity": {"title_raw": "Synthetic Table"},
+        "source": {
+            "book_id": "rules",
+            "text_snapshot_sha256": "snapshot",
+        },
+        "scope": {"scope_kind": "section", "scope_value": "Synthetic"},
+        "structure": {
+            "columns": [{"key": "result", "label_raw": "Result"}],
+            "rows": [
+                {
+                    "ordinal": 1,
+                    "cells": {"result": "Synthetic result"},
+                }
+            ],
+        },
+    }
+
+
+def insert_review_candidate(
+    config,  # noqa: ANN001
+    *,
+    candidate_id: str,
+    object_shape: str,
+    status: str,
+    payload: dict[str, object],
+) -> None:
+    insert_indexed_book(config)
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            insert into structured_evidence_candidates (
+              id,
+              book_id,
+              primary_page_id,
+              object_shape,
+              content_kind,
+              entity_kind,
+              canonical_name,
+              title,
+              page_start,
+              page_end,
+              payload_json,
+              search_text,
+              confidence,
+              status,
+              text_snapshot_sha256,
+              structured_extractor_version,
+              created_at,
+              updated_at
+            )
+            values (?, 'rules', 'rules:1', ?, 'career_table', 'career',
+                    'synthetic career', 'Synthetic Career', 1, 1, ?,
+                    'Synthetic Career', 0.8, ?, 'snapshot', 'test',
+                    '2026-06-12T00:00:00Z', '2026-06-12T00:00:00Z')
+            """,
+            (
+                candidate_id,
+                object_shape,
+                json.dumps(payload),
+                status,
+            ),
+        )
+        connection.execute(
+            """
+            insert into book_retrieval_status (
+              book_id,
+              structured_evidence_status,
+              structured_evidence_snapshot_sha256,
+              updated_at
+            )
+            values ('rules', 'needs_review', ?, '2026-06-12T00:00:00Z')
+            on conflict(book_id) do update set
+              structured_evidence_status = excluded.structured_evidence_status,
+              structured_evidence_snapshot_sha256 =
+                excluded.structured_evidence_snapshot_sha256,
+              updated_at = excluded.updated_at
+            """,
+            (store.structured_evidence_snapshot_sha256(connection, "rules"),),
+        )
+
+
 def test_review_queue_lists_metadata_without_private_payload(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     build_candidate(config)
@@ -116,6 +228,27 @@ def test_review_queue_lists_metadata_without_private_payload(tmp_path: Path) -> 
     assert candidates[0].table_number_normalized == "5-6"
     assert candidates[0].payload_json is None
     assert candidates[0].suspicious_flags == ()
+
+
+def test_review_summary_counts_blocked_candidates_separately(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    build_candidate(config)
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update structured_evidence_candidates
+            set status = 'blocked',
+                status_reason = 'missing_visual_region'
+            """
+        )
+
+    summary = store.structured_review_summary(config)
+
+    assert summary.candidates_total == 1
+    assert summary.candidates_needs_review == 0
+    assert summary.candidates_blocked == 1
 
 
 def test_candidate_detail_exposes_local_review_data_without_paths(
@@ -282,6 +415,225 @@ def test_correct_candidate_validates_payload_and_records_hashes(
         "table 5-6",
         "armour points by location",
     ]
+
+
+def test_blocked_candidate_can_be_rejected_but_not_promoted(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_review_candidate(
+        config,
+        candidate_id="candidate:blocked",
+        object_shape="career_entry",
+        status="blocked",
+        payload=valid_career_entry_payload(),
+    )
+
+    with pytest.raises(StructuredEvidenceConflictError):
+        store.approve_structured_candidate(config, "candidate:blocked")
+    with pytest.raises(StructuredEvidenceConflictError):
+        store.correct_structured_candidate(
+            config,
+            "candidate:blocked",
+            valid_career_entry_payload(),
+        )
+
+    result = store.reject_structured_candidate(config, "candidate:blocked")
+
+    assert result.action == "reject"
+
+
+def test_v2_candidate_payloads_are_contract_validated_before_promotion(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    valid_payload = valid_career_entry_payload()
+    insert_review_candidate(
+        config,
+        candidate_id="candidate:career",
+        object_shape="career_entry",
+        status="candidate",
+        payload=valid_payload,
+    )
+
+    approved = store.approve_structured_candidate(config, "candidate:career")
+
+    assert approved.action == "approve"
+    with open_connection(config.db_path) as connection:
+        validated = connection.execute(
+            """
+            select object_shape, canonical_name
+            from validated_structured_objects
+            where id = ?
+            """,
+            (approved.validated_object_id,),
+        ).fetchone()
+    assert validated["object_shape"] == "career_entry"
+    assert validated["canonical_name"] == "synthetic career"
+
+
+def test_v2_approval_retires_conflicting_active_validated_identity(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_review_candidate(
+        config,
+        candidate_id="candidate:career-conflict",
+        object_shape="career_entry",
+        status="candidate",
+        payload=valid_career_entry_payload(),
+    )
+    first = store.approve_structured_candidate(
+        config,
+        "candidate:career-conflict",
+    )
+    with open_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            update structured_evidence_candidates
+            set status = 'candidate'
+            where id = 'candidate:career-conflict'
+            """
+        )
+
+    second = store.approve_structured_candidate(
+        config,
+        "candidate:career-conflict",
+        reviewer="gm",
+    )
+
+    with open_connection(config.db_path) as connection:
+        first_row = connection.execute(
+            """
+            select validation_status
+            from validated_structured_objects
+            where id = ?
+            """,
+            (first.validated_object_id,),
+        ).fetchone()
+        second_row = connection.execute(
+            """
+            select validation_status
+            from validated_structured_objects
+            where id = ?
+            """,
+            (second.validated_object_id,),
+        ).fetchone()
+        active_count = connection.execute(
+            """
+            select count(*)
+            from validated_structured_objects
+            where object_shape = 'career_entry'
+              and canonical_name = 'synthetic career'
+              and validation_status = 'active'
+            """
+        ).fetchone()[0]
+
+    assert first.validated_object_id != second.validated_object_id
+    assert first_row["validation_status"] == "retired"
+    assert second_row["validation_status"] == "active"
+    assert active_count == 1
+
+
+def test_invalid_v2_payload_fails_contract_validation_before_promotion(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    invalid_payload = {
+        **valid_career_entry_payload(),
+        "career": {"description": "No scheme."},
+    }
+    insert_review_candidate(
+        config,
+        candidate_id="candidate:invalid-career",
+        object_shape="career_entry",
+        status="candidate",
+        payload=invalid_payload,
+    )
+
+    with pytest.raises(
+        StructuredEvidenceInvalidPayloadError,
+        match="career_missing_advance_scheme",
+    ):
+        store.approve_structured_candidate(config, "candidate:invalid-career")
+
+
+def test_promotable_and_reviewable_helpers_reject_invalid_states(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_review_candidate(
+        config,
+        candidate_id="candidate:approved",
+        object_shape="career_entry",
+        status="approved",
+        payload=valid_career_entry_payload(),
+    )
+
+    with open_connection(config.db_path) as connection:
+        with pytest.raises(StructuredEvidenceNotFoundError):
+            store.require_promotable_candidate(connection, "missing")
+        with pytest.raises(StructuredEvidenceConflictError):
+            store.require_reviewable_candidate(connection, "candidate:approved")
+
+        connection.execute(
+            """
+            update structured_evidence_candidates
+            set status = 'blocked'
+            where id = 'candidate:approved'
+            """
+        )
+        assert (
+            store.require_reviewable_candidate(connection, "candidate:approved")["id"]
+            == "candidate:approved"
+        )
+
+
+def test_valid_v2_structured_table_payload_uses_contract_registry(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_review_candidate(
+        config,
+        candidate_id="candidate:v2-table",
+        object_shape="structured_table",
+        status="candidate",
+        payload=valid_v2_table_payload(),
+    )
+
+    result = store.approve_structured_candidate(config, "candidate:v2-table")
+
+    assert result.action == "approve"
+
+
+def test_invalid_v2_structured_table_payload_fails_contract_validation(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    insert_review_candidate(
+        config,
+        candidate_id="candidate:invalid-table",
+        object_shape="structured_table",
+        status="candidate",
+        payload={
+            "schema_version": 2,
+            "object_shape": "structured_table",
+            "table_kind": "lookup",
+            "identity": {"title_raw": "Synthetic Table"},
+            "source": {
+                "book_id": "rules",
+                "text_snapshot_sha256": "snapshot",
+            },
+            "scope": {"scope_kind": "section", "scope_value": "Synthetic"},
+            "structure": {"columns": [], "rows": [{"cells": {}}]},
+        },
+    )
+
+    with pytest.raises(
+        StructuredEvidenceInvalidPayloadError,
+        match="missing_required_cells",
+    ):
+        store.approve_structured_candidate(config, "candidate:invalid-table")
 
 
 def test_reject_candidate_marks_review_without_validating_object(

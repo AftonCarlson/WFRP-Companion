@@ -45,6 +45,7 @@ export type RetrievalStatusResponse = {
 export type StructuredReviewSummaryResponse = {
   candidates_total: number;
   candidates_needs_review: number;
+  candidates_blocked: number;
   validated_active: number;
   validated_stale: number;
   validated_retired: number;

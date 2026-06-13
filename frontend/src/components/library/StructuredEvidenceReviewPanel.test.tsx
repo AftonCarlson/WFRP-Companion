@@ -66,6 +66,7 @@ function client(overrides: Partial<ApiClient> = {}) {
     getStructuredReviewSummary: vi.fn().mockResolvedValue({
       candidates_total: 3,
       candidates_needs_review: 1,
+      candidates_blocked: 1,
       validated_active: 2,
       validated_stale: 0,
       validated_retired: 1,

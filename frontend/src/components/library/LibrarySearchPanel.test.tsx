@@ -75,6 +75,7 @@ function client(): ApiClient {
     getStructuredReviewSummary: vi.fn().mockResolvedValue({
       candidates_total: 0,
       candidates_needs_review: 0,
+      candidates_blocked: 0,
       validated_active: 0,
       validated_stale: 0,
       validated_retired: 0,

@@ -10,6 +10,58 @@ from typing import Any
 class StructuredObjectShape(StrEnum):
     STRUCTURED_TABLE = "structured_table"
     PROFILE_BUNDLE = "profile_bundle"
+    PROFILE_CARD = "profile_card"
+    CAREER_ENTRY = "career_entry"
+    RULES_ENTRY = "rules_entry"
+
+
+class StructuredVisualRegionKind(StrEnum):
+    TABLE = "table"
+    PROFILE_CARD = "profile_card"
+    CAREER_ENTRY = "career_entry"
+    RULES_ENTRY = "rules_entry"
+    HEADING = "heading"
+    TEXT_BLOCK = "text_block"
+    STAT_GRID = "stat_grid"
+    UNKNOWN = "unknown"
+
+
+class StructuredEnvelopeKind(StrEnum):
+    PROFILE_CARD = "profile_card"
+    CAREER_ENTRY = "career_entry"
+    RULES_ENTRY = "rules_entry"
+    STRUCTURED_TABLE = "structured_table"
+
+
+class StructuredEnvelopeScopeKind(StrEnum):
+    BOOK = "book"
+    CHAPTER = "chapter"
+    SECTION = "section"
+    PAGE = "page"
+    PARENT_OBJECT = "parent_object"
+    LOCATION = "location"
+
+
+class StructuredEnvelopeStatus(StrEnum):
+    CANDIDATE = "candidate"
+    NEEDS_REVIEW = "needs_review"
+    VALIDATED = "validated"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+    BLOCKED = "blocked"
+
+
+class StructuredReviewActionKind(StrEnum):
+    APPROVE = "approve"
+    REJECT = "reject"
+    CORRECT_FIELDS = "correct_fields"
+    RECLASSIFY = "reclassify"
+    MERGE = "merge"
+    SPLIT = "split"
+    SET_PARENT = "set_parent"
+    CLEAR_PARENT = "clear_parent"
+    MARK_SUSPICIOUS = "mark_suspicious"
+    RERUN_READER = "rerun_reader"
 
 
 class StructuredLookupPolicy(StrEnum):
@@ -29,6 +81,7 @@ CANDIDATE_STATUSES = frozenset(
         "corrected",
         "rejected",
         "superseded",
+        "blocked",
     }
 )
 VALIDATION_STATUSES = frozenset({"active", "stale", "retired"})
@@ -91,6 +144,99 @@ def deterministic_validated_object_id(
         "|".join((book_id, object_shape, normalize_structured_alias(identity)))
     )
     return f"validated-structured:{book_id}:{object_shape}:{digest}"
+
+
+def deterministic_visual_region_id(region: StructuredVisualRegion) -> str:
+    digest = _short_hash(
+        "|".join(
+            (
+                region.book_id,
+                region.source_snapshot_sha256,
+                region.provider_name,
+                region.provider_version,
+                str(region.pdf_page_start),
+                str(region.pdf_page_end),
+                str(region.region_kind),
+                _stable_json(region.bbox_json),
+                hashlib.sha256(region.raw_text.encode("utf-8")).hexdigest(),
+            )
+        )
+    )
+    return (
+        f"structured-region:{region.book_id}:"
+        f"p{region.pdf_page_start}-p{region.pdf_page_end}:{digest}"
+    )
+
+
+@dataclass(frozen=True)
+class StructuredVisualRegion:
+    id: str
+    book_id: str
+    source_snapshot_sha256: str
+    ingest_job_id: str | None
+    provider_name: str
+    provider_version: str
+    pdf_page_start: int
+    pdf_page_end: int
+    printed_page_start: str | None
+    printed_page_end: str | None
+    region_kind: StructuredVisualRegionKind | str
+    bbox_json: dict[str, Any]
+    crop_asset_path: str | None
+    raw_text: str
+    confidence: float
+    issues: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        _validate_page_range(self.pdf_page_start, self.pdf_page_end)
+        _validate_confidence(self.confidence)
+        _validate_required_text("book_id", self.book_id)
+        _validate_required_text("source_snapshot_sha256", self.source_snapshot_sha256)
+        _validate_required_text("provider_name", self.provider_name)
+
+
+@dataclass(frozen=True)
+class StructuredEnvelope:
+    id: str
+    book_id: str
+    source_snapshot_sha256: str
+    envelope_kind: StructuredEnvelopeKind | str
+    scope_kind: StructuredEnvelopeScopeKind | str
+    scope_value: str
+    identity_raw: str
+    identity_normalized: str
+    parent_envelope_id: str | None
+    pdf_page_start: int
+    pdf_page_end: int
+    printed_page_start: str | None
+    printed_page_end: str | None
+    confidence: float
+    status: StructuredEnvelopeStatus | str
+    issues: tuple[str, ...] = field(default_factory=tuple)
+    region_links: tuple[tuple[str, str, int], ...] = field(default_factory=tuple)
+    source_object_links: tuple[tuple[str, str, int], ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        _validate_page_range(self.pdf_page_start, self.pdf_page_end)
+        _validate_confidence(self.confidence)
+        _validate_required_text("id", self.id)
+        _validate_required_text("book_id", self.book_id)
+        _validate_required_text("source_snapshot_sha256", self.source_snapshot_sha256)
+
+
+@dataclass(frozen=True)
+class StructuredReviewAction:
+    id: str
+    candidate_id: str | None
+    envelope_id: str | None
+    validated_object_id: str | None
+    action_kind: StructuredReviewActionKind | str
+    action_payload_json: dict[str, Any]
+    reviewer: str = "local_user"
+
+    def __post_init__(self) -> None:
+        _validate_required_text("id", self.id)
+        _validate_required_text("reviewer", self.reviewer)
 
 
 @dataclass(frozen=True)
@@ -190,6 +336,12 @@ class ValidatedStructuredObject:
 
 def _short_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _stable_json(value: Any) -> str:
+    import json
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _validate_confidence(value: float) -> None:

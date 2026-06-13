@@ -55,6 +55,11 @@ REQUIRED_TABLES = {
     "validated_structured_object_sources",
     "validated_structured_object_aliases",
     "structured_evidence_reviews",
+    "structured_visual_regions",
+    "structured_envelopes",
+    "structured_envelope_regions",
+    "structured_envelope_source_objects",
+    "structured_review_actions",
 }
 
 

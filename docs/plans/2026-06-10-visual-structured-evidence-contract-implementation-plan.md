@@ -691,28 +691,43 @@ Files:
 - Modify `wfrp_companion/structured_evidence/store.py`
 - Create `tests/structured_evidence/test_visual_region_store.py`
 - Create `tests/structured_evidence/test_envelope_store.py`
-- Modify `tests/structured_evidence/test_store.py`
+- Modify `tests/structured_evidence/test_structured_evidence_store.py`
+  - Live repo note: the historical plan name `test_store.py` maps to
+    `test_structured_evidence_store.py` in this checkout.
 
 Steps:
 
-- [ ] Write migration tests that apply all migrations to an empty SQLite DB.
-- [ ] Write store tests for inserting immutable visual regions idempotently.
-- [ ] Write store tests for creating envelopes linked to regions and source objects.
-- [ ] Write store tests for status guards that prevent invalid candidate-to-validated transitions.
-- [ ] Write store tests for append-only review actions.
-- [ ] Implement SQL migration in `wfrp_companion/db/migration_files/0012_visual_structured_evidence_contracts.sql`.
-- [ ] Register `0012_visual_structured_evidence_contracts` in `wfrp_companion/db/migrations.py`.
-- [ ] Update `wfrp_companion/db/schema.sql` so fresh databases match migrated databases.
-- [ ] Rebuild SQLite-constrained tables where needed to add `blocked` and new object-shape values.
-- [ ] Implement model enums and dataclasses.
-- [ ] Implement store methods.
-- [ ] Run `conda run -n wfrp-companion pytest tests/structured_evidence/test_visual_region_store.py tests/structured_evidence/test_envelope_store.py tests/structured_evidence/test_store.py -q`.
+- [x] Write migration tests that apply all migrations to an empty SQLite DB.
+- [x] Write store tests for inserting immutable visual regions idempotently.
+- [x] Write store tests for creating envelopes linked to regions and source objects.
+- [x] Write store tests for status guards that prevent invalid candidate-to-validated transitions.
+- [x] Write store tests for append-only review actions.
+- [x] Implement SQL migration in `wfrp_companion/db/migration_files/0012_visual_structured_evidence_contracts.sql`.
+- [x] Register `0012_visual_structured_evidence_contracts` in `wfrp_companion/db/migrations.py`.
+- [x] Update `wfrp_companion/db/schema.sql` so fresh databases match migrated databases.
+- [x] Rebuild SQLite-constrained tables where needed to add `blocked` and new object-shape values.
+- [x] Implement model enums and dataclasses.
+- [x] Implement store methods.
+- [x] Run `conda run -n wfrp-companion python -m pytest tests/structured_evidence/test_visual_region_store.py tests/structured_evidence/test_envelope_store.py tests/structured_evidence/test_structured_evidence_store.py -q`.
 
 Compatibility:
 
 - Existing `profile_bundle` rows must still load.
 - Existing review routes must continue to return current candidates.
 - No live data deletion.
+
+Phase 2 implementation note:
+
+- The migration adds `structured_visual_regions`, `structured_envelopes`,
+  `structured_envelope_regions`, `structured_envelope_source_objects`, and
+  `structured_review_actions`.
+- Legacy `profile_bundle` and v1 `structured_table` payload validation remains
+  compatible, while v2 `profile_card`, `career_entry`, `rules_entry`, and
+  `structured_table` payloads are validated through the contract registry.
+- `blocked` is a candidate/review workflow state, but blocked candidates are
+  not promotable into validated objects.
+- Visual extraction, envelope assembly, profile/career parsing, table-family
+  extraction, and Familiar runtime use remain later phases.
 
 ### Phase 3: page image and visual-region pipeline
 

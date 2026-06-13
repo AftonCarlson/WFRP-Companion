@@ -138,6 +138,7 @@ class ExactSearchResponse(BaseModel):
 class StructuredReviewSummaryResponse(BaseModel):
     candidates_total: int
     candidates_needs_review: int
+    candidates_blocked: int
     validated_active: int
     validated_stale: int
     validated_retired: int

@@ -32,6 +32,12 @@ corrected, and rejected candidates preserving review history without
 unique-index collisions, reviewed observation snapshots surviving rebuilds,
 active validated objects being filtered from retrieval immediately on source
 snapshot drift, and singular/plural evidence identity matching.
+The visual structured-evidence storage phase adds tests for the
+`0012_visual_structured_evidence_contracts` migration, fresh-vs-migrated schema
+parity, idempotent visual-region writes, envelope region/source-object links,
+append-only semantic review actions, `blocked` candidate summary counts,
+blocked-candidate promotion guards, and v2 contract validation before
+promotion.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -178,6 +184,8 @@ Current focused test files:
 - `tests/structured_evidence/test_contracts_structured_table.py`
 - `tests/structured_evidence/test_failure_fixtures.py`
 - `tests/structured_evidence/test_structured_evidence_models.py`
+- `tests/structured_evidence/test_visual_region_store.py`
+- `tests/structured_evidence/test_envelope_store.py`
 - `tests/structured_evidence/test_readers.py`
 - `tests/structured_evidence/test_structured_evidence_store.py`
 - `tests/structured_evidence/test_suspicion.py`
