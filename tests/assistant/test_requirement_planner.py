@@ -58,6 +58,10 @@ def test_multi_part_rules_query_creates_hit_location_and_armor_requirements() ->
     assert specs[0].subject_terms == ("hit", "location")
     assert specs[1].subject_terms == ("armor", "location")
     assert all(spec.required for spec in specs)
+    assert all(spec.structured_lookup_policy == "allowed" for spec in specs)
+    assert all(
+        spec.structured_object_shape_hints == ("structured_table",) for spec in specs
+    )
 
 
 def test_statline_requirement_uses_resolved_active_subject() -> None:
@@ -79,6 +83,9 @@ def test_statline_requirement_uses_resolved_active_subject() -> None:
             subject_terms=("orc",),
             optional_terms=("profile", "statline"),
             object_type_hints=("stat_block", "monster_profile", "npc_profile"),
+            structured_lookup_policy="required",
+            structured_object_shape_hints=("profile_bundle",),
+            structured_entity_kind_hints=("monster", "npc", "creature"),
         ),
     )
 
@@ -134,6 +141,25 @@ def test_scene_prep_with_only_stop_words_keeps_empty_fallback_subject() -> None:
     assert specs[0].kind == "supporting_context"
     assert specs[0].subject_terms == ()
     assert specs[0].id == "supporting_context"
+    assert specs[0].structured_lookup_policy == "supporting_only"
+    assert specs[0].structured_object_shape_hints == ("profile_bundle",)
+    assert specs[0].structured_entity_kind_hints == ("monster", "npc", "creature")
+
+
+def test_explicit_table_number_query_enables_structured_table_lookup() -> None:
+    specs = requirement_planner.plan_requirements(
+        "what is table 5-6 in the core rulebook",
+        decision=decision("rules_lookup", subject=None),
+        resolved=resolved(
+            raw_query="what is table 5-6 in the core rulebook",
+            intent="rules_lookup",
+            subject=None,
+        ),
+    )
+
+    assert specs[0].structured_lookup_policy == "allowed"
+    assert specs[0].structured_object_shape_hints == ("structured_table",)
+    assert specs[0].table_number_hints == ("5-6",)
 
 
 def test_normalize_provider_plan_removes_filler_from_hard_subject_terms() -> None:

@@ -6,6 +6,7 @@ from wfrp_companion.assistant import chat_store
 from wfrp_companion.library import catalog
 from wfrp_companion.library import source_sets
 from wfrp_companion.search import scope
+from wfrp_companion.structured_evidence import store as structured_store
 
 
 def http_error(status_code: int, detail: str) -> HTTPException:
@@ -56,3 +57,19 @@ def chat_store_error(error: chat_store.ChatStoreError) -> HTTPException:
     if isinstance(error, chat_store.ModelRunNotRetryableError):
         return http_error(409, str(error))
     return http_error(500, "Unexpected chat store error")
+
+
+def structured_evidence_error(
+    error: structured_store.StructuredEvidenceError,
+) -> HTTPException:
+    if isinstance(error, structured_store.StructuredEvidenceNotFoundError):
+        return http_error(404, str(error))
+    if isinstance(error, structured_store.StructuredEvidenceInvalidPayloadError):
+        return http_error(422, str(error))
+    if isinstance(
+        error,
+        structured_store.StructuredEvidenceConflictError
+        | structured_store.StructuredEvidenceStaleError,
+    ):
+        return http_error(409, str(error))
+    return http_error(500, "Unexpected structured evidence error")

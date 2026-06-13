@@ -252,14 +252,18 @@ create table if not exists book_retrieval_status (
   table_index_status text not null default 'not_started',
   vector_status text not null default 'disabled',
   page_label_status text not null default 'not_started',
+  structured_evidence_status text not null default 'not_started',
   page_text_snapshot_sha256 text,
   source_object_snapshot_sha256 text,
   source_map_snapshot_sha256 text,
   vector_snapshot_sha256 text,
+  structured_evidence_snapshot_sha256 text,
   source_map_started_at text,
   vector_started_at text,
   table_index_started_at text,
   page_label_started_at text,
+  structured_evidence_started_at text,
+  structured_evidence_last_review_at text,
   embedding_provider text,
   embedding_model text,
   embedding_dimensions integer,
@@ -269,6 +273,7 @@ create table if not exists book_retrieval_status (
   check(table_index_status in ('not_started', 'indexing', 'indexed', 'needs_refresh', 'failed', 'disabled')),
   check(vector_status in ('not_started', 'indexing', 'indexed', 'needs_refresh', 'failed', 'disabled')),
   check(page_label_status in ('not_started', 'calibrating', 'calibrated', 'needs_review', 'failed')),
+  check(structured_evidence_status in ('not_started', 'extracting', 'indexed', 'needs_review', 'needs_refresh', 'failed', 'disabled')),
   check(embedding_dimensions is null or embedding_dimensions > 0)
 );
 
@@ -376,6 +381,264 @@ on source_object_embeddings(
   embedding_dimensions
 );
 
+create table if not exists structured_reader_observations (
+  id text primary key,
+  book_id text not null references books(id) on delete cascade,
+  page_id text not null references pages(id) on delete cascade,
+  page_number integer not null,
+  source_object_id text references source_objects(id) on delete set null,
+  reader_name text not null,
+  reader_version text not null,
+  observation_type text not null,
+  object_shape text,
+  content_kind text,
+  entity_kind text,
+  title text,
+  table_number text,
+  canonical_name text,
+  char_start integer,
+  char_end integer,
+  bbox_json text,
+  payload_json text not null default '{}',
+  text_hash text,
+  text_snapshot_sha256 text not null,
+  confidence real not null,
+  created_at text not null,
+  check(reader_name in ('page_text_import', 'source_object_heuristic', 'pymupdf_text', 'pymupdf_words', 'tesseract_ocr', 'manual_seed')),
+  check(observation_type in ('table_caption', 'table_region', 'table_row', 'profile_header', 'profile_stat_block', 'profile_field_block', 'cross_reference', 'page_reference', 'layout_metadata')),
+  check(object_shape is null or object_shape in ('structured_table', 'table_row', 'profile_bundle', 'profile_card', 'profile_field_block', 'career_entry', 'rules_entry')),
+  check(content_kind is null or content_kind in ('rules_table', 'combat_table', 'equipment_table', 'random_roll_table', 'encounter_table', 'career_table', 'spell_table', 'creature_profile', 'npc_profile', 'generic_stat_block', 'unknown')),
+  check(entity_kind is null or entity_kind in ('monster', 'npc', 'creature', 'item', 'spell', 'career', 'rule', 'location', 'none', 'unknown')),
+  check(confidence >= 0 and confidence <= 1),
+  check(page_number >= 1),
+  check(char_start is null or char_start >= 0),
+  check(char_end is null or char_start is null or char_end >= char_start)
+);
+
+create table if not exists structured_evidence_candidates (
+  id text primary key,
+  book_id text not null references books(id) on delete cascade,
+  primary_page_id text not null references pages(id) on delete cascade,
+  primary_source_object_id text references source_objects(id) on delete set null,
+  object_shape text not null,
+  content_kind text not null,
+  entity_kind text not null,
+  canonical_name text,
+  title text,
+  table_number text,
+  table_number_normalized text,
+  page_start integer not null,
+  page_end integer not null,
+  printed_page_start text,
+  printed_page_end text,
+  heading_path_json text not null default '[]',
+  observation_ids_json text not null default '[]',
+  source_object_ids_json text not null default '[]',
+  payload_json text not null,
+  search_text text not null,
+  confidence real not null,
+  suspicious_flags_json text not null default '[]',
+  status text not null,
+  status_reason text,
+  text_snapshot_sha256 text not null,
+  structured_extractor_version text not null,
+  created_at text not null,
+  updated_at text not null,
+  check(status in ('candidate', 'needs_review', 'auto_rejected', 'approved', 'corrected', 'rejected', 'superseded', 'blocked')),
+  check(object_shape in ('structured_table', 'profile_bundle', 'profile_card', 'career_entry', 'rules_entry')),
+  check(confidence >= 0 and confidence <= 1),
+  check(page_start >= 1),
+  check(page_end >= page_start)
+);
+
+create table if not exists validated_structured_objects (
+  id text primary key,
+  candidate_id text references structured_evidence_candidates(id) on delete set null,
+  book_id text not null references books(id) on delete cascade,
+  primary_page_id text not null references pages(id) on delete cascade,
+  primary_source_object_id text references source_objects(id) on delete set null,
+  object_shape text not null,
+  content_kind text not null,
+  entity_kind text not null,
+  canonical_name text,
+  title text,
+  table_number text,
+  table_number_normalized text,
+  page_start integer not null,
+  page_end integer not null,
+  printed_page_start text,
+  printed_page_end text,
+  heading_path_json text not null default '[]',
+  payload_schema_version integer not null,
+  payload_json text not null,
+  field_confidence_json text not null default '{}',
+  source_snapshot_sha256 text not null,
+  validation_status text not null,
+  review_state text not null,
+  created_at text not null,
+  updated_at text not null,
+  reviewed_at text,
+  check(validation_status in ('active', 'stale', 'retired')),
+  check(review_state in ('auto_approved', 'human_approved', 'human_corrected')),
+  check(payload_schema_version >= 1),
+  check(object_shape in ('structured_table', 'profile_bundle', 'profile_card', 'career_entry', 'rules_entry')),
+  check(page_start >= 1),
+  check(page_end >= page_start)
+);
+
+create table if not exists validated_structured_object_sources (
+  id text primary key,
+  validated_object_id text not null references validated_structured_objects(id) on delete cascade,
+  anchor_kind text not null,
+  source_object_id text references source_objects(id) on delete cascade,
+  page_id text references pages(id) on delete cascade,
+  source_role text not null,
+  source_snapshot_sha256 text not null,
+  confidence real not null,
+  created_at text not null,
+  check(anchor_kind in ('source_object', 'page', 'manual')),
+  check(source_role in ('primary', 'fallback_page', 'supporting_section', 'stat_block', 'profile_text', 'table_row', 'manual_correction', 'visual_region', 'envelope', 'parent_entry', 'child_table', 'semantic_correction', 'reader_observation')),
+  check(
+    (anchor_kind = 'source_object' and source_object_id is not null and page_id is null)
+    or (anchor_kind = 'page' and source_object_id is null and page_id is not null)
+    or (anchor_kind = 'manual' and source_object_id is null and page_id is null)
+  ),
+  check(confidence >= 0 and confidence <= 1)
+);
+
+create table if not exists validated_structured_object_aliases (
+  validated_object_id text not null references validated_structured_objects(id) on delete cascade,
+  book_id text not null references books(id) on delete cascade,
+  alias text not null,
+  alias_normalized text not null,
+  alias_source text not null,
+  confidence real not null,
+  created_at text not null,
+  primary key(validated_object_id, alias_normalized),
+  check(alias_source in ('canonical', 'title', 'table_number', 'generated_plural', 'generated_word_order', 'manual')),
+  check(confidence >= 0 and confidence <= 1),
+  check(length(alias_normalized) > 0)
+);
+
+create table if not exists structured_evidence_reviews (
+  id text primary key,
+  candidate_id text references structured_evidence_candidates(id) on delete set null,
+  validated_object_id text references validated_structured_objects(id) on delete set null,
+  action text not null,
+  reviewer text,
+  notes text,
+  patch_json text not null default '{}',
+  prior_payload_hash text,
+  after_payload_hash text,
+  created_at text not null,
+  check(action in ('approve', 'correct', 'reject', 'mark_stale', 'retire', 'restore'))
+);
+
+create trigger if not exists structured_evidence_reviews_no_update
+after update on structured_evidence_reviews
+begin
+  select raise(abort, 'structured_evidence_reviews is append-only');
+end;
+
+create trigger if not exists structured_evidence_reviews_no_delete
+after delete on structured_evidence_reviews
+begin
+  select raise(abort, 'structured_evidence_reviews is append-only');
+end;
+
+create table if not exists structured_visual_regions (
+  id text primary key,
+  book_id text not null references books(id) on delete cascade,
+  source_snapshot_sha256 text not null,
+  ingest_job_id text references ingest_jobs(id) on delete set null,
+  provider_name text not null,
+  provider_version text not null default '',
+  pdf_page_start integer not null,
+  pdf_page_end integer not null,
+  printed_page_start text,
+  printed_page_end text,
+  region_kind text not null,
+  bbox_json text not null,
+  crop_asset_path text,
+  raw_text text not null default '',
+  confidence real not null default 0,
+  issues_json text not null default '[]',
+  created_at text not null default current_timestamp,
+  check(region_kind in ('table', 'profile_card', 'career_entry', 'rules_entry', 'heading', 'text_block', 'stat_grid', 'unknown')),
+  check(pdf_page_start >= 1),
+  check(pdf_page_end >= pdf_page_start),
+  check(confidence >= 0 and confidence <= 1)
+);
+
+create table if not exists structured_envelopes (
+  id text primary key,
+  book_id text not null references books(id) on delete cascade,
+  source_snapshot_sha256 text not null,
+  envelope_kind text not null,
+  scope_kind text not null default 'book',
+  scope_value text not null default '',
+  identity_raw text not null default '',
+  identity_normalized text not null default '',
+  parent_envelope_id text references structured_envelopes(id) on delete set null,
+  pdf_page_start integer not null,
+  pdf_page_end integer not null,
+  printed_page_start text,
+  printed_page_end text,
+  confidence real not null default 0,
+  status text not null default 'candidate',
+  issues_json text not null default '[]',
+  created_at text not null default current_timestamp,
+  updated_at text not null default current_timestamp,
+  check(envelope_kind in ('profile_card', 'career_entry', 'rules_entry', 'structured_table')),
+  check(scope_kind in ('book', 'chapter', 'section', 'page', 'parent_object', 'location')),
+  check(status in ('candidate', 'needs_review', 'validated', 'rejected', 'superseded', 'blocked')),
+  check(pdf_page_start >= 1),
+  check(pdf_page_end >= pdf_page_start),
+  check(confidence >= 0 and confidence <= 1)
+);
+
+create table if not exists structured_envelope_regions (
+  envelope_id text not null references structured_envelopes(id) on delete cascade,
+  visual_region_id text not null references structured_visual_regions(id) on delete cascade,
+  role text not null,
+  ordinal integer not null default 0,
+  primary key(envelope_id, visual_region_id, role),
+  check(role in ('primary', 'heading', 'body', 'stat_grid', 'table', 'caption', 'footnote', 'supporting'))
+);
+
+create table if not exists structured_envelope_source_objects (
+  envelope_id text not null references structured_envelopes(id) on delete cascade,
+  source_object_id text not null references source_objects(id) on delete cascade,
+  role text not null,
+  ordinal integer not null default 0,
+  primary key(envelope_id, source_object_id, role),
+  check(role in ('primary', 'heading', 'body', 'stat_block', 'table', 'table_row', 'profile_text', 'supporting', 'reference'))
+);
+
+create table if not exists structured_review_actions (
+  id text primary key,
+  candidate_id text references structured_evidence_candidates(id) on delete set null,
+  envelope_id text references structured_envelopes(id) on delete set null,
+  validated_object_id text references validated_structured_objects(id) on delete set null,
+  action_kind text not null,
+  action_payload_json text not null,
+  reviewer text not null default 'local_user',
+  created_at text not null default current_timestamp,
+  check(action_kind in ('approve', 'reject', 'correct_fields', 'reclassify', 'merge', 'split', 'set_parent', 'clear_parent', 'mark_suspicious', 'rerun_reader'))
+);
+
+create trigger if not exists structured_review_actions_no_update
+after update on structured_review_actions
+begin
+  select raise(abort, 'structured_review_actions is append-only');
+end;
+
+create trigger if not exists structured_review_actions_no_delete
+after delete on structured_review_actions
+begin
+  select raise(abort, 'structured_review_actions is append-only');
+end;
+
 create table if not exists ingest_jobs (
   id text primary key,
   job_type text not null,
@@ -387,7 +650,7 @@ create table if not exists ingest_jobs (
   created_at text not null,
   updated_at text not null,
   completed_at text,
-  check(job_type in ('copy_pdf', 'import_page_text', 'rebuild_fts', 'scan_visual_assets', 'render_page', 'extract_source_objects', 'rebuild_source_object_fts', 'rebuild_source_maps', 'rebuild_embeddings', 'backfill_page_labels')),
+  check(job_type in ('copy_pdf', 'import_page_text', 'rebuild_fts', 'scan_visual_assets', 'render_page', 'extract_source_objects', 'rebuild_source_object_fts', 'rebuild_source_maps', 'rebuild_embeddings', 'backfill_page_labels', 'extract_structured_evidence', 'rebuild_structured_evidence_search')),
   check(status in ('queued', 'running', 'succeeded', 'failed'))
 );
 
@@ -729,6 +992,112 @@ create index if not exists ix_familiar_evidence_judgments_hit
 on familiar_evidence_judgments(retrieval_hit_id);
 create index if not exists ix_familiar_evidence_judgments_requirement
 on familiar_evidence_judgments(research_plan_id, requirement_id, status);
+create index if not exists ix_structured_reader_observations_book_page
+on structured_reader_observations(book_id, page_number, reader_name);
+create index if not exists ix_structured_reader_observations_source_object
+on structured_reader_observations(source_object_id);
+create index if not exists ix_structured_reader_observations_type
+on structured_reader_observations(book_id, observation_type, object_shape);
+create index if not exists ix_structured_visual_regions_lookup
+on structured_visual_regions(
+  book_id,
+  source_snapshot_sha256,
+  pdf_page_start,
+  region_kind
+);
+create index if not exists ix_structured_envelopes_status
+on structured_envelopes(book_id, source_snapshot_sha256, envelope_kind, status);
+create index if not exists ix_structured_envelopes_identity
+on structured_envelopes(
+  book_id,
+  envelope_kind,
+  identity_normalized,
+  scope_kind,
+  scope_value
+);
+create unique index if not exists ux_structured_envelopes_active_top_level
+on structured_envelopes(
+  book_id,
+  envelope_kind,
+  identity_normalized,
+  scope_kind,
+  scope_value,
+  source_snapshot_sha256
+)
+where status in ('candidate', 'needs_review', 'validated')
+  and parent_envelope_id is null;
+create index if not exists ix_structured_envelope_regions_region
+on structured_envelope_regions(visual_region_id);
+create index if not exists ix_structured_envelope_source_objects_source
+on structured_envelope_source_objects(source_object_id);
+create index if not exists ix_structured_review_actions_candidate
+on structured_review_actions(candidate_id, created_at);
+create index if not exists ix_structured_review_actions_envelope
+on structured_review_actions(envelope_id, created_at);
+create index if not exists ix_structured_candidates_book_status
+on structured_evidence_candidates(book_id, status, updated_at);
+create index if not exists ix_structured_candidates_lookup
+on structured_evidence_candidates(
+  book_id,
+  object_shape,
+  table_number_normalized,
+  canonical_name
+);
+create index if not exists ix_structured_candidates_page
+on structured_evidence_candidates(book_id, page_start, page_end);
+create unique index if not exists ux_structured_candidates_active_identity
+on structured_evidence_candidates(
+  book_id,
+  object_shape,
+  coalesce(table_number_normalized, ''),
+  coalesce(canonical_name, ''),
+  page_start,
+  text_snapshot_sha256,
+  structured_extractor_version
+)
+where status not in ('auto_rejected', 'rejected', 'superseded');
+create index if not exists ix_validated_structured_objects_book_shape
+on validated_structured_objects(book_id, object_shape, validation_status);
+create index if not exists ix_validated_structured_objects_table_number
+on validated_structured_objects(
+  book_id,
+  table_number_normalized,
+  validation_status
+);
+create index if not exists ix_validated_structured_objects_name
+on validated_structured_objects(book_id, canonical_name, validation_status);
+create unique index if not exists ux_validated_structured_objects_active_table
+on validated_structured_objects(book_id, object_shape, table_number_normalized)
+where validation_status = 'active'
+  and table_number_normalized is not null;
+create unique index if not exists ux_validated_structured_objects_active_profile
+on validated_structured_objects(book_id, object_shape, canonical_name, entity_kind)
+where validation_status = 'active'
+  and canonical_name is not null;
+create unique index if not exists ux_validated_sources_source_object
+on validated_structured_object_sources(
+  validated_object_id,
+  source_role,
+  source_object_id
+)
+where anchor_kind = 'source_object';
+create unique index if not exists ux_validated_sources_page
+on validated_structured_object_sources(validated_object_id, source_role, page_id)
+where anchor_kind = 'page';
+create index if not exists ix_validated_sources_role
+on validated_structured_object_sources(
+  validated_object_id,
+  source_role,
+  anchor_kind
+);
+create index if not exists ix_validated_alias_lookup
+on validated_structured_object_aliases(
+  book_id,
+  alias_normalized,
+  confidence desc
+);
+create index if not exists ix_validated_alias_object
+on validated_structured_object_aliases(validated_object_id);
 
 create view if not exists book_readiness as
 select

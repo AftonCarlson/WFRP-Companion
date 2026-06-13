@@ -26,6 +26,12 @@ from wfrp_companion.source_objects.source_map_builder import SourceMapRebuildSum
 from wfrp_companion.source_objects.source_map_builder import rebuild_source_maps
 from wfrp_companion.source_objects.store import ObjectSearchRebuildSummary
 from wfrp_companion.source_objects.store import rebuild_source_object_search
+from wfrp_companion.structured_evidence.store import (
+    StructuredEvidenceExtractionSummary,
+)
+from wfrp_companion.structured_evidence.store import (
+    extract_structured_evidence_library,
+)
 
 
 def positive_int(value: str) -> int:
@@ -43,6 +49,7 @@ class RetrievalAssetRebuildSummary:
     fts: FtsRebuildSummary
     extraction: ExtractionSummary
     object_search: ObjectSearchRebuildSummary
+    structured: StructuredEvidenceExtractionSummary
     source_maps: SourceMapRebuildSummary
     page_labels: PageLabelBackfillSummary
     embeddings: EmbeddingRebuildSummary
@@ -56,6 +63,7 @@ class RetrievalAssetRebuildSummary:
                 self.fts.failed,
                 self.extraction.failed,
                 self.object_search.failed,
+                self.structured.failed,
                 self.source_maps.failed,
                 self.page_labels.failed,
                 self.embeddings.failed,
@@ -211,6 +219,13 @@ def rebuild_retrieval_assets(
         retry_running=retry_running,
         stale_running_minutes=stale_running_minutes,
     )
+    structured = extract_structured_evidence_library(
+        config,
+        book_ids=book_ids,
+        force=force,
+        retry_running=retry_running,
+        stale_running_minutes=stale_running_minutes,
+    )
     source_maps = rebuild_source_maps(
         config,
         book_ids=book_ids,
@@ -237,6 +252,7 @@ def rebuild_retrieval_assets(
         fts=fts,
         extraction=extraction,
         object_search=object_search,
+        structured=structured,
         source_maps=source_maps,
         page_labels=page_labels,
         embeddings=embeddings,
@@ -253,6 +269,8 @@ def print_summary(config: AppConfig, summary: RetrievalAssetRebuildSummary) -> N
     print(f"Source object books extracted: {summary.extraction.extracted}")
     print(f"Source objects written: {summary.extraction.objects_written}")
     print(f"Source object FTS books indexed: {summary.object_search.indexed}")
+    print(f"Structured candidates written: {summary.structured.candidates_written}")
+    print(f"Structured needs review: {summary.structured.needs_review}")
     print(f"Source maps indexed: {summary.source_maps.indexed}")
     print(f"Page-label books calibrated: {summary.page_labels.calibrated}")
     print(f"Embeddings indexed: {summary.embeddings.indexed}")
@@ -262,6 +280,9 @@ def print_summary(config: AppConfig, summary: RetrievalAssetRebuildSummary) -> N
     print(f"Page text indexed: {status.page_text_indexed}")
     print(f"Source-object books indexed: {status.source_objects_indexed}")
     print(f"Table/stat books indexed: {status.table_or_stat_indexed}")
+    print(f"Structured candidates total: {status.structured_candidates}")
+    print(f"Structured candidates needing review: {status.structured_needs_review}")
+    print(f"Validated structured active: {status.validated_structured_active}")
     print(f"Vectorized current books: {status.vectorized_current}")
     print(f"Vectorized enabled books: {status.vectorized_enabled}")
     print(f"Embedding provider: {status.embedding_provider}")

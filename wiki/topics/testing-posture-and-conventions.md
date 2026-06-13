@@ -17,7 +17,27 @@ vector retrieval channel, Phase 7 PR9 structured source-object evidence, Phase
 7 PR10 printed page-label calibration/backfill, Phase 7 PR11 Familiar prompt
 history/history-aware retrieval planning, the local semantic embeddings phase,
 the Familiar tool-calling hybrid RAG research-agent phase, the Familiar
-evidence-gate hardening phase, and the Familiar reliability-contract phase.
+evidence-gate hardening phase, the Familiar reliability-contract phase, and
+the structured evidence validation phase.
+Structured evidence validation tests now cover the reviewed table/profile
+layer, the v2 contract registry, synthetic-only contract fixtures, the manual
+review API/UI, intent-gated resolver integration, and retrieval-status counts.
+Contract tests cover label-identity rejection, group profile identity with
+race/career fields, stat-grid-only profile acceptance, profile provenance,
+career-entry advance schemes, scoped unnumbered tables, embedded-child table
+parents, empty-cell table rejection, rules-entry bodies, and unknown contract
+shape handling. Follow-up regressions cover PyMuPDF layout metadata not
+creating missing-table candidates, force rebuilds after unreviewed, approved,
+corrected, and rejected candidates preserving review history without
+unique-index collisions, reviewed observation snapshots surviving rebuilds,
+active validated objects being filtered from retrieval immediately on source
+snapshot drift, and singular/plural evidence identity matching.
+The visual structured-evidence storage phase adds tests for the
+`0012_visual_structured_evidence_contracts` migration, fresh-vs-migrated schema
+parity, idempotent visual-region writes, envelope region/source-object links,
+append-only semantic review actions, `blocked` candidate summary counts,
+blocked-candidate promotion guards, and v2 contract validation before
+promotion.
 Python testing runs through the `wfrp-companion` Conda environment. Frontend
 testing runs through npm in `frontend/`.
 
@@ -75,7 +95,7 @@ Current coverage gate:
 
 ```bash
 conda activate wfrp-companion
-python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.rebuild_retrieval_assets --cov=tools.backfill_page_labels --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov-report=term-missing --cov-fail-under=100
+python -m pytest --cov=wfrp_companion --cov=tools.init_db --cov=tools.import_pdfs --cov=tools.import_page_text --cov=tools.rebuild_fts --cov=tools.rebuild_source_object_fts --cov=tools.rebuild_source_maps --cov=tools.rebuild_embeddings --cov=tools.rebuild_retrieval_assets --cov=tools.backfill_page_labels --cov=tools.search_text --cov=tools.source_sets --cov=tools.serve_api --cov=tools.dev --cov=tools.migrate_db --cov=tools.extract_source_objects --cov=tools.extract_structured_evidence --cov-report=term-missing --cov-fail-under=100
 ```
 
 Current frontend verification commands:
@@ -120,6 +140,7 @@ Current focused test files:
 - `tests/assistant/test_research_tools.py`
 - `tests/assistant/test_retrieval.py`
 - `tests/assistant/test_retrieval_module_contracts.py`
+- `tests/assistant/test_structured_evidence_integration.py`
 - `tests/assistant/test_turn_contract.py`
 - `tests/db/test_schema.py`
 - `tests/db/test_migrations.py`
@@ -155,6 +176,20 @@ Current focused test files:
 - `tests/source_objects/test_object_search_backfill.py`
 - `tests/source_objects/test_source_map_builder.py`
 - `tests/source_objects/test_store.py`
+- `tests/structured_evidence/test_candidates.py`
+- `tests/structured_evidence/test_contract_registry.py`
+- `tests/structured_evidence/test_contracts_career_entry.py`
+- `tests/structured_evidence/test_contracts_profile_card.py`
+- `tests/structured_evidence/test_contracts_rules_entry.py`
+- `tests/structured_evidence/test_contracts_structured_table.py`
+- `tests/structured_evidence/test_failure_fixtures.py`
+- `tests/structured_evidence/test_structured_evidence_models.py`
+- `tests/structured_evidence/test_visual_region_store.py`
+- `tests/structured_evidence/test_envelope_store.py`
+- `tests/structured_evidence/test_readers.py`
+- `tests/structured_evidence/test_structured_evidence_store.py`
+- `tests/structured_evidence/test_suspicion.py`
+- `tests/tools/test_extract_structured_evidence.py`
 - `frontend/src/**/*.test.ts`
 - `frontend/src/**/*.test.tsx`
 - `frontend/e2e/workspace.spec.ts`
@@ -294,10 +329,10 @@ evidence counts and reason counts, safe Familiar markdown rendering, explicit
 PDF-page citation/search opens, and browser e2e flows for
 Library/Search/Grimoire/Familiar page-aware chat plus panel overflow.
 
-The latest full backend verification command on 2026-06-10 reported 721 tests
-passing with 100.00% coverage for `wfrp_companion`. The latest frontend
-verification reported 139 Vitest tests passing with coverage above the
-configured 90% thresholds and a successful production build.
+The latest full backend verification command on 2026-06-10 reported 799 tests
+passing with 100.00% coverage for `wfrp_companion` plus tracked tool modules.
+The latest frontend verification reported 148 Vitest tests passing with
+coverage above the configured 90% thresholds and a successful production build.
 
 ## Manual QA
 

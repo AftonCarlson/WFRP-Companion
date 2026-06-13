@@ -84,25 +84,34 @@ The current codebase has working local implementations for steps 1 through 6:
 - Keep copyrighted content out of committed fixtures.
 - Keep generated/cached local data out of Git.
 
-## Subagent Review Tooling
+## Subagent Review And Lifecycle Tooling
 
 [coverage: high]
 
-The `multi_agent_v1` subagent service has shown a platform lifecycle failure in
-this project: completed or interrupted agents can continue counting against the
-thread limit, while `close_agent` can hang indefinitely. Treat this as an
-external service blocker, not as repo work.
+The 2026-06-10 diagnosis found that this project had accumulated completed
+subagents in the live Codex thread. Because the repo guidance banned
+`close_agent` outright after an earlier cleanup hang, completed review agents
+remained attached and later `spawn_agent` calls failed with
+`agent thread limit reached`. Treat this as lifecycle hygiene for Codex work,
+not as WFRP application behavior.
 
-- Do not call `multi_agent_v1.close_agent` in this repo until the platform
-  lifecycle issue is fixed.
-- Never call `close_agent` in parallel.
+- Prefer serial `executing-plans` work by default. Use
+  `subagent-driven-development` only when there are genuinely independent
+  tasks and the user has authorized subagent/parallel work.
+- Do not make subagent execution mandatory in new implementation plans. A plan
+  may require independent review, but it should name acceptable paths such as a
+  bounded subagent review, CodeRabbit, or a Codex background thread.
 - Use `wait_agent` only with explicit bounded timeouts.
-- If `spawn_agent` returns `agent thread limit reached`, stop trying to spawn
-  or clean up subagents. Report the blocker with the stale agent IDs/statuses
-  found through bounded diagnostics.
-- Do not downgrade the review requirement silently. If independent review is
-  still required, ask for or use an explicitly approved alternate review path
-  such as a normal Codex background thread or external PR review.
+- After a subagent reaches a completed status, close it sequentially before
+  spawning more agents. Never call `close_agent` in parallel, and never close a
+  running, timed-out, or unknown-status agent.
+- If cleanup becomes unreliable or `spawn_agent` reports
+  `agent thread limit reached`, run one bounded status diagnostic, record the
+  attached agent ids/statuses, stop spawning more subagents in that thread, and
+  use CodeRabbit or a Codex background thread for the independent review gate.
+- Do not downgrade the review requirement silently. If a required review path
+  changes because of tooling lifecycle limits, say so explicitly in the PR
+  notes or final status.
 
 ## AI-Specific Rules
 
@@ -170,6 +179,19 @@ external service blocker, not as repo work.
   complete parent or target objects only when the target book is in the checked
   `source_book_ids` snapshot. Glossary entries remain canonical glossary
   evidence and can include linked target context.
+- Treat structured evidence extraction as candidate generation, not trusted
+  truth. `structured_reader_observations` and `structured_evidence_candidates`
+  are untrusted until a review action writes an active
+  `validated_structured_objects` row.
+- Familiar may use validated structured objects only through the requirement
+  policy contract. Statline requests can require active profile bundles;
+  explicit table/rules requests can allow active structured tables; scene prep
+  can use profiles as support; lore/general lookup should remain
+  `not_primary`.
+- Validated structured hits must carry the validated object id, payload schema
+  version, payload hash, validation status, source snapshot, and structured
+  lookup policy into retrieval hit metadata. Stale, retired, or unvalidated
+  structured rows must not satisfy evidence validation.
 
 ## PDF/Search Rules
 
@@ -284,6 +306,9 @@ database behavior should preserve these constraints:
 - Keep retrieval-asset lifecycle state explicit in `book_retrieval_status`;
   do not infer source-map/vector/table/page-label readiness from projection row
   presence alone.
+- Keep structured-evidence review history append-only. Correcting or approving
+  candidates should create review events and active validated objects rather
+  than mutating historical review rows.
 - Keep `book_retrieval_status.embedding_provider` and
   `source_object_embeddings.embedding_provider` authoritative for vector cache
   ownership. Rebuilds must delete/replace only rows for the same

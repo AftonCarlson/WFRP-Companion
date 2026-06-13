@@ -171,6 +171,9 @@ function aggregateRetrievalStatus(status: RetrievalStatusResponse) {
     `${status.page_text_indexed} page text indexed, ` +
     `${status.source_objects_indexed} source-object indexed, ` +
     `${status.table_or_stat_indexed} table/stat indexed, ` +
+    `${status.structured_candidates} structured candidates, ` +
+    `${status.structured_needs_review} needs review, ` +
+    `${status.validated_structured_active} validated, ` +
     `${status.vectorized_enabled} vectorized enabled, ` +
     `vector ${status.vector_status}`
   );

@@ -39,6 +39,9 @@ QUESTION_FILLER_TERMS = {
     "happens",
     "what",
 }
+ACTIVE_STRUCTURED_LOOKUP_POLICIES = frozenset(
+    {"required", "allowed", "supporting_only"}
+)
 
 
 @dataclass(frozen=True)
@@ -205,6 +208,14 @@ def validate_hit_for_requirement(
             subject_constraint=constraint_json,
             constraint_status="failed",
         )
+    structured_judgment = validate_structured_hit_for_requirement(
+        hit,
+        requirement_type=requirement_type,
+        constraint=evidence_constraint,
+        constraint_json=constraint_json,
+    )
+    if structured_judgment is not None:
+        return structured_judgment
     page_hint_only_lookup = (
         evidence_constraint.requirement_type == "page_evidence"
         and bool(evidence_constraint.page_hints)
@@ -558,6 +569,112 @@ def normalized_linked_object_type_reason(reason: str) -> str | None:
                 reason.removeprefix(prefix)
             )
     return None
+
+
+def validate_structured_hit_for_requirement(
+    hit: RetrievedHit,
+    *,
+    requirement_type: str,
+    constraint: evidence_constraints.EvidenceConstraint,
+    constraint_json: dict[str, object],
+) -> EvidenceJudgmentDraft | None:
+    if not is_structured_retrieval_hit(hit):
+        return None
+    if hit.validated_structured_object_id is None:
+        return EvidenceJudgmentDraft(
+            hit=hit,
+            requirement_type=requirement_type,
+            status="rejected",
+            reason_code="unvalidated_structured_evidence",
+            reasons=("Structured evidence has not been validated.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
+        )
+    if (
+        constraint.structured_lookup_policy not in ACTIVE_STRUCTURED_LOOKUP_POLICIES
+        or hit.structured_lookup_policy not in ACTIVE_STRUCTURED_LOOKUP_POLICIES
+    ):
+        return EvidenceJudgmentDraft(
+            hit=hit,
+            requirement_type=requirement_type,
+            status="rejected",
+            reason_code="structured_lookup_not_allowed",
+            reasons=("The requirement does not allow validated structured lookup.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
+        )
+    if hit.validated_validation_status != "active":
+        return EvidenceJudgmentDraft(
+            hit=hit,
+            requirement_type=requirement_type,
+            status="rejected",
+            reason_code="validated_structured_not_active",
+            reasons=("Validated structured evidence is not active.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
+        )
+    if not structured_hit_matches_shape_hints(hit, constraint):
+        return EvidenceJudgmentDraft(
+            hit=hit,
+            requirement_type=requirement_type,
+            status="rejected",
+            reason_code="structured_shape_mismatch",
+            reasons=("Validated structured evidence has the wrong shape.",),
+            subject_constraint=constraint_json,
+            constraint_status="failed",
+        )
+    return EvidenceJudgmentDraft(
+        hit=hit,
+        requirement_type=requirement_type,
+        status="accepted",
+        reason_code="validated_structured_evidence",
+        reasons=(
+            "Validated structured evidence is active, in scope, and allowed by the requirement policy.",
+            f"validated_structured_object_id={hit.validated_structured_object_id}",
+            f"payload_hash={hit.validated_payload_hash}",
+        ),
+        subject_constraint=constraint_json,
+        constraint_status="passed",
+    )
+
+
+def is_structured_retrieval_hit(hit: RetrievedHit) -> bool:
+    return (
+        hit.validated_structured_object_id is not None
+        or hit.object_type in {"validated_structured_table", "validated_profile_bundle"}
+    )
+
+
+def structured_hit_matches_shape_hints(
+    hit: RetrievedHit,
+    constraint: evidence_constraints.EvidenceConstraint,
+) -> bool:
+    if not constraint.structured_object_shape_hints:
+        return True
+    shape = structured_shape_for_hit(hit)
+    if shape is None:
+        return False
+    return shape in {
+        normalized_structured_shape_hint(hint)
+        for hint in constraint.structured_object_shape_hints
+    }
+
+
+def structured_shape_for_hit(hit: RetrievedHit) -> str | None:
+    if hit.object_type == "validated_structured_table":
+        return "structured_table"
+    if hit.object_type == "validated_profile_bundle":
+        return "profile_bundle"
+    return None
+
+
+def normalized_structured_shape_hint(value: str) -> str:
+    key = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+    if key in {"table", "validated_structured_table"}:
+        return "structured_table"
+    if key in {"profile", "validated_profile_bundle"}:
+        return "profile_bundle"
+    return key
 
 
 def first_matching_excluded_term(

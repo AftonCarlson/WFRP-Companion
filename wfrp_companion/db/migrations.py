@@ -19,6 +19,13 @@ EMBEDDING_PROVIDER_IDENTITY_MIGRATION_ID = "0006_embedding_provider_identity"
 FAMILIAR_AGENT_RESEARCH_MIGRATION_ID = "0007_familiar_agent_research"
 FAMILIAR_RESEARCH_PLANS_MIGRATION_ID = "0008_familiar_research_plans"
 FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID = "0009_familiar_reliability_contract"
+STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID = "0010_structured_evidence_validation"
+STRUCTURED_LAYOUT_METADATA_OBSERVATIONS_MIGRATION_ID = (
+    "0011_structured_layout_metadata_observations"
+)
+VISUAL_STRUCTURED_EVIDENCE_CONTRACTS_MIGRATION_ID = (
+    "0012_visual_structured_evidence_contracts"
+)
 MIGRATION_IDS: tuple[str, ...] = (
     PHASE_7_MIGRATION_ID,
     SOURCE_MAP_RETRIEVAL_MIGRATION_ID,
@@ -29,6 +36,9 @@ MIGRATION_IDS: tuple[str, ...] = (
     FAMILIAR_AGENT_RESEARCH_MIGRATION_ID,
     FAMILIAR_RESEARCH_PLANS_MIGRATION_ID,
     FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID,
+    STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID,
+    STRUCTURED_LAYOUT_METADATA_OBSERVATIONS_MIGRATION_ID,
+    VISUAL_STRUCTURED_EVIDENCE_CONTRACTS_MIGRATION_ID,
 )
 
 
@@ -146,6 +156,12 @@ def apply_migration(connection: sqlite3.Connection, migration_id: str) -> None:
         migration_function = apply_familiar_research_plans
     elif migration_id == FAMILIAR_RELIABILITY_CONTRACT_MIGRATION_ID:
         migration_function = apply_familiar_reliability_contract
+    elif migration_id == STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID:
+        migration_function = apply_structured_evidence_validation
+    elif migration_id == STRUCTURED_LAYOUT_METADATA_OBSERVATIONS_MIGRATION_ID:
+        migration_function = apply_structured_layout_metadata_observations
+    elif migration_id == VISUAL_STRUCTURED_EVIDENCE_CONTRACTS_MIGRATION_ID:
+        migration_function = apply_visual_structured_evidence_contracts
     else:
         raise ValueError(f"Unknown migration: {migration_id}")
 
@@ -292,11 +308,103 @@ def apply_familiar_reliability_contract(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def apply_structured_evidence_validation(connection: sqlite3.Connection) -> None:
+    add_structured_evidence_status_columns_if_needed(connection)
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{STRUCTURED_EVIDENCE_VALIDATION_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+    create_structured_evidence_review_triggers(connection)
+    rebuild_ingest_jobs_if_needed(
+        connection,
+        required_job_type="extract_structured_evidence",
+    )
+    backfill_book_retrieval_status(connection)
+
+
+def apply_structured_layout_metadata_observations(
+    connection: sqlite3.Connection,
+) -> None:
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{STRUCTURED_LAYOUT_METADATA_OBSERVATIONS_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+
+
+def apply_visual_structured_evidence_contracts(
+    connection: sqlite3.Connection,
+) -> None:
+    rebuild_structured_reader_observations_for_v2_if_needed(connection)
+    rebuild_structured_evidence_candidates_for_v2_if_needed(connection)
+    rebuild_validated_structured_objects_for_v2_if_needed(connection)
+    rebuild_validated_structured_object_sources_for_v2_if_needed(connection)
+    rebuild_validated_structured_object_aliases_for_v2_if_needed(connection)
+    rebuild_structured_evidence_reviews_for_v2_if_needed(connection)
+    execute_sql_script(
+        connection,
+        (
+            MIGRATION_DIR / f"{VISUAL_STRUCTURED_EVIDENCE_CONTRACTS_MIGRATION_ID}.sql"
+        ).read_text(encoding="utf-8"),
+    )
+    create_structured_evidence_review_triggers(connection)
+    create_structured_review_action_triggers(connection)
+
+
 def execute_sql_script(connection: sqlite3.Connection, sql: str) -> None:
     for statement in sql.split(";"):
         statement = statement.strip()
         if statement:
             connection.execute(statement)
+
+
+def create_structured_evidence_review_triggers(
+    connection: sqlite3.Connection,
+) -> None:
+    connection.execute(
+        """
+        create trigger if not exists structured_evidence_reviews_no_update
+        after update on structured_evidence_reviews
+        begin
+          select raise(abort, 'structured_evidence_reviews is append-only');
+        end
+        """
+    )
+    connection.execute(
+        """
+        create trigger if not exists structured_evidence_reviews_no_delete
+        after delete on structured_evidence_reviews
+        begin
+          select raise(abort, 'structured_evidence_reviews is append-only');
+        end
+        """
+    )
+
+
+def create_structured_review_action_triggers(
+    connection: sqlite3.Connection,
+) -> None:
+    connection.execute(
+        """
+        create trigger if not exists structured_review_actions_no_update
+        after update on structured_review_actions
+        begin
+          select raise(abort, 'structured_review_actions is append-only');
+        end
+        """
+    )
+    connection.execute(
+        """
+        create trigger if not exists structured_review_actions_no_delete
+        after delete on structured_review_actions
+        begin
+          select raise(abort, 'structured_review_actions is append-only');
+        end
+        """
+    )
 
 
 def preflight_phase_7_source_objects(connection: sqlite3.Connection) -> None:
@@ -342,6 +450,17 @@ def collect_table_counts(connection: sqlite3.Connection) -> tuple[tuple[str, int
         "familiar_research_plans",
         "familiar_tool_calls",
         "familiar_evidence_judgments",
+        "structured_reader_observations",
+        "structured_evidence_candidates",
+        "validated_structured_objects",
+        "validated_structured_object_sources",
+        "validated_structured_object_aliases",
+        "structured_evidence_reviews",
+        "structured_visual_regions",
+        "structured_envelopes",
+        "structured_envelope_regions",
+        "structured_envelope_source_objects",
+        "structured_review_actions",
         "ingest_jobs",
     )
     return tuple(
@@ -440,6 +559,397 @@ def backfill_book_retrieval_status(connection: sqlite3.Connection) -> None:
         """,
         (now,),
     )
+
+
+def add_structured_evidence_status_columns_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    columns = set(column_names(connection, "book_retrieval_status"))
+    if "structured_evidence_status" not in columns:
+        connection.execute(
+            """
+            alter table book_retrieval_status
+            add column structured_evidence_status text not null default 'not_started'
+            """
+        )
+    if "structured_evidence_snapshot_sha256" not in columns:
+        connection.execute(
+            """
+            alter table book_retrieval_status
+            add column structured_evidence_snapshot_sha256 text
+            """
+        )
+    if "structured_evidence_started_at" not in columns:
+        connection.execute(
+            """
+            alter table book_retrieval_status
+            add column structured_evidence_started_at text
+            """
+        )
+    if "structured_evidence_last_review_at" not in columns:
+        connection.execute(
+            """
+            alter table book_retrieval_status
+            add column structured_evidence_last_review_at text
+            """
+        )
+
+
+def rebuild_structured_reader_observations_for_v2_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    if "profile_card" in table_sql(connection, "structured_reader_observations"):
+        return
+    connection.execute("drop index if exists ix_structured_reader_observations_book_page")
+    connection.execute("drop index if exists ix_structured_reader_observations_source_object")
+    connection.execute("drop index if exists ix_structured_reader_observations_type")
+    connection.execute(
+        "alter table structured_reader_observations rename to "
+        "structured_reader_observations_before_0012"
+    )
+    connection.execute(STRUCTURED_READER_OBSERVATIONS_V2_TABLE_SQL)
+    connection.execute(
+        """
+        insert into structured_reader_observations (
+          id,
+          book_id,
+          page_id,
+          page_number,
+          source_object_id,
+          reader_name,
+          reader_version,
+          observation_type,
+          object_shape,
+          content_kind,
+          entity_kind,
+          title,
+          table_number,
+          canonical_name,
+          char_start,
+          char_end,
+          bbox_json,
+          payload_json,
+          text_hash,
+          text_snapshot_sha256,
+          confidence,
+          created_at
+        )
+        select
+          id,
+          book_id,
+          page_id,
+          page_number,
+          source_object_id,
+          reader_name,
+          reader_version,
+          observation_type,
+          object_shape,
+          content_kind,
+          entity_kind,
+          title,
+          table_number,
+          canonical_name,
+          char_start,
+          char_end,
+          bbox_json,
+          payload_json,
+          text_hash,
+          text_snapshot_sha256,
+          confidence,
+          created_at
+        from structured_reader_observations_before_0012
+        """
+    )
+    connection.execute("drop table structured_reader_observations_before_0012")
+
+
+def rebuild_structured_evidence_candidates_for_v2_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    sql = table_sql(connection, "structured_evidence_candidates")
+    if "profile_card" in sql and "blocked" in sql:
+        return
+    connection.execute("drop index if exists ix_structured_candidates_book_status")
+    connection.execute("drop index if exists ix_structured_candidates_lookup")
+    connection.execute("drop index if exists ix_structured_candidates_page")
+    connection.execute("drop index if exists ux_structured_candidates_active_identity")
+    connection.execute(
+        "alter table structured_evidence_candidates rename to "
+        "structured_evidence_candidates_before_0012"
+    )
+    connection.execute(STRUCTURED_EVIDENCE_CANDIDATES_V2_TABLE_SQL)
+    connection.execute(
+        """
+        insert into structured_evidence_candidates (
+          id,
+          book_id,
+          primary_page_id,
+          primary_source_object_id,
+          object_shape,
+          content_kind,
+          entity_kind,
+          canonical_name,
+          title,
+          table_number,
+          table_number_normalized,
+          page_start,
+          page_end,
+          printed_page_start,
+          printed_page_end,
+          heading_path_json,
+          observation_ids_json,
+          source_object_ids_json,
+          payload_json,
+          search_text,
+          confidence,
+          suspicious_flags_json,
+          status,
+          status_reason,
+          text_snapshot_sha256,
+          structured_extractor_version,
+          created_at,
+          updated_at
+        )
+        select
+          id,
+          book_id,
+          primary_page_id,
+          primary_source_object_id,
+          object_shape,
+          content_kind,
+          entity_kind,
+          canonical_name,
+          title,
+          table_number,
+          table_number_normalized,
+          page_start,
+          page_end,
+          printed_page_start,
+          printed_page_end,
+          heading_path_json,
+          observation_ids_json,
+          source_object_ids_json,
+          payload_json,
+          search_text,
+          confidence,
+          suspicious_flags_json,
+          status,
+          status_reason,
+          text_snapshot_sha256,
+          structured_extractor_version,
+          created_at,
+          updated_at
+        from structured_evidence_candidates_before_0012
+        """
+    )
+    connection.execute("drop table structured_evidence_candidates_before_0012")
+
+
+def rebuild_validated_structured_objects_for_v2_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    if "profile_card" in table_sql(connection, "validated_structured_objects"):
+        return
+    connection.execute("drop index if exists ix_validated_structured_objects_book_shape")
+    connection.execute(
+        "drop index if exists ix_validated_structured_objects_table_number"
+    )
+    connection.execute("drop index if exists ix_validated_structured_objects_name")
+    connection.execute(
+        "drop index if exists ux_validated_structured_objects_active_table"
+    )
+    connection.execute(
+        "drop index if exists ux_validated_structured_objects_active_profile"
+    )
+    connection.execute(
+        "alter table validated_structured_objects rename to "
+        "validated_structured_objects_before_0012"
+    )
+    connection.execute(VALIDATED_STRUCTURED_OBJECTS_V2_TABLE_SQL)
+    connection.execute(
+        """
+        insert into validated_structured_objects (
+          id,
+          candidate_id,
+          book_id,
+          primary_page_id,
+          primary_source_object_id,
+          object_shape,
+          content_kind,
+          entity_kind,
+          canonical_name,
+          title,
+          table_number,
+          table_number_normalized,
+          page_start,
+          page_end,
+          printed_page_start,
+          printed_page_end,
+          heading_path_json,
+          payload_schema_version,
+          payload_json,
+          field_confidence_json,
+          source_snapshot_sha256,
+          validation_status,
+          review_state,
+          created_at,
+          updated_at,
+          reviewed_at
+        )
+        select
+          id,
+          candidate_id,
+          book_id,
+          primary_page_id,
+          primary_source_object_id,
+          object_shape,
+          content_kind,
+          entity_kind,
+          canonical_name,
+          title,
+          table_number,
+          table_number_normalized,
+          page_start,
+          page_end,
+          printed_page_start,
+          printed_page_end,
+          heading_path_json,
+          payload_schema_version,
+          payload_json,
+          field_confidence_json,
+          source_snapshot_sha256,
+          validation_status,
+          review_state,
+          created_at,
+          updated_at,
+          reviewed_at
+        from validated_structured_objects_before_0012
+        """
+    )
+    connection.execute("drop table validated_structured_objects_before_0012")
+
+
+def rebuild_validated_structured_object_sources_for_v2_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    if "visual_region" in table_sql(connection, "validated_structured_object_sources"):
+        return
+    connection.execute("drop index if exists ux_validated_sources_source_object")
+    connection.execute("drop index if exists ux_validated_sources_page")
+    connection.execute("drop index if exists ix_validated_sources_role")
+    connection.execute(
+        "alter table validated_structured_object_sources rename to "
+        "validated_structured_object_sources_before_0012"
+    )
+    connection.execute(VALIDATED_STRUCTURED_OBJECT_SOURCES_V2_TABLE_SQL)
+    connection.execute(
+        """
+        insert into validated_structured_object_sources (
+          id,
+          validated_object_id,
+          anchor_kind,
+          source_object_id,
+          page_id,
+          source_role,
+          source_snapshot_sha256,
+          confidence,
+          created_at
+        )
+        select
+          id,
+          validated_object_id,
+          anchor_kind,
+          source_object_id,
+          page_id,
+          source_role,
+          source_snapshot_sha256,
+          confidence,
+          created_at
+        from validated_structured_object_sources_before_0012
+        """
+    )
+    connection.execute("drop table validated_structured_object_sources_before_0012")
+
+
+def rebuild_validated_structured_object_aliases_for_v2_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    if "before_0012" not in table_sql(
+        connection,
+        "validated_structured_object_aliases",
+    ):
+        return
+    connection.execute(
+        "alter table validated_structured_object_aliases rename to "
+        "validated_structured_object_aliases_before_0012"
+    )
+    connection.execute(VALIDATED_STRUCTURED_OBJECT_ALIASES_V2_TABLE_SQL)
+    connection.execute(
+        """
+        insert into validated_structured_object_aliases (
+          validated_object_id,
+          book_id,
+          alias,
+          alias_normalized,
+          alias_source,
+          confidence,
+          created_at
+        )
+        select
+          validated_object_id,
+          book_id,
+          alias,
+          alias_normalized,
+          alias_source,
+          confidence,
+          created_at
+        from validated_structured_object_aliases_before_0012
+        """
+    )
+    connection.execute("drop table validated_structured_object_aliases_before_0012")
+
+
+def rebuild_structured_evidence_reviews_for_v2_if_needed(
+    connection: sqlite3.Connection,
+) -> None:
+    if "before_0012" not in table_sql(connection, "structured_evidence_reviews"):
+        return
+    connection.execute("drop trigger if exists structured_evidence_reviews_no_update")
+    connection.execute("drop trigger if exists structured_evidence_reviews_no_delete")
+    connection.execute(
+        "alter table structured_evidence_reviews rename to "
+        "structured_evidence_reviews_before_0012"
+    )
+    connection.execute(STRUCTURED_EVIDENCE_REVIEWS_V2_TABLE_SQL)
+    connection.execute(
+        """
+        insert into structured_evidence_reviews (
+          id,
+          candidate_id,
+          validated_object_id,
+          action,
+          reviewer,
+          notes,
+          patch_json,
+          prior_payload_hash,
+          after_payload_hash,
+          created_at
+        )
+        select
+          id,
+          candidate_id,
+          validated_object_id,
+          action,
+          reviewer,
+          notes,
+          patch_json,
+          prior_payload_hash,
+          after_payload_hash,
+          created_at
+        from structured_evidence_reviews_before_0012
+        """
+    )
+    connection.execute("drop table structured_evidence_reviews_before_0012")
 
 
 def backfill_retrieval_run_source_books(connection: sqlite3.Connection) -> None:
@@ -1225,7 +1735,9 @@ create table ingest_jobs (
     'rebuild_source_object_fts',
     'rebuild_source_maps',
     'rebuild_embeddings',
-    'backfill_page_labels'
+    'backfill_page_labels',
+    'extract_structured_evidence',
+    'rebuild_structured_evidence_search'
   )),
   check(status in ('queued', 'running', 'succeeded', 'failed'))
 )
@@ -1444,6 +1956,177 @@ create table familiar_evidence_judgments (
   check(status in ('accepted', 'rejected', 'partial')),
   check(length(requirement_type) > 0),
   check(length(reason_code) > 0)
+)
+"""
+
+
+STRUCTURED_READER_OBSERVATIONS_V2_TABLE_SQL = """
+create table structured_reader_observations (
+  id text primary key,
+  book_id text not null references books(id) on delete cascade,
+  page_id text not null references pages(id) on delete cascade,
+  page_number integer not null,
+  source_object_id text references source_objects(id) on delete set null,
+  reader_name text not null,
+  reader_version text not null,
+  observation_type text not null,
+  object_shape text,
+  content_kind text,
+  entity_kind text,
+  title text,
+  table_number text,
+  canonical_name text,
+  char_start integer,
+  char_end integer,
+  bbox_json text,
+  payload_json text not null default '{}',
+  text_hash text,
+  text_snapshot_sha256 text not null,
+  confidence real not null,
+  created_at text not null,
+  check(reader_name in ('page_text_import', 'source_object_heuristic', 'pymupdf_text', 'pymupdf_words', 'tesseract_ocr', 'manual_seed')),
+  check(observation_type in ('table_caption', 'table_region', 'table_row', 'profile_header', 'profile_stat_block', 'profile_field_block', 'cross_reference', 'page_reference', 'layout_metadata')),
+  check(object_shape is null or object_shape in ('structured_table', 'table_row', 'profile_bundle', 'profile_card', 'profile_field_block', 'career_entry', 'rules_entry')),
+  check(content_kind is null or content_kind in ('rules_table', 'combat_table', 'equipment_table', 'random_roll_table', 'encounter_table', 'career_table', 'spell_table', 'creature_profile', 'npc_profile', 'generic_stat_block', 'unknown')),
+  check(entity_kind is null or entity_kind in ('monster', 'npc', 'creature', 'item', 'spell', 'career', 'rule', 'location', 'none', 'unknown')),
+  check(confidence >= 0 and confidence <= 1),
+  check(page_number >= 1),
+  check(char_start is null or char_start >= 0),
+  check(char_end is null or char_start is null or char_end >= char_start)
+)
+"""
+
+
+STRUCTURED_EVIDENCE_CANDIDATES_V2_TABLE_SQL = """
+create table structured_evidence_candidates (
+  id text primary key,
+  book_id text not null references books(id) on delete cascade,
+  primary_page_id text not null references pages(id) on delete cascade,
+  primary_source_object_id text references source_objects(id) on delete set null,
+  object_shape text not null,
+  content_kind text not null,
+  entity_kind text not null,
+  canonical_name text,
+  title text,
+  table_number text,
+  table_number_normalized text,
+  page_start integer not null,
+  page_end integer not null,
+  printed_page_start text,
+  printed_page_end text,
+  heading_path_json text not null default '[]',
+  observation_ids_json text not null default '[]',
+  source_object_ids_json text not null default '[]',
+  payload_json text not null,
+  search_text text not null,
+  confidence real not null,
+  suspicious_flags_json text not null default '[]',
+  status text not null,
+  status_reason text,
+  text_snapshot_sha256 text not null,
+  structured_extractor_version text not null,
+  created_at text not null,
+  updated_at text not null,
+  check(status in ('candidate', 'needs_review', 'auto_rejected', 'approved', 'corrected', 'rejected', 'superseded', 'blocked')),
+  check(object_shape in ('structured_table', 'profile_bundle', 'profile_card', 'career_entry', 'rules_entry')),
+  check(confidence >= 0 and confidence <= 1),
+  check(page_start >= 1),
+  check(page_end >= page_start)
+)
+"""
+
+
+VALIDATED_STRUCTURED_OBJECTS_V2_TABLE_SQL = """
+create table validated_structured_objects (
+  id text primary key,
+  candidate_id text references structured_evidence_candidates(id) on delete set null,
+  book_id text not null references books(id) on delete cascade,
+  primary_page_id text not null references pages(id) on delete cascade,
+  primary_source_object_id text references source_objects(id) on delete set null,
+  object_shape text not null,
+  content_kind text not null,
+  entity_kind text not null,
+  canonical_name text,
+  title text,
+  table_number text,
+  table_number_normalized text,
+  page_start integer not null,
+  page_end integer not null,
+  printed_page_start text,
+  printed_page_end text,
+  heading_path_json text not null default '[]',
+  payload_schema_version integer not null,
+  payload_json text not null,
+  field_confidence_json text not null default '{}',
+  source_snapshot_sha256 text not null,
+  validation_status text not null,
+  review_state text not null,
+  created_at text not null,
+  updated_at text not null,
+  reviewed_at text,
+  check(validation_status in ('active', 'stale', 'retired')),
+  check(review_state in ('auto_approved', 'human_approved', 'human_corrected')),
+  check(payload_schema_version >= 1),
+  check(object_shape in ('structured_table', 'profile_bundle', 'profile_card', 'career_entry', 'rules_entry')),
+  check(page_start >= 1),
+  check(page_end >= page_start)
+)
+"""
+
+
+VALIDATED_STRUCTURED_OBJECT_SOURCES_V2_TABLE_SQL = """
+create table validated_structured_object_sources (
+  id text primary key,
+  validated_object_id text not null references validated_structured_objects(id) on delete cascade,
+  anchor_kind text not null,
+  source_object_id text references source_objects(id) on delete cascade,
+  page_id text references pages(id) on delete cascade,
+  source_role text not null,
+  source_snapshot_sha256 text not null,
+  confidence real not null,
+  created_at text not null,
+  check(anchor_kind in ('source_object', 'page', 'manual')),
+  check(source_role in ('primary', 'fallback_page', 'supporting_section', 'stat_block', 'profile_text', 'table_row', 'manual_correction', 'visual_region', 'envelope', 'parent_entry', 'child_table', 'semantic_correction', 'reader_observation')),
+  check(
+    (anchor_kind = 'source_object' and source_object_id is not null and page_id is null)
+    or (anchor_kind = 'page' and source_object_id is null and page_id is not null)
+    or (anchor_kind = 'manual' and source_object_id is null and page_id is null)
+  ),
+  check(confidence >= 0 and confidence <= 1)
+)
+"""
+
+
+VALIDATED_STRUCTURED_OBJECT_ALIASES_V2_TABLE_SQL = """
+create table validated_structured_object_aliases (
+  validated_object_id text not null references validated_structured_objects(id) on delete cascade,
+  book_id text not null references books(id) on delete cascade,
+  alias text not null,
+  alias_normalized text not null,
+  alias_source text not null,
+  confidence real not null,
+  created_at text not null,
+  primary key(validated_object_id, alias_normalized),
+  check(alias_source in ('canonical', 'title', 'table_number', 'generated_plural', 'generated_word_order', 'manual')),
+  check(confidence >= 0 and confidence <= 1),
+  check(length(alias_normalized) > 0)
+)
+"""
+
+
+STRUCTURED_EVIDENCE_REVIEWS_V2_TABLE_SQL = """
+create table structured_evidence_reviews (
+  id text primary key,
+  candidate_id text references structured_evidence_candidates(id) on delete set null,
+  validated_object_id text references validated_structured_objects(id) on delete set null,
+  action text not null,
+  reviewer text,
+  notes text,
+  patch_json text not null default '{}',
+  prior_payload_hash text,
+  after_payload_hash text,
+  created_at text not null,
+  check(action in ('approve', 'correct', 'reject', 'mark_stale', 'retire', 'restore'))
 )
 """
 

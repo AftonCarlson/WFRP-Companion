@@ -37,6 +37,12 @@ class RetrievedHit:
     confidence: float | None = None
     rank_reasons: tuple[str, ...] = field(default_factory=tuple)
     text_snapshot_sha256: str | None = None
+    validated_structured_object_id: str | None = None
+    validated_payload_schema_version: int | None = None
+    validated_payload_hash: str | None = None
+    validated_validation_status: str | None = None
+    validated_source_snapshot_sha256: str | None = None
+    structured_lookup_policy: str | None = None
 
 @dataclass(frozen=True)
 class RetrievalContext:
@@ -71,9 +77,17 @@ class EvidenceCandidate:
     confidence: float | None = None
     rank_reasons: tuple[str, ...] = field(default_factory=tuple)
     text_snapshot_sha256: str | None = None
+    validated_structured_object_id: str | None = None
+    validated_payload_schema_version: int | None = None
+    validated_payload_hash: str | None = None
+    validated_validation_status: str | None = None
+    validated_source_snapshot_sha256: str | None = None
+    structured_lookup_policy: str | None = None
 
     @property
     def dedupe_key(self) -> str:
+        if self.validated_structured_object_id is not None:
+            return f"validated-structured:{self.validated_structured_object_id}"
         if self.source_object_id is not None:
             return f"source-object:{self.source_object_id}"
         return f"page:{self.page_id}"

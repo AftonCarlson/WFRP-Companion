@@ -34,6 +34,11 @@ def valid_plan_payload() -> dict[str, object]:
                 "required_terms": ["ogre"],
                 "excluded_terms": ["rat ogre", "rat"],
                 "object_type_hints": ["stat_block", "monster_profile"],
+                "structured_lookup_policy": "not_primary",
+                "structured_object_shape_hints": [],
+                "structured_content_kind_hints": [],
+                "structured_entity_kind_hints": [],
+                "table_number_hints": [],
                 "min_accepted_hits": 1,
                 "required": True,
             }
@@ -135,6 +140,13 @@ def test_parse_research_plan_accepts_short_provider_requirement_ids() -> None:
                 "x" * 241,
             ),
             "argument",
+        ),
+        (
+            lambda payload: payload["requirements"][0].__setitem__(
+                "structured_lookup_policy",
+                "always",
+            ),
+            "unknown structured_lookup_policy",
         ),
     ),
 )

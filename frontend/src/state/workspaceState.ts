@@ -1,4 +1,4 @@
-export type LeftTab = "library" | "search";
+export type LeftTab = "library" | "search" | "review";
 export type PanelId = "left" | "reader" | "agent";
 export type PdfViewMode = "single" | "two-page";
 

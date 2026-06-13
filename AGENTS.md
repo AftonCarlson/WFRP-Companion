@@ -35,10 +35,12 @@
   semantic/vector search.
 - Do not call image-generation tools unless the user explicitly asks for image
   generation or image editing.
-- Do not use `multi_agent_v1.close_agent` in this repo. If subagent review
-  hits `agent thread limit reached`, use bounded `wait_agent` diagnostics and
-  report the platform lifecycle blocker; do not attempt parallel close calls or
-  retry cleanup loops.
+- Keep subagent usage sparse and explicit. If subagents are used, wait with a
+  bounded `wait_agent` call, then close completed agents sequentially. Never
+  close agents in parallel, never close running or unknown-status agents, and
+  stop if cleanup itself becomes unreliable. If `spawn_agent` reports
+  `agent thread limit reached`, diagnose attached agent status before choosing
+  CodeRabbit, a Codex background thread, or another independent review path.
 
 ## Engineering Guidelines
 

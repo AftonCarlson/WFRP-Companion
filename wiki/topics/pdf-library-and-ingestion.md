@@ -207,6 +207,59 @@ source-object FTS, source-object fallback scan, structured table/stat evidence,
 source-object links, local vector candidates when embeddings are enabled and
 current, rank fusion, reranking, and evidence validation.
 
+Structured evidence validation adds a reviewed layer beside raw source objects:
+
+- `structured_reader_observations` stores immutable per-reader observations.
+  PyMuPDF word/block page metadata is stored as `layout_metadata`; it is
+  reviewer context and must not be treated as a table reference.
+- `structured_evidence_candidates` stores untrusted possible tables/profile
+  bundles plus suspicious flags and review status.
+- `validated_structured_objects`, `validated_structured_object_sources`, and
+  `validated_structured_object_aliases` store active/stale/retired trusted
+  table/profile payloads, citations, aliases, and source snapshots.
+- `structured_evidence_reviews` is append-only review history for approve,
+  correct, reject, stale, retire, and restore actions.
+- Force rebuilds preserve human decisions: replaceable unreviewed candidates
+  are upserted, reviewed approved/corrected/rejected candidates are not
+  overwritten, reviewed candidate observations stay tied to their original
+  snapshot-qualified observation ids, and active validated objects are marked
+  stale on source-snapshot drift.
+- The structured resolver also enforces source-snapshot currentness at
+  retrieval time, so an active validated row is ignored immediately if the
+  underlying source/page snapshot has drifted before the next rebuild.
+- The visual structured-evidence contract phase adds a v2 contract registry in
+  `wfrp_companion/structured_evidence/contracts/`. It validates
+  `profile_card`, `career_entry`, `rules_entry`, and `structured_table`
+  payload shapes before later extraction/review phases persist or trust them.
+  This phase is intentionally not wired into runtime extraction yet; it is a
+  tested contract foundation.
+- The contract layer rejects label identities such as race/career labels,
+  stat-header fragments, and equipment-field labels; requires profile field
+  provenance; allows complete stat-grid-only profile cards; accepts career
+  advance schemes as careers rather than profiles; rejects empty-cell tables;
+  requires scope for unnumbered contextual tables; and requires `parent_ref`
+  for embedded child tables.
+- The visual structured-evidence storage phase adds the v2 workflow tables
+  that later visual extraction phases will populate:
+  `structured_visual_regions`, `structured_envelopes`,
+  `structured_envelope_regions`, `structured_envelope_source_objects`, and
+  `structured_review_actions`. These tables store page-region evidence,
+  human-recognizable object envelopes, region/source-object links, and
+  append-only semantic review actions.
+- The storage phase also widens structured-evidence status/object-shape
+  constraints for `blocked`, `profile_card`, `career_entry`, and
+  `rules_entry` while keeping legacy `profile_bundle` and v1
+  `structured_table` review flows compatible. `blocked` candidates are counted
+  separately from `needs_review` and are not promotable into validated
+  structured objects.
+- Important boundary: v2 visual regions and envelopes are storage/review
+  foundations only at this phase. Runtime extraction still does not assemble
+  visual envelopes, parse profile/career/table families from page crops, or let
+  Familiar answer from v2 envelope rows until later phases wire those flows.
+- `tools/extract_structured_evidence.py` and
+  `tools/rebuild_retrieval_assets.py` report counts only and must not print
+  private table/profile text.
+
 Phase 7 PR10 adds printed page-label calibration/backfill:
 
 - `wfrp_companion/library/page_labels.py` builds page-label calibration
@@ -234,8 +287,8 @@ The local retrieval assets are rebuildable from private imported library data:
 
 - `tools/rebuild_retrieval_assets.py` runs the retrieval maintenance pipeline:
   global page FTS, source-object extraction, source-object FTS projection,
-  durable source maps, page-label backfill, and embeddings when the embedding
-  provider is enabled.
+  structured evidence extraction, durable source maps, page-label backfill, and
+  embeddings when the embedding provider is enabled.
 - `tools/rebuild_embeddings.py` stores local vectors in
   `source_object_embeddings` for current source objects under the configured
   provider/model/dimensions identity.
@@ -246,12 +299,20 @@ The local retrieval assets are rebuildable from private imported library data:
   for that retrieval run. Exact page/object retrieval still runs.
 - `/api/retrieval/status` reports count-only readiness: total copied books,
   enabled books, page-text indexed books, source-object indexed books,
-  table/stat indexed books, current vectorized books, current vectorized
-  enabled books, embedding provider, embedding dimensions, and aggregate vector
-  status.
+  legacy table/stat indexed books, structured candidates, structured
+  candidates needing review, active validated structured objects, current
+  vectorized books, current vectorized enabled books, embedding provider,
+  embedding dimensions, and aggregate vector status.
 - API and CLI surfaces must not print raw extracted book text, local embedding
   model paths, or private PDF paths. The UI should show useful aggregate search
   and vector readiness without exposing private internals.
+- The 2026-06-10 live local structured refresh applied
+  `0011_structured_layout_metadata_observations` and force-refreshed all 26
+  books. It wrote 5,607 observations and 1,075 current candidates with 1,037
+  needing review; 3,736 older layout-derived candidates were superseded.
+  There are currently 0 active validated structured objects, so the human
+  review queue is the required next step before structured payloads can be
+  trusted by Familiar.
 
 ## OCR
 

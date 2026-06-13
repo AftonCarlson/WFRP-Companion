@@ -43,6 +43,8 @@ This is not a brainstorming doc. It is an execution plan for a live codebase.
 
 9\. The plan must be detailed enough that an implementation agent could execute it phase by phase without inventing major missing decisions.
 
+10\. Do not make subagent-driven execution mandatory by default. If the work needs independent review or parallel subagents, state why, define the acceptable review paths, and include lifecycle hygiene: bounded waits, sequential cleanup of completed agents, and a fallback such as CodeRabbit or a Codex background thread when subagent spawning is unavailable.
+
 \#\# Output Format
 
 Produce the plan with these sections.
@@ -217,4 +219,3 @@ The plan is not done unless it:
 If any part is ambiguous, resolve it or explicitly call it out. Do not hand-wave.
 
 Use direct engineering prose. Optimize for clarity, specificity, and execution-readiness.
-

@@ -12,6 +12,9 @@ from wfrp_companion.source_objects.embeddings import EmbeddingRebuildSummary
 from wfrp_companion.source_objects.extractor import ExtractionSummary
 from wfrp_companion.source_objects.source_map_builder import SourceMapRebuildSummary
 from wfrp_companion.source_objects.store import ObjectSearchRebuildSummary
+from wfrp_companion.structured_evidence.store import (
+    StructuredEvidenceExtractionSummary,
+)
 
 
 def successful_summaries() -> dict[str, object]:
@@ -41,6 +44,17 @@ def successful_summaries() -> dict[str, object]:
             stale_recovered=0,
             failed=0,
             objects_written=3,
+            failures=(),
+        ),
+        "structured": StructuredEvidenceExtractionSummary(
+            discovered=1,
+            extracted=1,
+            skipped_current=0,
+            stale_recovered=0,
+            failed=0,
+            observations_written=3,
+            candidates_written=2,
+            needs_review=1,
             failures=(),
         ),
         "source_maps": SourceMapRebuildSummary(
@@ -79,6 +93,9 @@ def successful_summaries() -> dict[str, object]:
             page_text_indexed=1,
             source_objects_indexed=1,
             table_or_stat_indexed=1,
+            structured_candidates=2,
+            structured_needs_review=1,
+            validated_structured_active=1,
             vectorized_current=1,
             vectorized_enabled=1,
             embedding_provider="local-hash",
@@ -108,6 +125,12 @@ def patch_steps(
         "rebuild_source_object_search",
         lambda config, **kwargs: calls.append("object_fts")
         or summaries["object_search"],
+    )
+    monkeypatch.setattr(
+        rebuild_retrieval_assets,
+        "extract_structured_evidence_library",
+        lambda config, **kwargs: calls.append("structured")
+        or summaries["structured"],
     )
     monkeypatch.setattr(
         rebuild_retrieval_assets,
@@ -162,6 +185,7 @@ def test_rebuild_retrieval_assets_cli_runs_steps_and_prints_status(
         "fts",
         "extract",
         "object_fts",
+        "structured",
         "source_maps",
         "page_labels",
         "embeddings",
@@ -171,6 +195,11 @@ def test_rebuild_retrieval_assets_cli_runs_steps_and_prints_status(
     assert "WFRP retrieval asset rebuild" in output
     assert "FTS pages indexed: 2" in output
     assert "Source objects written: 3" in output
+    assert "Structured candidates written: 2" in output
+    assert "Structured needs review: 1" in output
+    assert "Structured candidates total: 2" in output
+    assert "Structured candidates needing review: 1" in output
+    assert "Validated structured active: 1" in output
     assert "Embeddings written: 3" in output
     assert "Vector status: ready" in output
     assert "Vectorized enabled books: 1" in output

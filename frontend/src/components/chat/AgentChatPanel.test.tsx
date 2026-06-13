@@ -1258,6 +1258,9 @@ function chatClient(
       page_text_indexed: 0,
       source_objects_indexed: 0,
       table_or_stat_indexed: 0,
+      structured_candidates: 0,
+      structured_needs_review: 0,
+      validated_structured_active: 0,
       vectorized_current: 0,
       vectorized_enabled: 0,
       embedding_provider: "disabled",
@@ -1301,6 +1304,27 @@ function chatClient(
       turns: [],
     }),
     listChatThreads: async () => ({ threads: [] }),
+    getStructuredReviewSummary: async () => ({
+      candidates_total: 0,
+      candidates_needs_review: 0,
+      candidates_blocked: 0,
+      validated_active: 0,
+      validated_stale: 0,
+      validated_retired: 0,
+    }),
+    listStructuredCandidates: async () => ({ candidates: [] }),
+    getStructuredCandidate: async () => {
+      throw new Error("not implemented in test");
+    },
+    approveStructuredCandidate: async () => {
+      throw new Error("not implemented in test");
+    },
+    correctStructuredCandidate: async () => {
+      throw new Error("not implemented in test");
+    },
+    rejectStructuredCandidate: async () => {
+      throw new Error("not implemented in test");
+    },
     retryModelRun: async () => {
       throw new Error("not implemented in test");
     },

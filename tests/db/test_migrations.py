@@ -298,6 +298,9 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
+        "0010_structured_evidence_validation",
+        "0011_structured_layout_metadata_observations",
+        "0012_visual_structured_evidence_contracts",
     )
     assert summary.skipped == ()
     with open_connection(db_path) as connection:
@@ -387,6 +390,27 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
             ).fetchone()
             is not None
         )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0010_structured_evidence_validation",),
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0011_structured_layout_metadata_observations",),
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "select id from schema_migrations where id = ?",
+                ("0012_visual_structured_evidence_contracts",),
+            ).fetchone()
+            is not None
+        )
         assert migrations.table_exists(connection, "book_page_label_calibrations")
         assert migrations.table_exists(connection, "source_object_embeddings")
         assert migrations.table_exists(connection, "familiar_research_runs")
@@ -395,6 +419,56 @@ def test_apply_pending_migrations_preserves_legacy_chat_and_retrieval_rows(
         assert migrations.table_exists(connection, "familiar_tool_calls")
         assert migrations.table_exists(connection, "familiar_evidence_judgments")
         assert migrations.table_exists(connection, "chat_thread_context")
+        assert migrations.table_exists(connection, "structured_reader_observations")
+        assert migrations.table_exists(connection, "structured_visual_regions")
+        assert migrations.table_exists(connection, "structured_envelopes")
+        assert migrations.table_exists(connection, "structured_envelope_regions")
+        assert migrations.table_exists(
+            connection,
+            "structured_envelope_source_objects",
+        )
+        assert migrations.table_exists(connection, "structured_review_actions")
+        connection.execute(
+            """
+            insert into structured_reader_observations (
+              id,
+              book_id,
+              page_id,
+              page_number,
+              reader_name,
+              reader_version,
+              observation_type,
+              payload_json,
+              text_snapshot_sha256,
+              confidence,
+              created_at
+            )
+            values (
+              'layout-observation',
+              'core-rules',
+              'core-rules:1',
+              1,
+              'pymupdf_words',
+              'test',
+              'layout_metadata',
+              '{}',
+              'snapshot',
+              0.5,
+              '2026-06-10T00:00:00Z'
+            )
+            """
+        )
+        assert migrations.table_exists(connection, "structured_evidence_candidates")
+        assert migrations.table_exists(connection, "validated_structured_objects")
+        assert migrations.table_exists(connection, "structured_evidence_reviews")
+        assert "structured_evidence_status" in migrations.column_names(
+            connection,
+            "book_retrieval_status",
+        )
+        assert "extract_structured_evidence" in migrations.table_sql(
+            connection,
+            "ingest_jobs",
+        )
         assert (
             connection.execute(
                 "select count(*) from book_retrieval_status"
@@ -737,6 +811,62 @@ def test_familiar_research_plan_migration_leaves_no_temporary_schema_references(
         assert stale_schema_rows == []
         assert connection.execute("pragma integrity_check").fetchone()[0] == "ok"
         assert connection.execute("pragma foreign_key_check").fetchall() == []
+
+
+def test_visual_structured_rebuild_helpers_skip_current_schema(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "fresh.sqlite"
+    initialize_database(db_path)
+
+    with open_connection(db_path) as connection:
+        migrations.rebuild_structured_reader_observations_for_v2_if_needed(
+            connection,
+        )
+
+        sql = migrations.table_sql(connection, "structured_reader_observations")
+
+    assert "profile_card" in sql
+
+
+def test_visual_structured_migration_preserves_fresh_schema_indexes(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-indexes.sqlite"
+    create_legacy_phase6_database(db_path)
+    apply_pending_migrations(db_path)
+
+    with open_connection(db_path) as connection:
+        assert migrations.column_names(
+            connection,
+            "validated_structured_object_aliases",
+        ) == (
+            "validated_object_id",
+            "book_id",
+            "alias",
+            "alias_normalized",
+            "alias_source",
+            "confidence",
+            "created_at",
+        )
+        assert tuple(
+            row["name"]
+            for row in connection.execute(
+                "pragma index_info(ix_validated_alias_lookup)"
+            ).fetchall()
+        ) == ("book_id", "alias_normalized", "confidence")
+        assert tuple(
+            row["name"]
+            for row in connection.execute(
+                "pragma index_info(ix_validated_alias_object)"
+            ).fetchall()
+        ) == ("validated_object_id",)
+        assert tuple(
+            row["name"]
+            for row in connection.execute(
+                "pragma index_info(ix_validated_sources_role)"
+            ).fetchall()
+        ) == ("validated_object_id", "source_role", "anchor_kind")
 
 
 def test_embedding_provider_identity_migration_backfills_legacy_vectors(
@@ -1195,6 +1325,9 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
+        "0010_structured_evidence_validation",
+        "0011_structured_layout_metadata_observations",
+        "0012_visual_structured_evidence_contracts",
     )
     assert second.applied == ()
     assert second.skipped == (
@@ -1207,6 +1340,9 @@ def test_apply_pending_migrations_is_idempotent(tmp_path: Path) -> None:
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
+        "0010_structured_evidence_validation",
+        "0011_structured_layout_metadata_observations",
+        "0012_visual_structured_evidence_contracts",
     )
 
 
@@ -1228,6 +1364,9 @@ def test_apply_pending_migrations_records_fresh_schema_without_rebuilds(
         "0007_familiar_agent_research",
         "0008_familiar_research_plans",
         "0009_familiar_reliability_contract",
+        "0010_structured_evidence_validation",
+        "0011_structured_layout_metadata_observations",
+        "0012_visual_structured_evidence_contracts",
     )
     with open_connection(db_path) as connection:
         assert (
